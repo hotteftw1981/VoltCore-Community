@@ -39,6 +39,9 @@ def ensure_schema() -> None:
                 created_by INTEGER
             )"""
         )
+        cols={row[1] for row in conn.execute("PRAGMA table_info(community_user_invites)").fetchall()}
+        if "role" not in cols:
+            conn.execute("ALTER TABLE community_user_invites ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_community_user_invites_email "
             "ON community_user_invites(LOWER(email), created_at DESC)"
