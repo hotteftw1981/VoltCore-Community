@@ -1146,6 +1146,10 @@ def init_db():
             conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
         current_local_version=int((conn.execute("SELECT value FROM app_settings WHERE key='rfid_local_list_version'").fetchone() or [1])[0] or 1)
 
+        # V0.9.7.75: LiveView is not part of Community. Remove settings left
+        # behind by the short-lived 0.9.7.74 release candidate.
+        conn.execute("DELETE FROM app_settings WHERE key LIKE 'liveview_%'")
+
         # Community does not rewrite historical billing data during initialization.
         # Existing transaction costs and tariff snapshots are preserved verbatim.
 
@@ -6329,72 +6333,6 @@ def set_setting(key, value):
 def setting_bool(key, default=False):
     value=get_setting(key, "1" if default else "0")
     return str(value or "").strip().lower() in {"1","true","yes","on"}
-
-
-LIVEVIEW_PRESETS=("simple","standard","pro","dark","light","people")
-LIVEVIEW_SORTS=("auto","name","active")
-LIVEVIEW_COLUMNS=("auto","2","3","4")
-
-
-def liveview_settings():
-    preset=str(get_setting("liveview_preset","standard") or "standard").strip().lower()
-    if preset not in LIVEVIEW_PRESETS:
-        preset="standard"
-    sort=str(get_setting("liveview_sort","auto") or "auto").strip().lower()
-    if sort not in LIVEVIEW_SORTS:
-        sort="auto"
-    columns=str(get_setting("liveview_columns","auto") or "auto").strip().lower()
-    if columns not in LIVEVIEW_COLUMNS:
-        columns="auto"
-    return {
-        "preset":preset,
-        "sort":sort,
-        "columns":columns,
-        "refresh_seconds":_setting_int("liveview_refresh_seconds",2,1,30),
-        "show_vehicle":setting_bool("liveview_show_vehicle",True),
-        "show_user":setting_bool("liveview_show_user",True),
-        "show_soc":setting_bool("liveview_show_soc",True),
-        "show_energy":setting_bool("liveview_show_energy",True),
-        "show_diagnostics":setting_bool("liveview_show_diagnostics",True),
-        "show_clock":setting_bool("liveview_show_clock",True),
-        "show_technical_id":setting_bool("liveview_show_technical_id",True),
-    }
-
-
-def save_liveview_settings(values):
-    values=dict(values or {})
-    preset=str(values.get("preset") or "standard").strip().lower()
-    sort=str(values.get("sort") or "auto").strip().lower()
-    columns=str(values.get("columns") or "auto").strip().lower()
-    if preset not in LIVEVIEW_PRESETS:
-        raise ValueError("Unbekanntes LiveView-Design")
-    if sort not in LIVEVIEW_SORTS:
-        raise ValueError("Ungültige LiveView-Sortierung")
-    if columns not in LIVEVIEW_COLUMNS:
-        raise ValueError("Ungültige LiveView-Spaltenzahl")
-    try:
-        refresh=max(1,min(30,int(values.get("refresh_seconds") or 2)))
-    except (TypeError,ValueError):
-        raise ValueError("Aktualisierungsintervall muss zwischen 1 und 30 Sekunden liegen")
-    payload={
-        "liveview_preset":preset,
-        "liveview_sort":sort,
-        "liveview_columns":columns,
-        "liveview_refresh_seconds":refresh,
-        "liveview_show_vehicle":"1" if bool(values.get("show_vehicle",True)) else "0",
-        "liveview_show_user":"1" if bool(values.get("show_user",True)) else "0",
-        "liveview_show_soc":"1" if bool(values.get("show_soc",True)) else "0",
-        "liveview_show_energy":"1" if bool(values.get("show_energy",True)) else "0",
-        "liveview_show_diagnostics":"1" if bool(values.get("show_diagnostics",True)) else "0",
-        "liveview_show_clock":"1" if bool(values.get("show_clock",True)) else "0",
-        "liveview_show_technical_id":"1" if bool(values.get("show_technical_id",True)) else "0",
-    }
-    with _lock,_connect() as conn:
-        now=utc_now()
-        for key,value in payload.items():
-            conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",(key,str(value),now))
-        conn.commit()
-    return liveview_settings()
 
 
 def _setting_int(key, default, minimum=0, maximum=3650):
