@@ -72,6 +72,8 @@ Die Community Edition enthält unter anderem:
 - 🔔 einfache Benachrichtigungen
 - 📱 PWA-Basis
 
+> **Backend-only:** Ladebenutzer erhalten in VoltCore Community **keinen persönlichen Login, keine PIN und keinen Self-Service-Bereich**. Ebenfalls nicht enthalten sind Gamification/Events/Ranglisten/Bonus/Gutscheine, Smart Charging/Lastmanagement, Kostenstellen, Lade.cloud-Import, Fleet-API und öffentliche Registrierung. Diese Funktionen werden nicht nur ausgeblendet, sondern aus dem Community-Quellcode entfernt.
+
 Der festgelegte erste Funktionsumfang ist zusätzlich in `docs/COMMUNITY_SCOPE.md` dokumentiert. 📋✅
 
 ## 🔄 Updates über GitHub
