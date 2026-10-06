@@ -33,6 +33,7 @@ import qrcode
 from . import db
 from . import backup
 from . import mailer
+from . import invites
 from . import totp
 from . import updates
 from . import web_push
@@ -211,7 +212,7 @@ PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/liveview", "/api/liveview", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -2931,9 +2932,91 @@ class PasswordChangePayload(BaseModel):
     new_password: str
 
 
+class SystemUserInvitePayload(BaseModel):
+    email: str
+    display_name: str | None = None
+    role: str = "user"
+
+
+@app.get("/invite", response_class=HTMLResponse)
+async def invite_accept_page(request: Request, token: str = ""):
+    invite=invites.get_invite(token) if token else None
+    return render(request,"invite_accept.html",page="auth",invite=invite,token=token)
+
+
+@app.post("/invite", response_class=HTMLResponse)
+async def invite_accept_submit(
+    request: Request,
+    token: str = Form(...),
+    username: str = Form(...),
+    display_name: str = Form(...),
+    password: str = Form(...),
+    password_repeat: str = Form(...),
+):
+    invite=invites.get_invite(token)
+    if not invite:
+        return render(request,"invite_accept.html",status_code=400,page="auth",invite=None,token=token,error="Diese Einladung ist ungültig oder abgelaufen.")
+    values={"username":username,"display_name":display_name}
+    if password != password_repeat:
+        return render(request,"invite_accept.html",status_code=400,page="auth",invite=invite,token=token,values=values,error="Die Passwörter stimmen nicht überein.")
+    try:
+        uid=db.create_system_user(
+            username,
+            display_name or invite.get("display_name") or username,
+            _password_hash(password),
+            invite.get("role") or "user",
+            True,
+        )
+    except ValueError as exc:
+        return render(request,"invite_accept.html",status_code=400,page="auth",invite=invite,token=token,values=values,error=str(exc))
+    consumed=invites.accept_invite(token)
+    if not consumed:
+        db.delete_system_user(uid)
+        return render(request,"invite_accept.html",status_code=409,page="auth",invite=None,token=token,error="Diese Einladung wurde bereits verwendet.")
+    db.add_activity(system_user_id=uid,username=username,display_name=display_name,action="Einladung angenommen",category="Zugriff",target="Community-Systemzugang")
+    return render(request,"invite_accept.html",page="auth",invite=None,token="",success=True)
+
+
 @app.get("/api/system-users")
 async def api_system_users():
     return {"users": db.list_system_users()}
+
+
+@app.post("/api/system-users/invite")
+async def api_invite_system_user(payload: SystemUserInvitePayload, request: Request):
+    role=str(payload.role or "user").strip().lower()
+    if role not in {"admin","user","viewer"}:
+        raise HTTPException(400,"Ungültige Rolle")
+    try:
+        invitation=invites.create_invite(
+            payload.email,
+            payload.display_name,
+            role,
+            created_by=(request.state.auth_user or {}).get("id"),
+        )
+        await asyncio.to_thread(
+            mailer.send_template,
+            "user_invite",
+            [invitation["email"]],
+            {
+                "name": invitation.get("display_name"),
+                "invite_url": "/invite?token="+invitation["token"],
+                "detail": "Die Einladung ist 72 Stunden gültig. Legen Sie über den Link Ihren Benutzernamen und Ihr Passwort fest.",
+            },
+            str(request.base_url).rstrip("/"),
+        )
+    except (ValueError,RuntimeError) as exc:
+        raise HTTPException(400,str(exc))
+    db.add_activity(
+        system_user_id=(request.state.auth_user or {}).get("id"),
+        username=(request.state.auth_user or {}).get("username"),
+        display_name=(request.state.auth_user or {}).get("display_name"),
+        action="Systembenutzer eingeladen",
+        category="Systembenutzer",
+        target=invitation["email"],
+        details=f"Rolle: {role} · gültig bis {invitation['expires_at']}",
+    )
+    return {"ok":True,"email":invitation["email"],"expires_at":invitation["expires_at"]}
 
 
 @app.post("/api/system-users")
