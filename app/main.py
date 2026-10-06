@@ -331,7 +331,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/") or path.startswith("/api/integrations/fleet/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -1839,6 +1839,16 @@ def _ocpp_transport_status():
     return {"level":"neutral","label":"WS / Proxy","detail":"Direktes WSS deaktiviert · TLS kann am Reverse Proxy terminiert werden","affects_overall":False}
 
 
+def _fleet_integration_status():
+    enabled=bool(str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip())
+    return {
+        "level":"ok" if enabled else "neutral",
+        "label":"Bereit" if enabled else "Deaktiviert",
+        "detail":"Read-only Fleet API v1 mit Bearer-Token aktiv" if enabled else "Vorbereitete Fuhrpark-Schnittstelle · kein Token gesetzt",
+        "affects_overall":False,
+    }
+
+
 def _system_status_payload(auth=None):
     cps=db.list_charge_points()
     total=len(cps)
@@ -2784,6 +2794,45 @@ async def set_transaction_vehicle(transaction_id: int, payload: dict):
     if not db.set_transaction_vehicle(transaction_id, vehicle_id):
         raise HTTPException(400, "Fahrzeug konnte nicht zugeordnet werden")
     return {"ok": True, "transaction": db.get_transaction(transaction_id)}
+
+
+def _require_fleet_integration(request: Request):
+    expected=str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip()
+    if not expected:
+        raise HTTPException(503,"Fuhrpark-Schnittstelle ist deaktiviert")
+    auth=str(request.headers.get("authorization") or "")
+    supplied=auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not supplied or not secrets.compare_digest(supplied,expected):
+        try:
+            db.add_security_event("Fleet API authentication failed",severity="warning",category="fleet_api",remote=_client_text(request),success=False,detail=request.url.path)
+        except Exception:
+            pass
+        raise HTTPException(401,"Ungültiger Fuhrpark-Integrationstoken",headers={"WWW-Authenticate":"Bearer"})
+    return True
+
+
+def _fleet_no_store(response: Response):
+    response.headers["Cache-Control"]="no-store"
+    response.headers["Pragma"]="no-cache"
+    response.headers["X-Content-Type-Options"]="nosniff"
+
+
+@app.get("/api/integrations/fleet/v1/health")
+async def fleet_integration_health(request: Request, response: Response):
+    _require_fleet_integration(request)
+    _fleet_no_store(response)
+    return {"ok":True,"api":"fleet-v1","backend_version":APP_VERSION,"mode":"read-only"}
+
+
+@app.get("/api/integrations/fleet/v1/sessions")
+async def fleet_integration_sessions(request: Request, response: Response, since: str | None = None, limit: int = 200):
+    _require_fleet_integration(request)
+    _fleet_no_store(response)
+    try:
+        rows=db.fleet_integration_sessions(since=since,limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    return {"api":"fleet-v1","count":len(rows),"sessions":rows}
 
 
 @app.get("/api/vehicles")
