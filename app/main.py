@@ -57,15 +57,6 @@ MEDIA_DIR = Path(os.getenv("DATA_DIR", "/data")) / "vehicle_images"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BRANDING_DIR = Path(os.getenv("DATA_DIR", "/data")) / "branding"
 BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_SIGNATURE_DIR = Path(os.getenv("DATA_DIR", "/data")) / "access_request_signatures"
-ACCESS_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_TERMS_VERSION = "2026-10-04"
-ACCESS_TERMS = [
-    "Verwendung des Ladechips: Der persönliche Ladechip darf nur vom rechtmäßigen Inhaber für das vorher bekanntgegebene Fahrzeug verwendet werden. Das Laden von Fremdfahrzeugen ist nicht gestattet.",
-    "Verantwortlichkeit: Der Inhaber ist für die sichere Verwahrung und Nutzung des Chips verantwortlich. Verlust, Diebstahl oder Missbrauch müssen umgehend gemeldet werden.",
-    "Haftungsausschluss: Der Anbieter übernimmt keine Haftung für Schäden durch unsachgemäße Nutzung der Ladestation, technische Probleme oder Stromausfälle, es sei denn, sie beruhen auf Vorsatz oder grober Fahrlässigkeit des Anbieters.",
-    "Gültigkeit: Die Berechtigung kann bei Missbrauch, Wegfall der Voraussetzungen oder aus organisatorischen Gründen gesperrt bzw. widerrufen werden.",
-]
 MAX_VEHICLE_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
@@ -73,10 +64,6 @@ BERLIN_TZ = ZoneInfo("Europe/Berlin")
 APP_STARTED_AT = datetime.now(timezone.utc)
 OPERATIONAL_STARTUP_GRACE_SECONDS = 90
 
-# V0.9.7.16: Smart Charging can rebalance immediately after relevant OCPP
-# lifecycle events. The periodic worker remains as a safety net.
-SMART_REBALANCE_EVENT = None
-SMART_REBALANCE_REASON = "Start"
 
 def _local_dt(value):
     if not value:
@@ -412,7 +399,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/registration-onboarding","/security","/tariffs","/cost-centers","/engagement","/imports","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/") or path.startswith("/api/portal-admin") or path.startswith("/api/engagement") or path.startswith("/api/settings/") or path.startswith("/api/import/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/admin/ladeguthaben/") or path.startswith("/access-requests") or path.startswith("/api/access-requests")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -1059,11 +1046,8 @@ class MailSettingsPayload(BaseModel):
     from_name: str = ""
     admin_recipients: str = ""
     public_base_url: str = ""
-    event_rfid_requests: bool = True
-    event_pin_reset_admin: bool = True
     event_backup_failures: bool = True
     event_security_warnings: bool = False
-    event_access_requests: bool = True
 
 
 class MailTestPayload(BaseModel):
@@ -1091,18 +1075,12 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
     base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
     sample={
         "name":"Max Mustermann",
-        "pin":"482731",
-        "reset_url":base+"/public/ladeguthaben/pin-reset?token=TEST-VORSCHAU",
-        "verify_url":base+"/public/access-request/form?token=TEST-VORSCHAU",
-        "portal_url":base+"/public/ladeguthaben",
-        "admin_url":base+"/users",
-        "reason":"RFID-Karte als verloren gemeldet",
-        "rejection_reason":"Dies ist ein Beispiel für einen Ablehnungsgrund im Testversand.",
+        "admin_url":base+"/",
         "detail":"Dies ist eine Testnachricht aus den E-Mail-Einstellungen. Es wurde keine echte Aktion ausgelöst.",
         "subject":"Test-Systemmeldung",
         "headline":"E-Mail-System erfolgreich getestet",
-        "body":"Diese Nachricht zeigt die aktuell konfigurierte White-Label-Mailvorlage.",
-        "cta_label":"Backend öffnen",
+        "body":"Diese Nachricht zeigt die aktuell konfigurierte Community-Mailvorlage.",
+        "cta_label":"VoltCore Community öffnen",
         "cta_url":base+"/",
     }
     try:
@@ -1129,13 +1107,6 @@ def _branding_color(value: str) -> str:
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
         raise HTTPException(400, "Die Akzentfarbe muss als Hex-Farbe angegeben werden, z. B. #2563eb.")
     return value.lower()
-
-
-def _branding_prefix(value: str) -> str:
-    value=re.sub(r"[^A-Za-z0-9]","",str(value or "").upper())[:12]
-    if len(value)<2:
-        raise HTTPException(400,"Das Gutschein-Präfix muss mindestens 2 Buchstaben/Ziffern enthalten.")
-    return value
 
 
 def _branding_text(value: str, fallback: str, max_length: int=80) -> str:
@@ -1166,7 +1137,7 @@ async def _save_branding_asset(upload: UploadFile | None, kind: str) -> str | No
 async def api_save_branding(
     request: Request,
     product_name: str = Form(...), organization_name: str = Form(...),
-    display_name: str = Form(...), product_subtitle: str = Form(...), voucher_prefix: str = Form(...),
+    display_name: str = Form(...), product_subtitle: str = Form(...),
     primary_color: str = Form(...),
     logo_light: UploadFile | None = File(None), logo_dark: UploadFile | None = File(None),
     favicon: UploadFile | None = File(None), login_background: UploadFile | None = File(None),
@@ -1181,7 +1152,6 @@ async def api_save_branding(
         "branding_organization_name":_branding_text(organization_name,current["organization_name"],100),
         "branding_display_name":_branding_text(display_name,current["display_name"],80),
         "branding_product_subtitle":_branding_text(product_subtitle,current["product_subtitle"],100),
-        "branding_voucher_prefix":_branding_prefix(voucher_prefix),
         "branding_primary_color":_branding_color(primary_color),
     }
     asset_fields=(
