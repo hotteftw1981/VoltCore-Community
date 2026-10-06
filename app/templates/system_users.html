@@ -1,9 +1,11 @@
 {% extends "base.html" %}{% block title %}Systembenutzer - {{ branding.product_name }}{% endblock %}{% block heading %}Systembenutzer{% endblock %}{% block subtitle %}Login-Konten, Rollen, 2FA und Zugriffsrechte verwalten{% endblock %}
 {% block content %}
 <section class="stats three access-stats"><div class="stat"><span>Konten</span><b id="accountCount">0</b><small>gesamt</small></div><div class="stat"><span>Aktiv</span><b id="activeCount">0</b><small>dürfen sich anmelden</small></div><div class="stat"><span>Administratoren</span><b id="adminCount">0</b><small>volle Rechte</small></div></section>
-<div class="toolbar"><div><h2>Zugänge</h2><p>Systemzugänge sind getrennt von Ladebenutzern und RFID-Karten.</p></div><button class="primary" id="addAccount" type="button">+ Zugang anlegen</button></div>
+<div class="toolbar"><div><h2>Zugänge</h2><p>Systemzugänge sind getrennt von Ladebenutzern und RFID-Karten.</p></div><div class="table-actions"><button class="secondary" id="inviteAccount" type="button">✉ Benutzer einladen</button><button class="primary" id="addAccount" type="button">+ Zugang anlegen</button></div></div>
 <section class="panel table-panel"><table><thead><tr><th>Name</th><th>Benutzername</th><th>Rolle</th><th>Status</th><th>2FA</th><th>Letzte Anmeldung</th><th></th></tr></thead><tbody id="accountBody"></tbody></table></section>
 <section class="role-help-grid"><article class="panel"><h3>Administrator</h3><p>Voller Zugriff einschließlich Einstellungen und Systembenutzerverwaltung.</p></article><article class="panel"><h3>Benutzer</h3><p>Kann den operativen OCPP-Bereich lesen und bearbeiten, jedoch keine Systemzugänge oder Grundeinstellungen verwalten.</p></article><article class="panel"><h3>Nur Lesen</h3><p>Kann Status, Sessions, Berichte und Stammdaten ansehen, aber keine Änderungen speichern.</p></article></section>
+
+<div class="modal" id="inviteModal" hidden><div class="modal-card"><div class="panelhead modal-title-row"><div><h2>Benutzer einladen</h2><span>Ein sicherer Einladungslink ist 72 Stunden gültig.</span></div><button class="modal-close" id="inviteClose" type="button" aria-label="Schließen">&times;</button></div><form id="inviteForm"><div class="form-grid"><label>Anzeigename<input id="inviteDisplayName" maxlength="120" placeholder="optional"></label><label>E-Mail-Adresse<input id="inviteEmail" type="email" required autocomplete="email"></label><label>Rolle<select id="inviteRole"><option value="user">Benutzer</option><option value="viewer">Nur Lesen</option><option value="admin">Administrator</option></select></label></div><div id="inviteMessage" class="form-message"></div><div class="form-actions"><button class="secondary" id="inviteCancel" type="button">Abbrechen</button><button class="primary" type="submit">Einladung senden</button></div></form></div></div>
 
 <div class="modal" id="accountEditModal" hidden><div class="modal-card"><div class="panelhead modal-title-row"><div><h2 id="accountModalTitle">Zugang anlegen</h2><span>Systemkonto</span></div><button class="modal-close" id="accountEditClose" type="button" aria-label="Schließen">&times;</button></div><form id="accountForm"><input type="hidden" id="accountId"><div class="form-grid"><label>Anzeigename<input id="displayName" required></label><label>Benutzername<input id="username" required autocomplete="off"></label><label>Rolle<select id="role"><option value="admin">Administrator</option><option value="user">Benutzer</option><option value="viewer">Nur Lesen</option></select></label><label>Status<select id="active"><option value="1">Aktiv</option><option value="0">Deaktiviert</option></select></label><label class="full-field">Passwort <small id="passwordHint">Mindestens 12 Zeichen</small><input id="password" type="password" minlength="12" autocomplete="new-password"></label></div><div id="accountMessage" class="form-message"></div><div class="form-actions"><button class="secondary" id="accountEditCancel" type="button">Abbrechen</button><button class="primary" type="submit">Speichern</button></div></form></div></div>
 
@@ -49,6 +51,17 @@ function openEditor(a){
   $('accountEditModal').hidden=false;
   setTimeout(()=>$('displayName').focus(),0);
 }
+$('inviteAccount').onclick=()=>{$('inviteMessage').textContent='';$('inviteEmail').value='';$('inviteDisplayName').value='';$('inviteRole').value='user';$('inviteModal').hidden=false;setTimeout(()=>$('inviteEmail').focus(),0)};
+$('inviteClose').onclick=$('inviteCancel').onclick=()=>$('inviteModal').hidden=true;
+$('inviteForm').onsubmit=async e=>{
+  e.preventDefault();
+  const payload={email:$('inviteEmail').value.trim(),display_name:$('inviteDisplayName').value.trim()||null,role:$('inviteRole').value};
+  const r=await fetch('/api/system-users/invite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('inviteMessage').className='form-message error';$('inviteMessage').textContent=d.detail||'Einladung konnte nicht gesendet werden.';return}
+  $('inviteMessage').className='form-message success';$('inviteMessage').textContent='Einladung wurde an '+d.email+' gesendet.';
+};
+
 $('addAccount').onclick=()=>openEditor();
 $('accountEditClose').onclick=$('accountEditCancel').onclick=()=>$('accountEditModal').hidden=true;
 $('accountForm').onsubmit=async e=>{
@@ -84,6 +97,6 @@ $('accountDeleteConfirm').onclick=async()=>{
   if(!r.ok){$('deleteMessage').className='form-message error';$('deleteMessage').textContent=d.detail||'Zugang konnte nicht gelöscht werden.';return}
   $('accountDeleteModal').hidden=true;deleteId=null;await load();
 };
-['accountEditModal','accountDeleteModal'].forEach(id=>$(id).onclick=e=>{if(e.target.id===id)$(id).hidden=true});
+['inviteModal','accountEditModal','accountDeleteModal'].forEach(id=>$(id).onclick=e=>{if(e.target.id===id)$(id).hidden=true});
 load();
 </script>{% endblock %}
