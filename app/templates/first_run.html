@@ -63,7 +63,7 @@
 
     <section class="first-run-section">
       <h3>⚡ Optionales Monatslimit</h3>
-      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Standardlimit verwenden</span></label>
+      <label class="switch-line"><input type="checkbox" name="default_monthly_limit_enabled" value="1" {% if values and values.default_monthly_limit_enabled %}checked{% endif %}><span>Monatliches Standardlimit verwenden</span></label>
       <div class="form-grid">
         <label>Standardwert (kWh / Monat)<input name="default_monthly_kwh" type="number" min="0" step="1" value="{{ values.default_monthly_kwh if values else '0' }}"></label>
       </div>
