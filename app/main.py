@@ -422,7 +422,7 @@ async def web_access_control(request: Request, call_next):
     request.state.auth_user=auth
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/registration-onboarding","/security","/tariffs","/cost-centers","/engagement","/imports","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/") or path.startswith("/api/portal-admin") or path.startswith("/api/engagement") or path.startswith("/api/settings/") or path.startswith("/api/import/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/admin/ladeguthaben/") or path.startswith("/access-requests") or path.startswith("/api/access-requests")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -2519,162 +2519,6 @@ async def delete_vehicle_image(vehicle_id: int):
     return {"ok": True}
 
 
-class AccessRequestDecisionPayload(BaseModel):
-    note: str | None = None
-    monthly_kwh_limit: float | None = None
-    monthly_limit_mode: str = "warn"
-    budget_source: str = "auto"
-
-
-@app.get("/api/access-requests")
-async def api_access_requests(status:str|None=None):
-    return {"requests":db.list_access_requests(status),"counts":db.access_request_counts()}
-
-
-@app.get("/api/access-requests/counts")
-async def api_access_request_counts():
-    counts=db.access_request_counts()
-    return {**counts,"open":int(counts.get("new",0))+int(counts.get("review",0))}
-
-
-@app.get("/api/access-requests/{request_id}")
-async def api_access_request(request_id:int):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    item["signature_url"]=f"/api/access-requests/{request_id}/signature"
-    item["pdf_url"]=f"/api/access-requests/{request_id}/pdf"
-    try: item["terms"]=json.loads(item.get("terms_snapshot") or "[]")
-    except Exception: item["terms"]=[]
-    try: item["form_fields"]=json.loads(item.get("field_schema_json") or "[]")
-    except Exception: item["form_fields"]=[]
-    try: item["form_values"]=json.loads(item.get("field_values_json") or "{}")
-    except Exception: item["form_values"]={}
-    item["suggested_budget_kwh"]=db.calculate_registration_budget(item.get("weekly_hours"))
-    item["registration_settings"]=db.registration_settings()
-    item.pop("ip_hash",None); item.pop("terms_snapshot",None); item.pop("signature_path",None); item.pop("field_schema_json",None); item.pop("field_values_json",None)
-    return {"request":item}
-
-
-@app.get("/api/access-requests/{request_id}/signature")
-async def api_access_request_signature(request_id:int):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    target=ACCESS_SIGNATURE_DIR/Path(item.get("signature_path") or "").name
-    if not target.exists(): raise HTTPException(404,"Unterschrift nicht gefunden")
-    try: data=_normalize_signature_png(target.read_bytes())
-    except ValueError: raise HTTPException(422,"Unterschrift konnte nicht dargestellt werden")
-    return Response(content=data,media_type="image/png",headers={"Cache-Control":"no-store"})
-
-
-@app.post("/api/access-requests/{request_id}/review")
-async def api_access_request_review(request_id:int):
-    if not db.set_access_request_in_review(request_id):
-        item=db.get_access_request(request_id)
-        if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    return {"ok":True,"request":db.get_access_request(request_id)}
-
-
-@app.post("/api/access-requests/{request_id}/approve")
-async def api_access_request_approve(request:Request,request_id:int,payload:AccessRequestDecisionPayload):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    pin=_generate_unique_portal_pin()
-    auth=getattr(request.state,"auth_user",None) or {}
-    try:
-        approval=db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),payload.monthly_kwh_limit,payload.monthly_limit_mode,payload.note,payload.budget_source,return_details=True)
-        user_id=int(approval["user_id"])
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    db.deactivate_notification(f"access-request:{request_id}")
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    mail_sent=False; mail_error=None
-    if mailer.settings(False).get("enabled"):
-        try:
-            await asyncio.to_thread(mailer.send_template,"access_approved",item["email"],{"name":item["name"],"pin":pin,"portal_url":base+"/public/ladeguthaben"},base)
-            mail_sent=True
-        except Exception as exc:
-            logging.exception("Access approval mail failed"); mail_error=f"{type(exc).__name__}: {exc}"
-    vehicle_note=""
-    if approval.get("vehicle_id"):
-        vehicle_note=("Fahrzeug automatisch angelegt" if approval.get("vehicle_created") else "Vorhandenes Fahrzeug zugeordnet")+f" · {approval.get('vehicle_plate') or 'ohne Kennzeichen'} · Fahrzeug #{approval['vehicle_id']}"
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Fahrzeug aus Zugangsantrag übernommen",category="Fahrzeuge",target=f"Zugangsantrag #{request_id}",details=vehicle_note)
-    db.create_notification(f"access-approved:{request_id}","info","Zugangsantrag genehmigt",f"{item['name']} · Ladebenutzer #{user_id} erstellt"+(f" · {approval.get('vehicle_plate')}" if approval.get('vehicle_id') else ""),"/users",audience="admin",source="event")
-    return {"ok":True,"user_id":user_id,"vehicle_id":approval.get("vehicle_id"),"vehicle_created":bool(approval.get("vehicle_created")),"pin":pin,"mail_sent":mail_sent,"mail_error":mail_error}
-
-
-@app.post("/api/access-requests/{request_id}/reject")
-async def api_access_request_reject(request:Request,request_id:int,payload:AccessRequestDecisionPayload):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    auth=getattr(request.state,"auth_user",None) or {}
-    try:
-        if not db.decide_access_request(request_id,"Abgelehnt",auth.get("id"),payload.note): raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    db.deactivate_notification(f"access-request:{request_id}")
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    mail_sent=False
-    if mailer.settings(False).get("enabled"):
-        try:
-            await asyncio.to_thread(mailer.send_template,"access_rejected",item["email"],{"name":item["name"],"rejection_reason":payload.note or "Für Rückfragen wenden Sie sich bitte an die Administration."},base); mail_sent=True
-        except Exception: logging.exception("Access rejection mail failed")
-    return {"ok":True,"mail_sent":mail_sent}
-
-
-@app.delete("/api/access-requests/{request_id}")
-async def api_access_request_delete(request:Request,request_id:int):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    deleted=db.delete_access_request(request_id)
-    if not deleted: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    signature_name=Path(deleted.get("signature_path") or "").name
-    if signature_name:
-        try:
-            (ACCESS_SIGNATURE_DIR/signature_name).unlink(missing_ok=True)
-        except OSError:
-            logging.warning("Unterschriftsdatei zu Zugangsantrag %s konnte nicht gelöscht werden",request_id,exc_info=True)
-    return {"ok":True,"deleted_id":request_id,"status":deleted.get("status"),"linked_user_id":deleted.get("user_id")}
-
-
-@app.get("/api/access-requests/{request_id}/pdf")
-async def api_access_request_pdf(request_id:int):
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    buffer=io.BytesIO(); brand=db.branding_settings(); color=colors.HexColor(brand["primary_color"])
-    doc=SimpleDocTemplate(buffer,pagesize=A4,rightMargin=16*mm,leftMargin=16*mm,topMargin=16*mm,bottomMargin=16*mm,title=f"Zugangsantrag {request_id}",author=brand["product_name"])
-    styles=getSampleStyleSheet(); styles.add(ParagraphStyle(name="AccessTitle",parent=styles["Title"],fontSize=20,leading=24,textColor=color,spaceAfter=4)); styles.add(ParagraphStyle(name="AccessSection",parent=styles["Heading2"],fontSize=12,leading=15,textColor=color,spaceBefore=10,spaceAfter=6)); styles.add(ParagraphStyle(name="AccessSmall",parent=styles["Normal"],fontSize=8.5,leading=12,textColor=colors.HexColor("#5f6b76")))
-    story=[Paragraph(brand["display_name"],styles["AccessSmall"]),Paragraph("Antrag auf Nutzung der Ladeinfrastruktur",styles["AccessTitle"]),Paragraph(f"Antrag #{request_id} · Status: {item['status']} · eingereicht am {_local_text(item['created_at'])}",styles["AccessSmall"]),Spacer(1,8)]
-    rows=[["E-Mail",item['email']]]
-    try: pdf_fields=json.loads(item.get('field_schema_json') or '[]')
-    except Exception: pdf_fields=[]
-    try: pdf_values=json.loads(item.get('field_values_json') or '{}')
-    except Exception: pdf_values={}
-    if pdf_fields:
-        for field in pdf_fields:
-            if not field.get('enabled',True): continue
-            value=pdf_values.get(field.get('id'))
-            if field.get('type')=='checkbox': value='Ja' if value else 'Nein'
-            if field.get('id')=='weekly_hours' and value not in (None,''): value=str(value).replace('.',',')+' h'
-            rows.append([str(field.get('label') or field.get('id') or 'Feld'),str(value or '—')])
-    else:
-        rows += [["Name",item['name']],["Anschrift",f"{item['street']}, {item['postal_code']} {item['city']}"],["Telefon",item['phone']],["Fahrzeug",item.get('vehicle_make_model') or '—'],["Kennzeichen",item['vehicle_plate']]]
-    table=Table(rows,colWidths=[42*mm,128*mm]); table.setStyle(TableStyle([('BACKGROUND',(0,0),(0,-1),colors.HexColor('#f3f4f6')),('FONTNAME',(0,0),(0,-1),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,-1),9.5),('VALIGN',(0,0),(-1,-1),'TOP'),('BOX',(0,0),(-1,-1),.5,colors.HexColor('#d8dee6')),('INNERGRID',(0,0),(-1,-1),.35,colors.HexColor('#e5e7eb')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7),('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)])); story += [table,Paragraph("Nutzungsbedingungen",styles['AccessSection'])]
-    try: terms=json.loads(item.get('terms_snapshot') or '[]')
-    except Exception: terms=[]
-    for term in terms: story.append(Paragraph("• "+str(term),styles['BodyText'])); story.append(Spacer(1,3))
-    story += [Paragraph(f"Version der Bedingungen: {item['terms_version']}",styles['AccessSmall']),Paragraph("Digitale Bestätigung",styles['AccessSection']),Paragraph(f"Unterzeichnet am {_local_text(item['signed_at'])}. Der Antragsteller hat die Nutzungsbedingungen bestätigt und die Richtigkeit der Angaben erklärt.",styles['BodyText']),Spacer(1,6)]
-    sig=ACCESS_SIGNATURE_DIR/Path(item.get('signature_path') or '').name
-    if sig.exists():
-        try: story.append(Image(io.BytesIO(_normalize_signature_png(sig.read_bytes())),width=60*mm,height=22*mm,kind='proportional'))
-        except ValueError: story.append(Paragraph('Unterschrift konnte nicht dargestellt werden.',styles['AccessSmall']))
-    if item.get('decision_at'):
-        budget_note=''
-        if item.get('approved_budget_kwh') is not None:
-            budget_note=f" Monatsbudget: {float(item['approved_budget_kwh']):.0f} kWh ({'automatisch nach Wochenarbeitsstunden' if item.get('budget_source')=='auto' else 'manuell festgelegt'})."
-        story += [Paragraph("Entscheidung",styles['AccessSection']),Paragraph(f"{item['status']} am {_local_text(item['decision_at'])} durch {item.get('decided_by_name') or 'Administration'}."+budget_note+(f" Hinweis: {item['admin_note']}" if item.get('admin_note') else ''),styles['BodyText'])]
-    story += [Spacer(1,12),HRFlowable(width='100%',thickness=.6,color=colors.HexColor('#d8dee6')),Spacer(1,5),Paragraph(f"{brand['organization_name']} · {brand['product_name']} · V{APP_VERSION}",styles['AccessSmall'])]
-    doc.build(story); pdf=buffer.getvalue()
-    return StreamingResponse(iter([pdf]),media_type='application/pdf',headers={'Content-Disposition':f'attachment; filename=zugangsantrag-{request_id}.pdf'})
-
-
 class UserPayload(BaseModel):
     name: str
     role: str = "Fahrer"
@@ -2684,9 +2528,6 @@ class UserPayload(BaseModel):
     status: str = "Aktiv"
     monthly_kwh_limit: float | None = None
     monthly_limit_mode: str = "warn"
-    gamification_enabled: bool = True
-    weekly_hours: float | None = None
-    budget_source: str = "manual"
     charge_access_mode: str | None = None
     allowed_charge_point_ids: list[str] | None = None
 
@@ -2717,45 +2558,74 @@ async def api_users():
 async def api_user(user_id: int, tx_page: int = 1, tx_page_size: int = 10):
     details=db.user_details(user_id, transaction_page=tx_page, transaction_page_size=tx_page_size)
     if not details: raise HTTPException(404,"Benutzer nicht gefunden")
-    details["achievements"]=db.achievements_for_user(user_id)
     return details
 
 @app.post("/api/users")
 async def create_user(payload: UserPayload):
-    if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
-    if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
-    if str(payload.budget_source or "manual").lower()=="auto" and db.registration_settings().get("budget_mode")=="hours" and payload.weekly_hours is None: raise HTTPException(400,"Für ein automatisches Budget sind Wochenarbeitsstunden erforderlich.")
-    try: uid=db.create_user(**payload.model_dump())
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    if not payload.name.strip():
+        raise HTTPException(400,"Name ist erforderlich")
+    if payload.charge_access_mode not in (None,"all","selected"):
+        raise HTTPException(400,"Ungültige Ladeberechtigung")
+    values=payload.model_dump()
+    values.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
+    try:
+        uid=db.create_user(**values)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    user=db.get_user(uid) or {}
+    user.pop("portal_pin_hash",None)
+    user["portal_pin_set"]=bool(user.get("portal_pin_set_at"))
+    return {"ok":True,"user":user}
+
 
 @app.put("/api/users/{user_id}")
 async def update_user(request:Request,user_id: int,payload: UserPayload):
-    if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
-    if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
-    if str(payload.budget_source or "manual").lower()=="auto" and db.registration_settings().get("budget_mode")=="hours" and payload.weekly_hours is None: raise HTTPException(400,"Für ein automatisches Budget sind Wochenarbeitsstunden erforderlich.")
+    if not payload.name.strip():
+        raise HTTPException(400,"Name ist erforderlich")
+    if payload.charge_access_mode not in (None,"all","selected"):
+        raise HTTPException(400,"Ungültige Ladeberechtigung")
     before=db.get_user(user_id)
-    if not before: raise HTTPException(404,"Benutzer nicht gefunden")
+    if not before:
+        raise HTTPException(404,"Benutzer nicht gefunden")
     before_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
-    try: updated=db.update_user(user_id,**payload.model_dump())
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not updated: raise HTTPException(404,"Benutzer nicht gefunden")
+    values=payload.model_dump()
+    values.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
+    try:
+        updated=db.update_user(user_id,**values)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    if not updated:
+        raise HTTPException(404,"Benutzer nicht gefunden")
     LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
-    _schedule_local_list_sync("Benutzerdaten / Ladebudget geändert")
+    _schedule_local_list_sync("Benutzerdaten / Ladelimit geändert")
     user=db.get_user(user_id) or {}
-    old_hours=before.get("weekly_hours"); new_hours=user.get("weekly_hours"); old_budget=before.get("monthly_kwh_limit"); new_budget=user.get("monthly_kwh_limit")
-    if old_hours!=new_hours or old_budget!=new_budget or before.get("budget_source")!=user.get("budget_source"):
+    old_budget=before.get("monthly_kwh_limit")
+    new_budget=user.get("monthly_kwh_limit")
+    if old_budget!=new_budget or before.get("monthly_limit_mode")!=user.get("monthly_limit_mode"):
         auth=getattr(request.state,"auth_user",None) or {}
-        def n(v,suffix=""):
-            return "—" if v is None else f"{float(v):g}{suffix}"
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Wochenarbeitszeit / Ladebudget geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Wochenarbeitsstunden: {n(old_hours,' h')} → {n(new_hours,' h')} · Monatsbudget: {n(old_budget,' kWh')} → {n(new_budget,' kWh')} · Budgetquelle: {before.get('budget_source') or 'manual'} → {user.get('budget_source') or 'manual'}")
+        def n(v):
+            return "—" if v is None else f"{float(v):g} kWh"
+        db.add_activity(
+            system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
+            action="Optionales Ladebudget geändert",category="Ladebenutzer",
+            target=f"{user.get('name') or 'Benutzer'} · #{user_id}",
+            details=f"Monatsbudget: {n(old_budget)} → {n(new_budget)} · Verhalten: {before.get('monthly_limit_mode') or 'warn'} → {user.get('monthly_limit_mode') or 'warn'}"
+        )
     after_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     if before_access!=after_access:
         auth=getattr(request.state,"auth_user",None) or {}
         before_text="Alle Ladepunkte" if before_access["mode"]=="all" else (", ".join(before_access["charge_point_ids"]) or "Keine Ladepunkte")
         after_text="Alle Ladepunkte" if after_access["mode"]=="all" else (", ".join(after_access["charge_point_ids"]) or "Keine Ladepunkte")
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladeberechtigung geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"{before_text} → {after_text}")
-    user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+        db.add_activity(
+            system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
+            action="Ladeberechtigung geändert",category="Ladebenutzer",
+            target=f"{user.get('name') or 'Benutzer'} · #{user_id}",
+            details=f"{before_text} → {after_text}"
+        )
+    user.pop("portal_pin_hash",None)
+    user["portal_pin_set"]=bool(user.get("portal_pin_set_at"))
+    return {"ok":True,"user":user}
+
 
 @app.post("/api/users/{user_id}/image")
 async def upload_user_image(user_id:int, image:UploadFile=File(...)):
