@@ -1,173 +1,64 @@
 {% extends "base.html" %}
-{% block title %}Tarife & Kosten - {{ branding.product_name }}{% endblock %}
-{% block heading %}Tarife & Kostenstellen{% endblock %}
-{% block subtitle %}Versionierte Preise mit eindeutiger Priorität und konkreten Zielzuordnungen{% endblock %}
+{% block title %}Tarife - {{ branding.product_name }}{% endblock %}
+{% block heading %}Tarife{% endblock %}
+{% block subtitle %}Einfache Strompreise für Community: global, pro Ladepunkt oder pro Benutzer{% endblock %}
 {% block content %}
 <section class="panel tariff-editor">
   <div class="panelhead">
-    <div><h2 id="editorTitle">Tarif anlegen</h2><span>Priorität: Benutzer → Gruppe → Ladepunkt → Global</span></div>
+    <div><h2 id="editorTitle">Tarif anlegen</h2><span>Priorität: Benutzer → Ladepunkt → Global</span></div>
     <button class="secondary" id="cancelVersion" type="button" hidden>Bearbeitung abbrechen</button>
   </div>
   <div id="versionNotice" class="tariff-version-note" hidden></div>
   <form id="tariffForm" class="form-grid tariff-form">
-    <label>Name<input id="tariffName" name="name" required></label>
+    <label>Name<input id="tariffName" required placeholder="z. B. Standardtarif"></label>
     <label>Ebene
-      <select id="tariffScope" name="scope">
+      <select id="tariffScope">
         <option value="global">Globaler Standard</option>
         <option value="charge_point">Ladepunkt</option>
-        <option value="user_group">Benutzergruppe</option>
-        <option value="user">Ladebenutzer / RFID</option>
+        <option value="user">Benutzer</option>
       </select>
     </label>
     <label id="targetLabel" hidden>Ziel
-      <select id="tariffTarget" name="target_id"></select>
+      <select id="tariffTarget"></select>
       <small id="targetHelp" class="field-help"></small>
     </label>
-    <label>Preis (€/kWh)<input id="tariffPrice" name="price_eur_per_kwh" type="number" min="0" step="0.01" inputmode="decimal" required></label>
-    <label>Gültig ab<input id="tariffValidFrom" name="valid_from" type="datetime-local" required></label>
-    <label>Gültig bis (optional)<input id="tariffValidUntil" name="valid_until" type="datetime-local"></label>
-    <label>Kostenstelle<select id="tariffCostCenter" name="cost_center"><option value="">Keine Kostenstelle</option></select><small class="field-help"><a href="/cost-centers">Kostenstellen verwalten →</a></small></label>
-    <label>Abrechnungsgruppe (optional)
-      <select id="tariffBillingGroup" name="billing_group_id"><option value="">Keine</option></select>
-    </label>
-    <div class="tariff-form-actions">
-      <button class="primary" id="saveTariff" type="submit">Tarif speichern</button>
-      <span id="msg" class="form-message"></span>
-    </div>
+    <label>Preis (€/kWh)<input id="tariffPrice" type="number" min="0" step="0.01" inputmode="decimal" required placeholder="0,35"></label>
+    <label>Gültig ab<input id="tariffValidFrom" type="datetime-local" required></label>
+    <label>Gültig bis <span class="muted">(optional)</span><input id="tariffValidUntil" type="datetime-local"></label>
+    <div class="tariff-form-actions"><button class="primary" id="saveTariff" type="submit">Tarif speichern</button><span id="msg" class="form-message"></span></div>
   </form>
+  <p class="detail-note">Historische Ladevorgänge behalten ihren gespeicherten Preis-Snapshot. Eine neue Preisstufe erzeugt deshalb eine neue Tarifversion statt alte Abrechnungen umzuschreiben.</p>
 </section>
 
 <section class="table-panel tariff-table-panel">
-  <div class="panelhead"><div><h2>Tarifversionen</h2><span>Historische Sessions behalten immer ihren gespeicherten Tarif-Snapshot</span></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Name</th><th>Ebene / Ziel</th><th>Preis</th><th>Gültigkeit</th><th>Kostenstelle</th><th>Status</th><th>Aktionen</th></tr></thead><tbody id="rows"></tbody></table></div>
-</section>
-
-<section class="panel billing-panel">
-  <div class="panelhead"><div><h2>Abrechnungsgruppen & Kostenstellen</h2><span>Gruppen für gemeinsame Tarife und interne Zuordnung</span></div></div>
-  <form id="groupForm" class="form-grid billing-create">
-    <input type="hidden" id="groupId">
-    <label>Gruppenname<input id="groupName" name="name" required placeholder="z. B. Mitarbeitende"></label>
-    <label>Kostenstelle<select id="groupCostCenter" name="cost_center"><option value="">Keine Kostenstelle</option></select></label>
-    <label class="check"><input id="groupActive" type="checkbox" checked> Gruppe aktiv</label>
-    <div><button class="secondary" id="groupSave" type="submit">Gruppe anlegen</button><button class="secondary" id="groupCancel" type="button" hidden>Abbrechen</button><span id="groupMsg" class="form-message"></span></div>
-  </form>
-  <div id="groupGrid" class="billing-group-grid"></div>
+  <div class="panelhead"><div><h2>Tarifversionen</h2><span>Einfach &amp; nachvollziehbar</span></div></div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Ebene / Ziel</th><th>Preis</th><th>Gültigkeit</th><th>Status</th><th>Aktionen</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6">Wird geladen …</td></tr></tbody>
+  </table></div>
 </section>
 {% endblock %}
 {% block scripts %}
 <script>
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const labels={global:'Global',charge_point:'Ladepunkt',user_group:'Gruppe',user:'Benutzer'};
-let state={tariffs:[],groups:[],users:[],charge_points:[],cost_centers:[]};
-let versionSourceId=null;
+const labels={global:'Global',charge_point:'Ladepunkt',user:'Benutzer'};
+let state={tariffs:[],users:[],charge_points:[]},versionSourceId=null;
 
-function localInputValue(value){
-  if(!value)return '';
-  const d=new Date(value); if(Number.isNaN(d.getTime()))return '';
-  const p=n=>String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
+function localInputValue(value){if(!value)return '';const d=new Date(value);if(Number.isNaN(d.getTime()))return '';const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`}
 function nowInputValue(){return localInputValue(new Date().toISOString())}
 function displayTime(value){return value?window.ocppLocalTime(value):'offen'}
-function priceEuros(cents){return (Number(cents||0)/100).toFixed(2)}
-function tariffStatus(t){
-  if(!Number(t.active))return ['Deaktiviert','muted'];
-  const now=Date.now(),start=Date.parse(t.valid_from),end=t.valid_until?Date.parse(t.valid_until):null;
-  if(Number.isFinite(start)&&start>now)return ['Geplant','blue'];
-  if(end&&end<=now)return ['Abgelaufen','muted'];
-  return ['Aktiv','green'];
-}
 function option(value,label,selected=false){return `<option value="${esc(value)}" ${selected?'selected':''}>${esc(label)}</option>`}
-function fillBillingGroupSelect(selected=''){
-  $('tariffBillingGroup').innerHTML='<option value="">Keine</option>'+state.groups.filter(g=>Number(g.active)).map(g=>option(g.id,`${g.name}${g.cost_center?' · '+g.cost_center:''}`,String(g.id)===String(selected))).join('');
-}
-function fillCostCenterSelects(tariffSelected='',groupSelected=''){
-  const rows=state.cost_centers||[];
-  const opts=(selected)=>'<option value="">Keine Kostenstelle</option>'+rows.map(c=>option(c.code,`${c.code} · ${c.name}${Number(c.active)?'':' · deaktiviert'}`,String(c.code)===String(selected))).join('');
-  $('tariffCostCenter').innerHTML=opts(tariffSelected);
-  $('groupCostCenter').innerHTML=opts(groupSelected);
-}
-function updateTargetOptions(selected=''){
-  const scope=$('tariffScope').value,targetLabel=$('targetLabel'),target=$('tariffTarget'),help=$('targetHelp');
-  if(scope==='global'){targetLabel.hidden=true;target.innerHTML='';return}
-  targetLabel.hidden=false;
-  let items=[]; let helpText='';
-  if(scope==='user'){
-    items=state.users.map(u=>[u.id,`${u.name}${u.department?' · '+u.department:''}${u.status&&u.status!=='Aktiv'?' · '+u.status:''}`]);
-    helpText='Dieser Preis gilt nur für den ausgewählten Lade-/RFID-Benutzer.';
-  }else if(scope==='user_group'){
-    items=state.groups.filter(g=>Number(g.active)).map(g=>[g.id,`${g.name}${g.cost_center?' · '+g.cost_center:''}`]);
-    helpText='Alle Mitglieder dieser Abrechnungsgruppe erhalten diesen Tarif, sofern kein individueller Benutzertarif gilt.';
-  }else if(scope==='charge_point'){
-    items=state.charge_points.map(cp=>[cp.id,`${cp.id}${cp.location?' · '+cp.location:''}${cp.vendor?' · '+cp.vendor:''}`]);
-    helpText='Dieser Preis gilt an genau diesem Ladepunkt, sofern kein Benutzer- oder Gruppentarif greift.';
-  }
-  target.innerHTML='<option value="">Bitte auswählen …</option>'+items.map(i=>option(i[0],i[1],String(i[0])===String(selected))).join('');
-  help.textContent=helpText;
-}
-function resetEditor(){
-  versionSourceId=null;$('tariffForm').reset();$('tariffScope').disabled=false;$('tariffTarget').disabled=false;
-  $('editorTitle').textContent='Tarif anlegen';$('saveTariff').textContent='Tarif speichern';$('cancelVersion').hidden=true;$('versionNotice').hidden=true;
-  $('tariffValidFrom').value=nowInputValue();fillBillingGroupSelect();fillCostCenterSelects();updateTargetOptions();$('msg').textContent='';
-}
-function startVersion(id){
-  const t=state.tariffs.find(x=>Number(x.id)===Number(id)); if(!t)return;
-  versionSourceId=t.id;$('editorTitle').textContent=`Neue Version: ${t.name}`;$('saveTariff').textContent='Neue Tarifversion speichern';$('cancelVersion').hidden=false;
-  $('versionNotice').hidden=false;$('versionNotice').innerHTML=`Die bisherige Version bleibt historisch erhalten. Ihr Gültigkeitsende wird beim Speichern automatisch auf den Start der neuen Version gesetzt. <b>Ziel: ${esc(t.target_label||'Globaler Standard')}</b>`;
-  $('tariffName').value=t.name||'';$('tariffScope').value=t.scope;$('tariffScope').disabled=true;updateTargetOptions(t.target_id||'');$('tariffTarget').disabled=true;
-  $('tariffPrice').value=priceEuros(t.price_cents_per_kwh);$('tariffValidFrom').value=nowInputValue();$('tariffValidUntil').value='';fillCostCenterSelects(t.cost_center||'');
-  fillBillingGroupSelect(t.billing_group_id||'');$('msg').textContent='';window.scrollTo({top:0,behavior:'smooth'});
-}
-async function apiError(r){try{const d=await r.json();return d.detail||'Fehler'}catch(_){return 'Fehler'}}
-async function load(){
-  const r=await fetch('/api/tariffs',{cache:'no-store'}); if(!r.ok){$('rows').innerHTML='<tr><td colspan="7" class="empty">Tarife konnten nicht geladen werden.</td></tr>';return}
-  state=await r.json(); fillBillingGroupSelect(); fillCostCenterSelects(); updateTargetOptions(versionSourceId?(state.tariffs.find(t=>Number(t.id)===Number(versionSourceId))||{}).target_id:''); renderTariffs(); renderGroups();
-}
-function renderTariffs(){
-  $('rows').innerHTML=(state.tariffs||[]).map(t=>{const [status,statusClass]=tariffStatus(t);return `<tr>
-    <td><b>${esc(t.name)}</b><small class="table-sub">Version #${t.id}</small></td>
-    <td><b>${esc(labels[t.scope]||t.scope)}</b><small class="table-sub">${esc(t.target_label||'Globaler Standard')}</small></td>
-    <td><b>${priceEuros(t.price_cents_per_kwh)} €/kWh</b></td>
-    <td>${esc(displayTime(t.valid_from))}<small class="table-sub">bis ${esc(displayTime(t.valid_until))}</small></td>
-    <td>${esc(t.cost_center||'—')}${t.billing_group_name?`<small class="table-sub">${esc(t.billing_group_name)}</small>`:''}</td>
-    <td><span class="state ${statusClass}">${status}</span></td>
-    <td><div class="table-actions"><button class="secondary compact" type="button" onclick="startVersion(${t.id})">Bearbeiten / neue Version</button>${Number(t.active)?`<button class="danger-outline compact" type="button" onclick="removeTariff(${t.id})">Deaktivieren</button>`:''}</div></td>
-  </tr>`}).join('')||'<tr><td colspan="7" class="empty">Noch keine Tarife.</td></tr>';
-}
-async function removeTariff(id){if(!confirm('Tarif deaktivieren? Historische Session-Snapshots bleiben erhalten.'))return;const r=await fetch('/api/tariffs/'+id,{method:'DELETE'});if(!r.ok){alert(await apiError(r));return}if(Number(versionSourceId)===Number(id))resetEditor();await load()}
-
-$('tariffScope').addEventListener('change',()=>updateTargetOptions());
-$('cancelVersion').onclick=resetEditor;
-$('tariffForm').onsubmit=async e=>{
-  e.preventDefault(); $('msg').textContent='';
-  const scope=$('tariffScope').value,target=scope==='global'?null:$('tariffTarget').value;
-  if(scope!=='global'&&!target){$('msg').className='form-message error';$('msg').textContent='Bitte ein konkretes Ziel auswählen.';return}
-  const price=Math.round(Number($('tariffPrice').value)*100);
-  if(!Number.isFinite(price)||price<0){$('msg').className='form-message error';$('msg').textContent='Bitte einen gültigen Preis eingeben.';return}
-  const common={name:$('tariffName').value.trim(),price_cents_per_kwh:price,valid_from:new Date($('tariffValidFrom').value).toISOString(),valid_until:$('tariffValidUntil').value?new Date($('tariffValidUntil').value).toISOString():null,cost_center:$('tariffCostCenter').value||null,billing_group_id:$('tariffBillingGroup').value?Number($('tariffBillingGroup').value):null};
-  const body=versionSourceId?common:{...common,scope,target_id:target};
-  const url=versionSourceId?`/api/tariffs/${versionSourceId}/versions`:'/api/tariffs';
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok){$('msg').className='form-message error';$('msg').textContent=await apiError(r);return}
-  const successText=versionSourceId?'Neue Tarifversion gespeichert.':'Tarif gespeichert.';resetEditor();$('msg').className='form-message ok';$('msg').textContent=successText;await load();
-};
-
-function renderGroups(){
-  $('groupGrid').innerHTML=(state.groups||[]).map(g=>{
-    const members=(g.members||[]).map(m=>`<span class="member-chip">${esc(m.name)}<button type="button" title="Zuordnung entfernen" onclick="removeGroupMember(${g.id},${m.id})">×</button></span>`).join('')||'<span class="muted">Noch keine Mitglieder</span>';
-    const available=(state.users||[]).filter(u=>!(g.members||[]).some(m=>Number(m.id)===Number(u.id)));
-    return `<div class="billing-group-card"><div class="billing-group-head"><div><b>${esc(g.name)}</b><small>${esc(g.cost_center||'Keine Kostenstelle')} · ${Number(g.user_count||0)} Benutzer · <span class="state ${Number(g.active)?'green':'muted'}">${Number(g.active)?'Aktiv':'Deaktiviert'}</span></small></div><div class="table-actions"><button class="secondary compact" type="button" onclick="editGroup(${g.id})">Bearbeiten</button><button class="secondary compact" type="button" onclick="toggleGroup(${g.id})">${Number(g.active)?'Deaktivieren':'Aktivieren'}</button></div></div><div class="member-list">${members}</div>${Number(g.active)?`<div class="assign-row"><select id="group-user-${g.id}"><option value="">Benutzer hinzufügen …</option>${available.map(u=>option(u.id,u.name)).join('')}</select><button class="secondary compact" type="button" onclick="addGroupMember(${g.id})">Hinzufügen</button></div>`:''}</div>`;
-  }).join('')||'<div class="empty">Noch keine Abrechnungsgruppen.</div>';
-}
-function resetGroupEditor(){$('groupId').value='';$('groupForm').reset();$('groupActive').checked=true;$('groupSave').textContent='Gruppe anlegen';$('groupCancel').hidden=true;$('groupMsg').textContent='';fillCostCenterSelects()}
-function editGroup(id){const g=(state.groups||[]).find(x=>Number(x.id)===Number(id));if(!g)return;$('groupId').value=g.id;$('groupName').value=g.name||'';fillCostCenterSelects('',g.cost_center||'');$('groupActive').checked=!!Number(g.active);$('groupSave').textContent='Gruppe speichern';$('groupCancel').hidden=false;$('groupForm').scrollIntoView({behavior:'smooth',block:'center'})}
-async function toggleGroup(id){const g=(state.groups||[]).find(x=>Number(x.id)===Number(id));if(!g)return;const next=!Number(g.active);if(!confirm((next?'Abrechnungsgruppe wieder aktivieren?':'Abrechnungsgruppe deaktivieren? Neue Zuordnungen und Gruppentarife werden dann nicht mehr angewendet; historische Abrechnungen bleiben erhalten.')))return;const r=await fetch('/api/billing-groups/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:g.name,cost_center:g.cost_center||null,active:next})});if(!r.ok){alert(await apiError(r));return}await load()}
-$('groupCancel').onclick=resetGroupEditor;
-$('groupForm').onsubmit=async e=>{e.preventDefault();const id=$('groupId').value,o={name:$('groupName').value.trim(),cost_center:$('groupCostCenter').value||null,active:$('groupActive').checked};const r=await fetch(id?'/api/billing-groups/'+id:'/api/billing-groups',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});if(!r.ok){$('groupMsg').className='form-message error';$('groupMsg').textContent=await apiError(r);return}$('groupMsg').className='form-message ok';$('groupMsg').textContent=id?'Gruppe gespeichert.':'Gruppe angelegt.';resetGroupEditor();await load()};
-async function addGroupMember(groupId){const sel=$(`group-user-${groupId}`),userId=sel.value;if(!userId)return;const r=await fetch(`/api/billing-groups/${groupId}/users/${userId}`,{method:'POST'});if(!r.ok){alert(await apiError(r));return}await load()}
-async function removeGroupMember(groupId,userId){const r=await fetch(`/api/billing-groups/${groupId}/users/${userId}`,{method:'DELETE'});if(!r.ok){alert(await apiError(r));return}await load()}
-
-resetEditor();load();
+function status(t){if(!Number(t.active))return ['Deaktiviert','muted'];const now=Date.now(),start=Date.parse(t.valid_from),end=t.valid_until?Date.parse(t.valid_until):null;if(Number.isFinite(start)&&start>now)return ['Geplant','blue'];if(end&&end<=now)return ['Abgelaufen','muted'];return ['Aktiv','green']}
+function updateTargets(selected=''){const scope=$('tariffScope').value,label=$('targetLabel'),target=$('tariffTarget'),help=$('targetHelp');if(scope==='global'){label.hidden=true;target.innerHTML='';return}label.hidden=false;let items=[];if(scope==='user'){items=state.users.map(u=>[u.id,u.name+(u.status&&u.status!=='Aktiv'?' · '+u.status:'')]);help.textContent='Dieser Preis gilt für genau diesen Benutzer.'}else{items=state.charge_points.map(cp=>[cp.id,(cp.location||cp.id)+(cp.location?' · '+cp.id:'')]);help.textContent='Dieser Preis gilt an genau diesem Ladepunkt, sofern kein Benutzertarif greift.'}target.innerHTML='<option value="">Bitte auswählen …</option>'+items.map(x=>option(x[0],x[1],String(x[0])===String(selected))).join('')}
+function reset(){versionSourceId=null;$('tariffForm').reset();$('tariffScope').disabled=false;$('tariffTarget').disabled=false;$('editorTitle').textContent='Tarif anlegen';$('saveTariff').textContent='Tarif speichern';$('cancelVersion').hidden=true;$('versionNotice').hidden=true;$('tariffValidFrom').value=nowInputValue();updateTargets();$('msg').textContent=''}
+function startVersion(id){const t=state.tariffs.find(x=>Number(x.id)===Number(id));if(!t)return;versionSourceId=t.id;$('editorTitle').textContent='Neue Version: '+t.name;$('saveTariff').textContent='Neue Tarifversion speichern';$('cancelVersion').hidden=false;$('versionNotice').hidden=false;$('versionNotice').textContent='Die bisherige Version bleibt für historische Sessions erhalten.';$('tariffName').value=t.name;$('tariffScope').value=t.scope;$('tariffScope').disabled=true;updateTargets(t.target_id||'');$('tariffTarget').disabled=true;$('tariffPrice').value=(Number(t.price_cents_per_kwh||0)/100).toFixed(2);$('tariffValidFrom').value=nowInputValue();$('tariffValidUntil').value='';window.scrollTo({top:0,behavior:'smooth'})}
+async function err(r){try{return (await r.json()).detail||'Fehler'}catch(_){return 'Fehler'}}
+async function load(){const r=await fetch('/api/tariffs',{cache:'no-store'});if(!r.ok){$('rows').innerHTML='<tr><td colspan="6">Tarife konnten nicht geladen werden.</td></tr>';return}state=await r.json();updateTargets(versionSourceId?(state.tariffs.find(t=>Number(t.id)===Number(versionSourceId))||{}).target_id:'');render()}
+function render(){$('rows').innerHTML=(state.tariffs||[]).map(t=>{const s=status(t);return `<tr><td><b>${esc(t.name)}</b><small>Version #${t.id}</small></td><td><b>${esc(labels[t.scope]||t.scope)}</b><small>${esc(t.target_label||'Globaler Standard')}</small></td><td><b>${(Number(t.price_cents_per_kwh||0)/100).toFixed(2)} €/kWh</b></td><td>${esc(displayTime(t.valid_from))}<small>bis ${esc(displayTime(t.valid_until))}</small></td><td><span class="state ${s[1]}">${s[0]}</span></td><td><div class="table-actions"><button class="secondary compact" type="button" data-version="${t.id}">Neue Version</button>${Number(t.active)?`<button class="danger-outline compact" type="button" data-delete="${t.id}">Deaktivieren</button>`:''}</div></td></tr>`}).join('')||'<tr><td colspan="6" class="empty">Noch keine Tarife. Lege oben deinen ersten Preis an.</td></tr>'}
+$('tariffScope').onchange=()=>updateTargets();$('cancelVersion').onclick=reset;
+$('rows').onclick=async e=>{const v=e.target.closest('[data-version]'),d=e.target.closest('[data-delete]');if(v)return startVersion(Number(v.dataset.version));if(d){if(!confirm('Tarif deaktivieren? Historische Preis-Snapshots bleiben erhalten.'))return;const r=await fetch('/api/tariffs/'+d.dataset.delete,{method:'DELETE'});if(!r.ok)return alert(await err(r));await load()}};
+$('tariffForm').onsubmit=async e=>{e.preventDefault();const scope=$('tariffScope').value,target=scope==='global'?null:$('tariffTarget').value;if(scope!=='global'&&!target){$('msg').textContent='Bitte ein Ziel auswählen.';$('msg').className='form-message error';return}const cents=Math.round(Number($('tariffPrice').value)*100);if(!Number.isFinite(cents)||cents<0)return;const common={name:$('tariffName').value.trim(),price_cents_per_kwh:cents,valid_from:new Date($('tariffValidFrom').value).toISOString(),valid_until:$('tariffValidUntil').value?new Date($('tariffValidUntil').value).toISOString():null};const payload=versionSourceId?common:{...common,scope,target_id:target};const url=versionSourceId?'/api/tariffs/'+versionSourceId+'/versions':'/api/tariffs';const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok){$('msg').textContent=await err(r);$('msg').className='form-message error';return}reset();$('msg').textContent='Tarif gespeichert.';$('msg').className='form-message ok';await load()};
+reset();load();
 </script>
 {% endblock %}
