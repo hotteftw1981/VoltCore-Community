@@ -32,9 +32,9 @@ This document records the agreed initial feature scope for VoltCore Community.
 
 ## First-run onboarding
 
-VoltCore Community should guide a new installation through a neutral first-run setup instead of inheriting organization-specific defaults.
+VoltCore Community guides a new installation through a neutral first-run setup instead of inheriting organization-specific defaults.
 
-Planned first-login wizard:
+Current first-login wizard:
 
 1. organization / installation name and basic branding;
 2. administrator basics and preferred language;
@@ -63,8 +63,8 @@ The application should:
 5. install only releases intended for VoltCore Community;
 6. preserve database migrations and rollback safety.
 
-## Explicitly not implied by this scope
+## Scope notes
 
-Features not listed above are not automatically part of Community. The initial Community build is intentionally limited to the agreed scope.
+The Community edition now includes additional neutral modules restored from the VoltCore 0.9.7.74 baseline, including Smart Charging, Engagement, Cost Centers, imports and read-only Fleet Integration. Community-specific defaults and privacy/security constraints still take precedence.
 
 This repository remains private while the first Community build is being prepared and verified.
