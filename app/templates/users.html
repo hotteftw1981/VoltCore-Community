@@ -1,28 +1,22 @@
 {% extends "base.html" %}
 {% block title %}Benutzer / RFID - {{ branding.product_name }}{% endblock %}
 {% block heading %}Benutzer / RFID{% endblock %}
-{% block subtitle %}Benutzerverwaltung, RFID-Lifecycle, Self-Service, Fahrzeuge und Ladebudgets{% endblock %}
+{% block subtitle %}Benutzerverwaltung, RFID-Lifecycle, Fahrzeuge und Ladeberechtigungen{% endblock %}
 {% block content %}
-<section class="stats six rfid-stats">
+<section class="stats five rfid-stats">
   <div class="stat"><span>Benutzer</span><b id="count">0</b><small>registriert</small></div>
   <div class="stat"><span>RFID-Karten</span><b id="cards">0</b><small>registriert</small></div>
   <div class="stat"><span>Aktive Karten</span><b id="activeCards">0</b><small>freigegeben</small></div>
   <div class="stat"><span>Benutzer aktiv</span><b id="activeUsers">0</b><small>zugriffsberechtigt</small></div>
   <div class="stat"><span>Limit-Warnungen</span><b id="budgetWarnings">0</b><small>ab 70 % / gesperrt</small></div>
-  <div class="stat"><span>Ersatzanfragen</span><b id="rfidRequests">0</b><small>offen / in Bearbeitung</small></div>
 </section>
 
 <div class="toolbar">
-  <div><h2>Benutzer &amp; RFID <button type="button" class="context-help" aria-label="Info: Benutzer & RFID" aria-haspopup="dialog" aria-expanded="false" data-help-title="Benutzer & RFID" data-help="Verwaltet Ladebenutzer, RFID-Karten, Fahrzeuge, Portalzugang und Monatsbudgets. Ein Benutzer kann mehrere Karten besitzen; das Monatsbudget gilt gemeinsam.">i</button></h2><p>Verknüpfung von Personen, Karten, Fahrzeugen und Ladebudgets</p></div>
+  <div><h2>Benutzer &amp; RFID <button type="button" class="context-help" aria-label="Info: Benutzer & RFID" aria-haspopup="dialog" aria-expanded="false" data-help-title="Benutzer & RFID" data-help="Verwaltet Ladebenutzer, RFID-Karten, Fahrzeuge, Ladeberechtigungen und optionale Monatslimits.">i</button></h2><p>Verknüpfung von Personen, Karten, Fahrzeugen und Ladeberechtigungen</p></div>
   <div class="toolbar-actions"><button class="secondary write-action" id="addCard" type="button">+ RFID-Karte</button><button class="primary write-action" id="addUser" type="button">+ Benutzer hinzufügen</button></div>
 </div>
 
 <div class="user-grid" id="userGrid"></div>
-
-<section class="panel table-panel rfid-request-panel">
-  <div class="panelhead"><div><h2>RFID-Self-Service <button type="button" class="context-help" aria-label="Info: RFID-Self-Service" aria-haspopup="dialog" aria-expanded="false" data-help-title="RFID-Self-Service" data-help="Hier landen Verlustmeldungen und Ersatzkarten-Anfragen aus dem persönlichen Ladeportal.">i</button></h2><span>Verlustmeldungen und Ersatzkarten-Anfragen aus dem persönlichen Portal</span></div><span id="requestCountLabel">0 offen</span></div>
-  <table><thead><tr><th>Benutzer</th><th>Karte</th><th>Grund</th><th>Status</th><th>Eingang</th><th>Aktionen</th></tr></thead><tbody id="requestBody"></tbody></table>
-</section>
 
 <section class="panel table-panel rfid-table-panel">
   <div class="panelhead"><div><h2>RFID-Karten</h2><span>Autorisierung, Zuordnung, Lebenszyklus und Nutzung</span></div><span id="cardCountLabel">0 Karten</span></div>
@@ -71,17 +65,6 @@
         <div id="chargePointAccessList" class="form-grid" hidden></div>
         <small class="budget-help" id="chargeAccessHint">Alle aktuellen und zukünftigen Ladepunkte sind freigegeben.</small>
       </div>
-      {% if auth_user and auth_user.role == 'admin' %}
-      <div class="portal-admin-card">
-        <div class="budget-form-head"><div><strong>Persönlicher Ladeportal-Zugang</strong><small>6-stellige PIN für den privaten Self-Service-Bereich.</small></div><span id="portalStatus" class="state muted">Nicht eingerichtet</span></div>
-        <div class="portal-pin-row">
-          <label>Neue PIN<input id="portalPinInput" type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 Ziffern" autocomplete="new-password"></label>
-          <button class="secondary" id="setPortalPin" type="button">PIN setzen</button>
-          <button class="danger-outline" id="togglePortalEnabled" type="button">Portal deaktivieren</button>
-        </div>
-        <small class="budget-help">Die PIN wird ausschließlich als sicherer Hash gespeichert. Bei vergessener PIN kann der Benutzer den Reset per E-Mail auslösen.</small>
-      </div>
-      {% endif %}
       <div class="form-actions"><button class="secondary" id="cancelUser" type="button">Abbrechen</button><button class="primary write-action" type="submit">Speichern</button></div>
     </form>
   </div>
@@ -113,7 +96,7 @@ async function syncLocalList(cp,force=true){const payload={force_full:!!force};i
 async function checkOfflineAuth(cp){const r=await fetch('/api/rfid/local-list/offline-auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({charge_point_id:cp})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Offline-Modus konnte nicht geprüft werden');await loadLocalLists();return d.result||{}}
 
 const esc=v=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-let users=[],cards=[],vehicles=[],requests=[],chargePoints=[],deleteId=null,detailTxPage=1,detailTxPageSize=10,detailUserId=null;
+let users=[],cards=[],vehicles=[],chargePoints=[],deleteId=null,detailTxPage=1,detailTxPageSize=10,detailUserId=null;
 async function openUserDelete(id){
   deleteId=Number(id);
   const u=users.find(x=>x.id===deleteId);
@@ -175,62 +158,23 @@ function fillUser(v){
   $('userId').value=v?.id||'';$('userName').value=v?.name||'';$('userRole').value=v?.role||'Fahrer';$('department').value=v?.department||'';$('userStatus').value=v?.status||'Aktiv';$('email').value=v?.email||'';$('phone').value=v?.phone||'';$('budgetSource').value='manual';
   const unlimited=v?.monthly_kwh_limit==null && v?.monthly_limit_kwh==null;$('budgetUnlimited').checked=unlimited;$('monthlyKwhLimit').value=unlimited?'':(v?.monthly_kwh_limit??v?.monthly_limit_kwh??'');$('monthlyLimitMode').value=v?.monthly_limit_mode||'warn';toggleBudgetInput();
   $('chargeAccessMode').value=v?.charge_access_mode==='selected'?'selected':'all';renderChargePointAccess(v?.allowed_charge_point_ids||[]);
-  loadPortalStatus(v?.id||0);
-}
-async function loadPortalStatus(id){
-  if(!$('portalStatus'))return;
-  if(!id){
-    $('portalStatus').className='state muted';
-    $('portalStatus').textContent='Nach dem Speichern einrichten';
-    $('togglePortalEnabled').disabled=true;
-    return;
-  }
-  try{
-    const r=await fetch('/api/portal-admin/users/'+id);
-    if(!r.ok)throw new Error();
-    const d=await r.json();
-    $('portalStatus').className='state '+(d.portal_enabled?'green':'muted');
-    $('portalStatus').textContent=d.portal_enabled?(d.portal_pin_set?'Aktiv · PIN gesetzt':'Aktiv · PIN fehlt'):'Deaktiviert';
-    $('togglePortalEnabled').disabled=false;
-    $('togglePortalEnabled').textContent=d.portal_enabled?'Portal deaktivieren':'Portal aktivieren';
-    $('togglePortalEnabled').dataset.enabled=d.portal_enabled?'1':'0';
-  }catch(_){
-    $('portalStatus').className='state muted';
-    $('portalStatus').textContent='Status nicht verfügbar';
-  }
-}
-async function setPortalPin(){
-  const id=Number($('userId').value||0);
-  if(!id)return showToast('Benutzer zuerst speichern.','error');
-  const pin=$('portalPinInput').value.trim();
-  if(!/^\d{6}$/.test(pin))return showToast('Bitte genau 6 Ziffern eingeben.','error');
-  const r=await fetch('/api/portal-admin/users/'+id+'/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin,enabled:true})});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok)return showToast(d.detail||'PIN konnte nicht gesetzt werden.','error');
-  $('portalPinInput').value='';
-  await loadPortalStatus(id);
-  await load();
-  showToast('Portal-PIN gespeichert.');
 }
 function renderUsers(){
   $('userGrid').innerHTML=users.map(u=>{
     const pct=budgetPercent(u), cls=budgetClass(u.budget_status); const bstatus=u.status_label||'Im Limit';
     return `<article class="user-card clickable" data-user="${u.id}">
-      <div class="user-card-top"><div class="avatar user-photo-small">${u.image_path?`<img src="${esc(u.image_path)}" alt="">`:esc((u.name||'?').slice(0,1).toUpperCase())}</div><div class="user-main"><h2>${esc(u.name)}</h2><p>${esc(u.role||'Fahrer')} · ${esc(u.department||'Keine Abteilung')}</p></div><div class="user-card-states"><span class="state ${u.status==='Aktiv'?'green':''}">${esc(u.status||'Aktiv')}</span>${u.portal_enabled?'<span class="state green">Portal</span>':''}${u.charge_access_mode==='selected'?(`<span class="state warn">${Number((u.allowed_charge_point_ids||[]).length)} Ladepunkt${Number((u.allowed_charge_point_ids||[]).length)===1?'':'e'}</span>`):'<span class="state green">Alle Ladepunkte</span>'}</div></div>
+      <div class="user-card-top"><div class="avatar user-photo-small">${u.image_path?`<img src="${esc(u.image_path)}" alt="">`:esc((u.name||'?').slice(0,1).toUpperCase())}</div><div class="user-main"><h2>${esc(u.name)}</h2><p>${esc(u.role||'Fahrer')} · ${esc(u.department||'Keine Abteilung')}</p></div><div class="user-card-states"><span class="state ${u.status==='Aktiv'?'green':''}">${esc(u.status||'Aktiv')}</span>${u.charge_access_mode==='selected'?(`<span class="state warn">${Number((u.allowed_charge_point_ids||[]).length)} Ladepunkt${Number((u.allowed_charge_point_ids||[]).length)===1?'':'e'}</span>`):'<span class="state green">Alle Ladepunkte</span>'}</div></div>
       <div class="user-stats"><div><span>RFID</span><b>${u.rfid_count||0}</b></div><div><span>Fahrzeuge</span><b>${u.vehicle_count||0}</b></div><div><span>Sessions</span><b>${u.session_count||0}</b></div><div><span>Monat</span><b>${Number(u.month_energy_kwh||0).toFixed(1)} kWh</b></div><div><span>Gesamt</span><b>${Number(u.energy_kwh||0).toFixed(1)} kWh</b></div></div>
       <div class="budget-mini ${cls}"><div><span>Monatslimit</span><b>${esc(budgetLabel(u))}</b></div><span class="budget-status">${esc(bstatus)}</span>${u.percent==null?'':`<div class="budget-bar"><i style="width:${pct}%"></i></div><small>${Number(u.percent).toFixed(0)} % · ${Number(u.remaining_kwh||0).toFixed(1)} kWh verbleibend</small>`}</div>
       <div class="user-card-actions"><button class="secondary" type="button" data-action="details" data-id="${u.id}">Details</button><button class="secondary write-action" type="button" data-action="edit" data-id="${u.id}">Bearbeiten</button><button class="stop write-action" type="button" data-action="delete" data-id="${u.id}">Entfernen</button></div>
     </article>`}).join('')||'<div class="empty">Noch keine Benutzer angelegt.</div>'
 }
 function renderCards(){$('cardBody').innerHTML=cards.map(c=>`<tr><td><b>${esc(c.label||'RFID-Karte')}</b>${Number(c.open_request_count||0)?'<small class="rfid-request-hint">Ersatz angefragt</small>':''}</td><td><code>${esc(c.uid)}</code></td><td>${esc(c.user_name||'—')}</td><td>${esc(c.vehicle_name||'—')}</td><td><span class="state ${c.status==='Aktiv'?'green':(c.status==='Verloren'||c.status==='Gesperrt'?'warn':'')}">${esc(c.status)}</span></td><td><b>${Number(c.session_count||0)}</b><small>${Number(c.energy_kwh||0).toFixed(1)} kWh</small></td><td>${esc(fmt(c.last_used_at))}</td><td><div class="table-actions"><button class="secondary" type="button" data-card-detail="${c.id}">Details</button><button class="secondary write-action" type="button" data-card-edit="${c.id}">Bearbeiten</button></div></td></tr>`).join('')||'<tr><td colspan="8" class="empty">Keine RFID-Karten vorhanden.</td></tr>';$('cardCountLabel').textContent=`${cards.length} Karten`}
-function renderRequests(){const open=requests.filter(q=>q.status==='Offen'||q.status==='In Bearbeitung');$('requestCountLabel').textContent=`${open.length} offen`;$('requestBody').innerHTML=requests.map(q=>`<tr><td><b>${esc(q.user_name)}</b></td><td>${esc(q.label||'RFID-Karte')}<small><code>${esc(q.uid)}</code></small></td><td>${q.reason==='lost'?'Verlustmeldung':'Ersatzkarte'}${q.note?'<small>'+esc(q.note)+'</small>':''}</td><td><span class="state ${q.status==='Offen'?'warn':(q.status==='Erledigt'?'green':'')}">${esc(q.status)}</span></td><td>${esc(fmt(q.created_at))}</td><td><div class="table-actions"><button class="secondary" data-card-detail="${q.card_id}" type="button">Karte</button>${q.status==='Offen'?`<button class="secondary write-action" data-request-status="${q.id}" data-status="In Bearbeitung" type="button">Übernehmen</button>`:''}${q.status==='Offen'||q.status==='In Bearbeitung'?`<button class="primary write-action" data-request-replace="${q.card_id}" type="button">Ersatz ausgeben</button><button class="stop write-action" data-request-status="${q.id}" data-status="Abgelehnt" type="button">Ablehnen</button>`:''}<button class="danger-outline compact write-action" data-request-delete="${q.id}" type="button">Löschen</button></div></td></tr>`).join('')||'<tr><td colspan="6" class="empty">Keine Ersatzkarten-Anfragen vorhanden.</td></tr>'}
-function fillCard(c){$('cardId').value=c?.id||'';$('cardUid').value=c?.uid||'';$('cardLabel').value=c?.label||'';$('cardUser').value=c?.user_id||'';$('cardVehicle').value=c?.vehicle_id||'';$('cardStatus').value=c?.status||'Aktiv';$('cardExpires').value=(c?.expires_at||'').slice(0,10);$('cardNotes').value=c?.notes||''}
-function fillSelects(){$('cardUser').innerHTML='<option value="">Nicht zugeordnet</option>'+users.map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('');$('cardVehicle').innerHTML='<option value="">Nicht zugeordnet</option>'+vehicles.map(v=>`<option value="${v.id}">${esc(v.name)}${v.plate?' · '+esc(v.plate):''}</option>`).join('')}
 async function load(){
-  const [u,r,v,q,cp]=await Promise.all([fetch('/api/users',{cache:'no-store'}).then(x=>x.json()),fetch('/api/rfid',{cache:'no-store'}).then(x=>x.json()),fetch('/api/vehicles',{cache:'no-store'}).then(x=>x.json()),fetch('/api/rfid/requests',{cache:'no-store'}).then(x=>x.json()),fetch('/api/charge-points',{cache:'no-store'}).then(x=>x.json()).catch(()=>({}))]);
-  users=u.users||[];cards=r.cards||[];vehicles=v.vehicles||[];requests=q.requests||[];chargePoints=cp.charge_points||[];
-  $('count').textContent=users.length;$('cards').textContent=cards.length;$('activeCards').textContent=cards.filter(c=>c.status==='Aktiv').length;$('activeUsers').textContent=users.filter(u=>u.status==='Aktiv').length;$('budgetWarnings').textContent=users.filter(u=>u.blocked||Number(u.percent||0)>=70).length;$('rfidRequests').textContent=requests.filter(x=>x.status==='Offen'||x.status==='In Bearbeitung').length;
-  fillSelects();renderUsers();renderCards();renderRequests();loadLocalLists();
+  const [u,r,v,cp]=await Promise.all([fetch('/api/users',{cache:'no-store'}).then(x=>x.json()),fetch('/api/rfid',{cache:'no-store'}).then(x=>x.json()),fetch('/api/vehicles',{cache:'no-store'}).then(x=>x.json()),fetch('/api/charge-points',{cache:'no-store'}).then(x=>x.json()).catch(()=>({}))]);
+  users=u.users||[];cards=r.cards||[];vehicles=v.vehicles||[];chargePoints=cp.charge_points||[];
+  $('count').textContent=users.length;$('cards').textContent=cards.length;$('activeCards').textContent=cards.filter(c=>c.status==='Aktiv').length;$('activeUsers').textContent=users.filter(u=>u.status==='Aktiv').length;$('budgetWarnings').textContent=users.filter(u=>u.blocked||Number(u.percent||0)>=70).length;
+  fillSelects();renderUsers();renderCards();loadLocalLists();
 }
 function chargeAccessHtml(u){if((u?.charge_access_mode||'all')!=='selected')return '<div class="panel inline-panel"><div class="panelhead"><div><h3>Ladeberechtigung</h3><span>RFID-Zugriff</span></div><span class="state green">Alle Ladepunkte</span></div><small class="budget-help">Dieser Benutzer darf an allen aktuellen und zukünftigen Ladepunkten laden.</small></div>';const ids=(u?.allowed_charge_point_ids||[]).map(String),items=ids.map(id=>{const cp=(chargePoints||[]).find(x=>String(x.id)===id),label=cp?.location?cp.location+' · '+id:id;return `<div class="stack-item"><div><b>${esc(label)}</b><small>${esc([cp?.vendor,cp?.model].filter(Boolean).join(' · ')||'Freigegebener Ladepunkt')}</small></div><span class="state green">Erlaubt</span></div>`}).join('');return `<div class="panel inline-panel"><div class="panelhead"><div><h3>Ladeberechtigung</h3><span>RFID-Zugriff</span></div><span class="state ${ids.length?'warn':'bad'}">${ids.length?ids.length+' Ladepunkt'+(ids.length===1?'':'e'):'Nirgends freigegeben'}</span></div><div class="stack-list">${items||'<div class="empty">Dieser Benutzer darf aktuell an keinem Ladepunkt laden.</div>'}</div></div>`}
 function activeSessionHtml(a){if(!a)return '';const duration=a.started_at?Math.max(0,Math.round((Date.now()-new Date(a.started_at).getTime())/60000)):'—';return `<div class="panel inline-panel active-user-session"><div class="panelhead"><div><h3>Aktuelle Ladung</h3><span>Live</span></div><a href="/transactions/${a.id}">Session #${a.id} →</a></div><div class="active-user-session-grid"><div><span>Fahrzeug</span><b>${esc(a.vehicle_name||'Nicht zugeordnet')}</b></div><div><span>Ladepunkt</span><b>${esc(a.charge_point_id)} · C${esc(a.connector_id)}</b></div><div><span>Leistung</span><b>${a.live_power_kw==null?'—':Number(a.live_power_kw).toFixed(1)+' kW'}</b></div><div><span>Sessionenergie</span><b>${Number(a.energy_kwh||0).toFixed(2)} kWh</b></div><div><span>Dauer</span><b>${duration==='—'?'—':duration+' min'}</b></div><div><span>RFID</span><b>${esc(a.id_tag||'—')}</b></div></div></div>`}
@@ -259,22 +203,12 @@ $('budgetUnlimited').onchange=toggleBudgetInput;$('chargeAccessMode').onchange=(
 $('addUser').onclick=()=>{fillUser();$('userModalTitle').textContent='Benutzer hinzufügen';openM('userModal');setTimeout(()=>$('userName').focus(),0)};
 $('addCard').onclick=()=>{fillCard();$('cardModalTitle').textContent='RFID-Karte hinzufügen';openM('cardModal');setTimeout(()=>$('cardUid').focus(),0)};
 $('userClose').onclick=()=>closeM('userModal');$('cancelUser').onclick=()=>closeM('userModal');$('cardClose').onclick=()=>closeM('cardModal');$('cancelCard').onclick=()=>closeM('cardModal');$('cardDetailClose').onclick=()=>closeM('cardDetailModal');$('replaceCardClose').onclick=()=>closeM('replaceCardModal');$('replaceCardCancel').onclick=()=>closeM('replaceCardModal');$('detailClose').onclick=()=>closeM('detailModal');$('deleteClose').onclick=()=>closeM('deleteModal');$('deleteCancel').onclick=()=>closeM('deleteModal');
-if($('setPortalPin'))$('setPortalPin').onclick=()=>setPortalPin();
-if($('togglePortalEnabled'))$('togglePortalEnabled').onclick=async()=>{
-  const id=Number($('userId').value||0);
-  if(!id)return showToast('Benutzer zuerst speichern.','error');
-  const enabled=$('togglePortalEnabled').dataset.enabled!=='1';
-  const r=await fetch('/api/portal-admin/users/'+id+'/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
-  if(!r.ok)return showToast('Portalstatus konnte nicht geändert werden.','error');
-  await loadPortalStatus(id);await load();showToast(enabled?'Portal aktiviert':'Portal deaktiviert');
-};
 $('userForm').onsubmit=async e=>{e.preventDefault();const id=$('userId').value;const unlimited=$('budgetUnlimited').checked;const limitRaw=$('monthlyKwhLimit').value;const accessMode=$('chargeAccessMode').value,allowed=accessMode==='selected'?[...document.querySelectorAll('[data-charge-point-access]:checked')].map(x=>x.value):[];const p={name:$('userName').value.trim(),role:$('userRole').value,department:$('department').value.trim()||null,status:$('userStatus').value,email:$('email').value.trim()||null,phone:$('phone').value.trim()||null,monthly_kwh_limit:unlimited?null:(limitRaw===''?null:Number(limitRaw)),monthly_limit_mode:$('monthlyLimitMode').value,charge_access_mode:accessMode,allowed_charge_point_ids:allowed};const r=await fetch(id?'/api/users/'+id:'/api/users',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok){const d=await r.json().catch(()=>({}));return showToast(d.detail||'Benutzer konnte nicht gespeichert werden.','error')}closeM('userModal');await load()};
 $('cardForm').onsubmit=async e=>{e.preventDefault();const id=$('cardId').value,p={uid:$('cardUid').value.trim(),label:$('cardLabel').value.trim()||null,user_id:$('cardUser').value?Number($('cardUser').value):null,vehicle_id:$('cardVehicle').value?Number($('cardVehicle').value):null,status:$('cardStatus').value,expires_at:$('cardExpires').value||null,notes:$('cardNotes').value.trim()||null},r=await fetch(id?'/api/rfid/'+id:'/api/rfid',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok){const d=await r.json().catch(()=>({}));return showToast(d.detail||'RFID-Karte konnte nicht gespeichert werden.','error')}closeM('cardModal');await load()};
 $('userGrid').onclick=e=>{const b=e.target.closest('[data-action]'),card=e.target.closest('[data-user]');if(b){e.stopPropagation();const id=Number(b.dataset.id),u=users.find(x=>x.id===id);if(b.dataset.action==='details')return showDetails(id);if(b.dataset.action==='edit'){fillUser(u);$('userModalTitle').textContent='Benutzer bearbeiten';return openM('userModal')}if(b.dataset.action==='delete')return openUserDelete(id)}if(card)showDetails(Number(card.dataset.user))};
 async function showCardDetails(id){const r=await fetch('/api/rfid/'+id+'/detail',{cache:'no-store'}),d=await r.json();if(!r.ok)return showToast(d.detail||'Kartendetails konnten nicht geladen werden.','error');const c=d.card;$('cardDetailTitle').textContent=c.label||'RFID-Karte';$('cardDetailBody').innerHTML=`<div class="rfid-detail-hero"><div><span>UID</span><b><code>${esc(c.uid)}</code></b></div><div><span>Status</span><b><span class="state ${c.status==='Aktiv'?'green':''}">${esc(c.status)}</span></b></div><div><span>Benutzer</span><b>${esc(c.user_name||'—')}</b></div><div><span>Fahrzeug</span><b>${esc(c.vehicle_name||'—')}</b></div><div><span>Ausgegeben</span><b>${esc(fmt(c.issued_at||c.created_at))}</b></div><div><span>Letzte Nutzung</span><b>${esc(fmt(c.last_used_at))}</b></div></div>${c.blocked_reason?`<div class="rfid-block-note"><b>Sperrgrund</b><span>${esc(c.blocked_reason)}</span></div>`:''}<div class="two-col"><div class="panel inline-panel"><div class="panelhead"><h3>Kartenhistorie</h3><span>${d.history.length}</span></div><div class="stack-list">${d.history.map(h=>`<div class="stack-item"><div><b>${esc(h.note||h.event_type)}</b><small>${esc(fmt(h.created_at))} · ${esc(h.source||'system')}</small></div>${h.new_status?'<span class="state">'+esc(h.new_status)+'</span>':''}</div>`).join('')||'<div class="empty">Keine Historie.</div>'}</div></div><div class="panel inline-panel"><div class="panelhead"><h3>Letzte Ladevorgänge</h3><span>${d.transactions.length}</span></div><div class="stack-list">${d.transactions.map(t=>`<div class="stack-item"><div><b>#${t.id} · ${esc(t.charge_point_id)}</b><small>${esc(fmt(t.started_at))}</small></div><strong>${Number(t.energy_kwh||0).toFixed(2)} kWh</strong></div>`).join('')||'<div class="empty">Noch keine Nutzung.</div>'}</div></div></div><div class="detail-actions">${c.status!=='Ersetzt'?`<button class="primary write-action" type="button" data-replace-card="${c.id}">Ersatzkarte ausgeben</button>`:''}<button class="secondary write-action" type="button" data-edit-card-detail="${c.id}">Bearbeiten</button></div>`;openM('cardDetailModal')}
 function openReplaceCard(id){const c=cards.find(x=>x.id===Number(id));if(!c)return;$('replaceCardId').value=c.id;$('replaceCardUid').value='';$('replaceCardLabel').value=(c.label||'RFID-Karte')+' · Ersatz';$('replaceCardExpires').value='';$('replaceCardNotes').value='';$('replaceCardSubtitle').textContent=`${c.user_name||'Nicht zugeordnet'} · ${c.uid}`;openM('replaceCardModal');setTimeout(()=>$('replaceCardUid').focus(),0)}
 $('cardBody').onclick=e=>{const detail=e.target.closest('[data-card-detail]');if(detail)return showCardDetails(Number(detail.dataset.cardDetail));const b=e.target.closest('[data-card-edit]');if(!b)return;const c=cards.find(x=>x.id===Number(b.dataset.cardEdit));fillCard(c);$('cardModalTitle').textContent='RFID-Karte bearbeiten';openM('cardModal')};
-$('requestBody').onclick=async e=>{const detail=e.target.closest('[data-card-detail]');if(detail)return showCardDetails(Number(detail.dataset.cardDetail));const repl=e.target.closest('[data-request-replace]');if(repl)return openReplaceCard(Number(repl.dataset.requestReplace));const del=e.target.closest('[data-request-delete]');if(del){const id=Number(del.dataset.requestDelete),q=requests.find(x=>Number(x.id)===id);if(!confirm(`RFID-Anfrage #${id} wirklich löschen?\n\nEs wird nur die Anfrage entfernt. Kartenstatus, Sperrstatus und Kartenhistorie bleiben unverändert.${q?.card_status==='Verloren'?'\n\nDie als verloren gesperrte Karte bleibt also gesperrt.':''}`))return;const r=await fetch('/api/rfid/requests/'+id,{method:'DELETE'}),d=await r.json().catch(()=>({}));if(!r.ok)return showToast(d.detail||'Anfrage konnte nicht gelöscht werden.','error');await load();showToast('RFID-Anfrage gelöscht');return}const b=e.target.closest('[data-request-status]');if(!b)return;const status=b.dataset.status;let note=null;if(status==='Abgelehnt')note=prompt('Optionaler Grund für die Ablehnung:')||null;const r=await fetch('/api/rfid/requests/'+Number(b.dataset.requestStatus)+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status,resolution_note:note})});if(!r.ok){const d=await r.json().catch(()=>({}));return showToast(d.detail||'Anfrage konnte nicht geändert werden.','error')}await load();showToast('Anfrage aktualisiert')};
 $('replaceCardForm').onsubmit=async e=>{e.preventDefault();const id=Number($('replaceCardId').value||0),payload={uid:$('replaceCardUid').value.trim(),label:$('replaceCardLabel').value.trim()||null,expires_at:$('replaceCardExpires').value||null,notes:$('replaceCardNotes').value.trim()||null};if(!id||!payload.uid)return;const r=await fetch('/api/rfid/'+id+'/replace',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));if(!r.ok)return showToast(d.detail||'Ersatzkarte konnte nicht ausgegeben werden.','error');closeM('replaceCardModal');closeM('cardDetailModal');await load();showToast('Ersatzkarte wurde aktiviert; alte Karte ist gesperrt.')};
 $('cardDetailBody').onclick=e=>{const repl=e.target.closest('[data-replace-card]');if(repl)return openReplaceCard(Number(repl.dataset.replaceCard));const edit=e.target.closest('[data-edit-card-detail]');if(edit){const c=cards.find(x=>x.id===Number(edit.dataset.editCardDetail));closeM('cardDetailModal');fillCard(c);$('cardModalTitle').textContent='RFID-Karte bearbeiten';openM('cardModal')}};
 $('detailBody').onclick=async e=>{const pg=e.target.closest('[data-detail-tx-page]');if(pg&&!pg.disabled){const next=Number(pg.dataset.detailTxPage||1);if(detailUserId&&next!==detailTxPage)return showDetails(detailUserId,next,true)}const uid=Number($('detailTitle').dataset.userId||0);const upload=e.target.closest('[data-user-image-upload]'),remove=e.target.closest('[data-user-image-delete]');if(upload){$('userImageInput').dataset.userId=String(uid);$('userImageInput').click();return}if(remove){if(!confirm('Profilbild wirklich entfernen?'))return;const r=await fetch('/api/users/'+uid+'/image',{method:'DELETE'});if(!r.ok)return showToast('Profilbild konnte nicht entfernt werden.','error');await load();return showDetails(uid)}const uv=e.target.closest('[data-unassign-vehicle]');if(uv){const r=await fetch('/api/users/'+uid+'/vehicles/'+Number(uv.dataset.unassignVehicle),{method:'DELETE'});if(r.ok)return showDetails(uid);return showToast('Zuordnung konnte nicht entfernt werden.','error')}const assign=e.target.closest('[data-assign-vehicle]');if(assign){const vid=Number($('assignVehicle')?.value||0);if(!uid||!vid)return;const r=await fetch('/api/users/'+uid+'/vehicles/'+vid,{method:'POST'});if(r.ok)return showDetails(uid);return showToast('Fahrzeug konnte nicht zugeordnet werden.','error')}const ed=e.target.closest('[data-user-edit]'),del=e.target.closest('[data-user-delete]');if(ed){const u=users.find(x=>x.id===Number(ed.dataset.userEdit));closeM('detailModal');fillUser(u);$('userModalTitle').textContent='Benutzer bearbeiten';openM('userModal')}if(del)return openUserDelete(Number(del.dataset.userDelete))};
