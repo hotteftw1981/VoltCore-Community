@@ -10,12 +10,12 @@ from pywebpush import WebPushException, webpush
 
 from . import db
 
-log = logging.getLogger("voltcore.push")
+log = logging.getLogger("voltcore.community.push")
 
 _PRIVATE_KEY_SETTING = "web_push_vapid_private_key"
 _PUBLIC_KEY_SETTING = "web_push_vapid_public_key"
 _SUBJECT_SETTING = "web_push_vapid_subject"
-_DEFAULT_SUBJECT = "mailto:p.garbe@drk-schwelm.org"
+_DEFAULT_SUBJECT = "https://github.com/hotteftw1981/VoltCore-Community"
 
 
 def _b64url(value: bytes) -> str:
@@ -87,7 +87,7 @@ def _subscription_info(row):
 
 def _payload(row, test=False):
     branding = db.branding_settings()
-    title = "Push-Test erfolgreich" if test else str(row.get("title") or "VoltCore")
+    title = "Push-Test erfolgreich" if test else str(row.get("title") or "VoltCore Community")
     body = (
         "Push-Benachrichtigungen sind für dieses Gerät aktiv."
         if test
@@ -107,7 +107,7 @@ def _payload(row, test=False):
             else f"voltcore-notification-{int(row.get('notification_id') or 0)}-{int(row.get('revision') or 1)}"
         ),
         "severity": "info" if test else str(row.get("severity") or "info"),
-        "product": str(branding.get("product_name") or "VoltCore"),
+        "product": str(branding.get("product_name") or "VoltCore Community"),
     }
 
 

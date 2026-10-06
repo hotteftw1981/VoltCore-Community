@@ -1,4 +1,4 @@
-"""Backup and restore support for the OCPP backend.
+"""Backup and restore support for VoltCore Community.
 
 Backups are self-contained ZIP archives with a consistent SQLite snapshot and
 persistent DATA_DIR files. The backup directory and external credentials are
@@ -37,8 +37,8 @@ BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 CREDENTIAL_FILE = db.DATA_DIR / ".backup_external_password"
 SFTP_KNOWN_HOSTS_FILE = db.DATA_DIR / ".backup_sftp_known_hosts"
 SMTP_CREDENTIAL_FILE = db.DATA_DIR / ".smtp_password"
-BACKUP_PREFIX = "ocpp-backup-"
-BACKUP_RE = re.compile(r"^ocpp-backup-(\d{8})-(\d{6})(?:-[a-z0-9_-]+)?\.zip$", re.I)
+BACKUP_PREFIX = "voltcore-community-backup-"
+BACKUP_RE = re.compile(r"^voltcore-community-backup-(\d{8})-(\d{6})(?:-[a-z0-9_-]+)?\.zip$", re.I)
 MAX_RESTORE_BYTES = 5 * 1024 * 1024 * 1024
 
 DEFAULTS = {
@@ -190,7 +190,7 @@ def _sqlite_snapshot(target: Path):
 
 def _persistent_files():
     excluded_roots = {BACKUP_DIR.resolve()}
-    excluded_files = {db.DB_PATH.resolve(), CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve(), (db.DATA_DIR/".update_portainer_webhook").resolve()}
+    excluded_files = {db.DB_PATH.resolve(), CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}
     for path in db.DATA_DIR.rglob("*"):
         if not path.is_file():
             continue
@@ -207,16 +207,16 @@ def create_backup(label=None, keep_local=True):
     filename = _backup_filename(label)
     final_path = BACKUP_DIR / filename
     tmp_zip = BACKUP_DIR / (filename + ".partial")
-    with tempfile.TemporaryDirectory(prefix="ocpp-backup-") as td:
+    with tempfile.TemporaryDirectory(prefix="voltcore-community-backup-") as td:
         snapshot = Path(td) / "ocpp.sqlite3"
         _sqlite_snapshot(snapshot)
         manifest = {
             "format": 1,
-            "product": db.branding_settings().get("product_name") or "VoltCore",
+            "product": db.branding_settings().get("product_name") or "VoltCore Community",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "database": "database/ocpp.sqlite3",
             "data_root": "data/",
-            "excluded": ["backups/", ".backup_external_password", ".smtp_password", ".update_github_token", ".update_portainer_webhook"],
+            "excluded": ["backups/", ".backup_external_password", ".smtp_password", ".update_github_token"],
         }
         with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             zf.write(snapshot, "database/ocpp.sqlite3")
@@ -592,7 +592,7 @@ def restore_backup(path: Path):
                 if not item.is_file(): continue
                 rel=item.relative_to(data_stage)
                 target=db.DATA_DIR/rel
-                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve(), (db.DATA_DIR/".update_portainer_webhook").resolve()}:
+                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}:
                     continue
                 target.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(item,target)

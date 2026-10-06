@@ -82,6 +82,8 @@ Planned behaviour:
 
 Public Community releases are designed to be discoverable **without requiring every installation to store its own GitHub access token**. 🔓🐙
 
+> 🧩 **Important:** GitHub Releases are the fixed update source for the Community Edition. The actual installation method intentionally stays deployment-neutral. Docker, Portainer or other deployment variants may provide their own installer later — **VoltCore Community itself is not tied to Portainer.**
+
 ## 🌍 Languages
 
 VoltCore Community is **multilingual by design**. 🌐✨
