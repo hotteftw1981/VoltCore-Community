@@ -2,8 +2,6 @@ import logging
 import asyncio
 import csv
 import io
-import base64
-import binascii
 import os
 import json
 import re
@@ -29,7 +27,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import HRFlowable, Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from PIL import Image as PILImage
 import qrcode
 
 from . import db
@@ -50,15 +47,6 @@ MEDIA_DIR = Path(os.getenv("DATA_DIR", "/data")) / "vehicle_images"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BRANDING_DIR = Path(os.getenv("DATA_DIR", "/data")) / "branding"
 BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_SIGNATURE_DIR = Path(os.getenv("DATA_DIR", "/data")) / "access_request_signatures"
-ACCESS_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_TERMS_VERSION = "2026-10-04"
-ACCESS_TERMS = [
-    "Verwendung des Ladechips: Der persönliche Ladechip darf nur vom rechtmäßigen Inhaber für das vorher bekanntgegebene Fahrzeug verwendet werden. Das Laden von Fremdfahrzeugen ist nicht gestattet.",
-    "Verantwortlichkeit: Der Inhaber ist für die sichere Verwahrung und Nutzung des Chips verantwortlich. Verlust, Diebstahl oder Missbrauch müssen umgehend gemeldet werden.",
-    "Haftungsausschluss: Der Anbieter übernimmt keine Haftung für Schäden durch unsachgemäße Nutzung der Ladestation, technische Probleme oder Stromausfälle, es sei denn, sie beruhen auf Vorsatz oder grober Fahrlässigkeit des Anbieters.",
-    "Gültigkeit: Die Berechtigung kann bei Missbrauch, Wegfall der Voraussetzungen oder aus organisatorischen Gründen gesperrt bzw. widerrufen werden.",
-]
 MAX_VEHICLE_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
@@ -213,10 +201,6 @@ TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "voltcore_community_portal"
-PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
-PORTAL_PIN_ITERATIONS = 180000
-PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
 PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/manifest.webmanifest", "/service-worker.js"}
@@ -256,25 +240,6 @@ def _password_needs_rehash(encoded: str) -> bool:
 _DUMMY_PASSWORD_SALT = bytes.fromhex("a93e62ad45fb76540fd0b944732b18bc")
 _DUMMY_PASSWORD_DIGEST = hashlib.pbkdf2_hmac("sha256", b"invalid-password", _DUMMY_PASSWORD_SALT, PBKDF2_ITERATIONS).hex()
 _DUMMY_PASSWORD_HASH = f"pbkdf2_sha256${PBKDF2_ITERATIONS}${_DUMMY_PASSWORD_SALT.hex()}${_DUMMY_PASSWORD_DIGEST}"
-
-
-def _portal_pin_hash(pin: str) -> str:
-    pin=str(pin or "").strip()
-    if len(pin) != 6 or not pin.isdigit():
-        raise ValueError("Der Portal-PIN muss genau 6 Ziffern haben.")
-    salt=secrets.token_bytes(16)
-    digest=hashlib.pbkdf2_hmac("sha256",pin.encode("utf-8"),salt,PORTAL_PIN_ITERATIONS)
-    return f"pbkdf2_sha256${PORTAL_PIN_ITERATIONS}${salt.hex()}${digest.hex()}"
-
-
-def _portal_pin_ok(pin: str, encoded: str) -> bool:
-    try:
-        scheme,iterations,salt_hex,digest_hex=encoded.split("$",3)
-        if scheme != "pbkdf2_sha256": return False
-        actual=hashlib.pbkdf2_hmac("sha256",str(pin).encode("utf-8"),bytes.fromhex(salt_hex),int(iterations)).hex()
-        return hmac.compare_digest(actual,digest_hex)
-    except Exception:
-        return False
 
 
 def _session_hash(token: str) -> str:
@@ -331,7 +296,7 @@ def _activity_descriptor(method: str, path: str):
     verb={"POST":"ausgeführt","PUT":"geändert","PATCH":"geändert","DELETE":"gelöscht"}.get(method,"ausgeführt")
     if path.startswith("/api/system-users"):
         return f"Systembenutzer {verb}", "Systembenutzer", path
-    if path.startswith("/api/users") or path.startswith("/api/rfid") or path.startswith("/api/portal-admin"):
+    if path.startswith("/api/users") or path.startswith("/api/rfid"):
         return f"Ladebenutzer/RFID {verb}", "Ladebenutzer", path
     if path.startswith("/api/remote-control/"):
         return f"OCPP-Fernsteuerung {verb}", "Remote-Steuerung", path
@@ -462,7 +427,7 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; object-src 'none'; frame-src 'none'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         if _request_is_https(request):
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-        if request.url.path in {"/login","/setup","/security"} or request.url.path.startswith("/api/") or request.url.path.startswith("/public/ladeguthaben") or request.url.path.startswith("/public/access-request") or not _is_public_path(request.url.path):
+        if request.url.path in {"/login","/setup","/security"} or request.url.path.startswith("/api/") or not _is_public_path(request.url.path):
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Pragma", "no-cache")
             response.headers.setdefault("Expires", "0")
@@ -613,59 +578,6 @@ async def logout(request: Request):
     response=RedirectResponse(url="/login?reason=logout", status_code=303)
     response.delete_cookie(SESSION_COOKIE,path="/")
     return response
-
-
-def _portal_request_user(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    return db.portal_user_for_session(_session_hash(token)) if token else None
-
-
-def _portal_client_hash(request: Request):
-    host=(request.client.host if request.client else "unknown") or "unknown"
-    return hashlib.sha256(host.encode("utf-8")).hexdigest()
-
-
-def _generate_unique_portal_pin():
-    records=db.portal_pin_records(include_disabled=True)
-    for _ in range(100):
-        pin=f"{secrets.randbelow(1000000):06d}"
-        if not any(_portal_pin_ok(pin,r.get("portal_pin_hash") or "") for r in records):
-            return pin
-    raise RuntimeError("Es konnte keine eindeutige Portal-PIN erzeugt werden.")
-
-
-def _normalize_signature_png(data: bytes) -> bytes:
-    try:
-        with PILImage.open(io.BytesIO(data)) as source:
-            image=source.convert("RGBA")
-            alpha=image.getchannel("A")
-            normalized=PILImage.new("RGBA",image.size,(17,24,39,0))
-            normalized.putalpha(alpha)
-            out=io.BytesIO(); normalized.save(out,format="PNG",optimize=True)
-            return out.getvalue()
-    except Exception as exc:
-        raise ValueError("Die digitale Unterschrift ist ungültig.") from exc
-
-
-def _save_access_signature(data_url: str, request_id_hint: str = "new"):
-    raw=str(data_url or "")
-    prefix="data:image/png;base64,"
-    if not raw.startswith(prefix):
-        raise ValueError("Bitte unterschreiben Sie den Antrag im Signaturfeld.")
-    try:
-        data=base64.b64decode(raw[len(prefix):],validate=True)
-    except (ValueError,binascii.Error):
-        raise ValueError("Die digitale Unterschrift ist ungültig.")
-    if len(data)<100 or len(data)>300*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Die digitale Unterschrift ist ungültig oder zu groß.")
-    data=_normalize_signature_png(data)
-    name=f"signature-{request_id_hint}-{secrets.token_hex(12)}.png"
-    target=ACCESS_SIGNATURE_DIR/name
-    target.write_bytes(data)
-    try: os.chmod(target,0o600)
-    except OSError: pass
-    return name
-
 
 
 @app.get("/system-users", response_class=HTMLResponse)
@@ -1249,16 +1161,6 @@ def _ocpp_transport_status():
     return {"level":"neutral","label":"WS / Proxy","detail":"Direktes WSS deaktiviert · TLS kann am Reverse Proxy terminiert werden","affects_overall":False}
 
 
-def _fleet_integration_status():
-    enabled=bool(str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip())
-    return {
-        "level":"ok" if enabled else "neutral",
-        "label":"Bereit" if enabled else "Deaktiviert",
-        "detail":"Read-only Fleet API v1 mit Bearer-Token aktiv" if enabled else "Vorbereitete Fuhrpark-Schnittstelle · kein Token gesetzt",
-        "affects_overall":False,
-    }
-
-
 def _system_status_payload(auth=None):
     cps=db.list_charge_points()
     total=len(cps)
@@ -1278,7 +1180,6 @@ def _system_status_payload(auth=None):
         ocpp={"level":"bad","label":f"{online}/{total} online","detail":operational["detail"]}
 
     mail=mailer.settings()
-    registration=db.registration_settings()
     configured=bool(mail.get("host") and mail.get("from_email") and (not mail.get("username") or mail.get("password_configured")))
     last_test=mail.get("last_test_at")
     last_test_error=mail.get("last_test_error")
@@ -1288,8 +1189,6 @@ def _system_status_payload(auth=None):
         mail_status={"level":"ok","label":"Aktiv","detail":"SMTP konfiguriert"+(" · zuletzt getestet "+_local_text(last_test,"%d.%m. %H:%M") if last_test else "")}
     elif mail.get("enabled"):
         mail_status={"level":"bad","label":"Unvollständig","detail":"SMTP-Host oder Absenderadresse fehlt"}
-    elif registration.get("enabled"):
-        mail_status={"level":"warn","label":"Deaktiviert","detail":"Online-Registrierung benötigt den E-Mail-Versand"}
     else:
         mail_status={"level":"neutral","label":"Deaktiviert","detail":"Regulärer E-Mail-Versand ist ausgeschaltet"}
 
@@ -1297,11 +1196,10 @@ def _system_status_payload(auth=None):
     services=[
         {"key":"backend","name":"Backend","level":"ok","label":"Online","detail":f"Version {APP_VERSION}","affects_overall":True},
         {"key":"ocpp","name":"OCPP","affects_overall":total>0,**ocpp},
-        {"key":"mail","name":"E-Mail / SMTP","affects_overall":bool(registration.get("enabled")),**mail_status},
+        {"key":"mail","name":"E-Mail / SMTP","affects_overall":False,**mail_status},
         {"key":"backup","name":"Backup","affects_overall":bool(backup_status.get("scheduled")),**backup_status},
         {"key":"pwa","name":"PWA","level":"ok","label":"Bereit","detail":"Installierbare Web-App · Push-Benachrichtigungen verfügbar","affects_overall":False},
         {"key":"ocpp_transport","name":"OCPP-Transport",**_ocpp_transport_status()},
-        {"key":"fleet_integration","name":"Fuhrpark-API",**_fleet_integration_status()},
     ]
     if auth and auth.get("role")=="admin":
         sec=_security_dashboard_summary()
@@ -2210,45 +2108,6 @@ async def set_transaction_vehicle(transaction_id: int, payload: dict):
     return {"ok": True, "transaction": db.get_transaction(transaction_id)}
 
 
-def _require_fleet_integration(request: Request):
-    expected=str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip()
-    if not expected:
-        raise HTTPException(503,"Fuhrpark-Schnittstelle ist deaktiviert")
-    auth=str(request.headers.get("authorization") or "")
-    supplied=auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied or not secrets.compare_digest(supplied,expected):
-        try:
-            db.add_security_event("Fleet API authentication failed",severity="warning",category="fleet_api",remote=_client_text(request),success=False,detail=request.url.path)
-        except Exception:
-            pass
-        raise HTTPException(401,"Ungültiger Fuhrpark-Integrationstoken",headers={"WWW-Authenticate":"Bearer"})
-    return True
-
-
-def _fleet_no_store(response: Response):
-    response.headers["Cache-Control"]="no-store"
-    response.headers["Pragma"]="no-cache"
-    response.headers["X-Content-Type-Options"]="nosniff"
-
-
-@app.get("/api/integrations/fleet/v1/health")
-async def fleet_integration_health(request: Request, response: Response):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    return {"ok":True,"api":"fleet-v1","backend_version":APP_VERSION,"mode":"read-only"}
-
-
-@app.get("/api/integrations/fleet/v1/sessions")
-async def fleet_integration_sessions(request: Request, response: Response, since: str | None = None, limit: int = 200):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    try:
-        rows=db.fleet_integration_sessions(since=since,limit=limit)
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    return {"api":"fleet-v1","count":len(rows),"sessions":rows}
-
-
 @app.get("/api/vehicles")
 async def api_vehicles():
     vehicles = db.list_vehicles()
@@ -2452,8 +2311,6 @@ async def create_user(payload: UserPayload):
     except ValueError as exc:
         raise HTTPException(400,str(exc))
     user=db.get_user(uid) or {}
-    user.pop("portal_pin_hash",None)
-    user["portal_pin_set"]=bool(user.get("portal_pin_set_at"))
     return {"ok":True,"user":user}
 
 
@@ -2500,8 +2357,6 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
             target=f"{user.get('name') or 'Benutzer'} · #{user_id}",
             details=f"{before_text} → {after_text}"
         )
-    user.pop("portal_pin_hash",None)
-    user["portal_pin_set"]=bool(user.get("portal_pin_set_at"))
     return {"ok":True,"user":user}
 
 
@@ -2611,47 +2466,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     )
     return {"ok":True,"mode":"purged","removed":removed}
 
-
-class PortalPinPayload(BaseModel):
-    pin: str | None = None
-    enabled: bool = True
-    send_email: bool = False
-
-@app.get("/api/portal-admin/users/{user_id}")
-async def portal_admin_user(user_id:int):
-    u=db.get_user(user_id)
-    if not u: raise HTTPException(404,"Benutzer nicht gefunden")
-    return {"id":u["id"],"name":u["name"],"portal_enabled":bool(u.get("portal_enabled")),"portal_pin_set":bool(u.get("portal_pin_set_at")),"portal_pin_set_at":u.get("portal_pin_set_at"),"portal_last_login_at":u.get("portal_last_login_at"),"achievements":db.achievements_for_user(user_id)}
-
-@app.post("/api/portal-admin/users/{user_id}/pin")
-async def portal_admin_set_pin(user_id:int,payload:PortalPinPayload,request:Request):
-    user=db.get_user(user_id)
-    if not user: raise HTTPException(404,"Benutzer nicht gefunden")
-    if payload.send_email and not str(user.get("email") or "").strip():
-        raise HTTPException(400,"Für diesen Ladebenutzer ist keine E-Mail-Adresse hinterlegt.")
-    if payload.send_email and not mailer.settings(False).get("enabled"):
-        raise HTTPException(409,"Der E-Mail-Versand ist noch nicht aktiviert.")
-    pin=str(payload.pin or "").strip() or f"{secrets.randbelow(1000000):06d}"
-    if len(pin)!=6 or not pin.isdigit(): raise HTTPException(400,"PIN muss genau 6 Ziffern enthalten")
-    for r in db.portal_pin_records(include_disabled=True):
-        if int(r["id"])!=user_id and _portal_pin_ok(pin,r.get("portal_pin_hash") or ""):
-            raise HTTPException(409,"Dieser PIN wird bereits verwendet")
-    db.set_user_portal_pin(user_id,_portal_pin_hash(pin),payload.enabled)
-    mail_sent=False; mail_error=None
-    if payload.send_email:
-        base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-        try:
-            await asyncio.to_thread(mailer.send_template,"pin_changed",user["email"],{"name":user["name"],"pin":pin},base)
-            mail_sent=True
-        except Exception as exc:
-            mail_error=f"{type(exc).__name__}: {exc}"
-            logging.exception("PIN mail failed for user %s",user_id)
-    return {"ok":True,"generated_pin":pin if not payload.pin else None,"portal_enabled":payload.enabled,"mail_sent":mail_sent,"mail_error":mail_error}
-
-@app.post("/api/portal-admin/users/{user_id}/enabled")
-async def portal_admin_enabled(user_id:int,payload:dict):
-    if not db.set_user_portal_enabled(user_id,bool(payload.get("enabled"))): raise HTTPException(404,"Benutzer nicht gefunden")
-    return {"ok":True}
 
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
