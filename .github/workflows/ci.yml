@@ -73,6 +73,31 @@ jobs:
           test "$location" = "/setup"
           echo "Fresh installation correctly redirects to /setup."
 
+      - name: Verify complete first-run wizard
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f /tmp/voltcore-cookies.txt /tmp/setup.headers /tmp/first-run.headers
+
+          setup_code="$(curl --silent --output /tmp/setup.body --dump-header /tmp/setup.headers --cookie-jar /tmp/voltcore-cookies.txt --write-out '%{http_code}'             --data-urlencode 'username=community-admin'             --data-urlencode 'display_name=Community Admin'             --data-urlencode 'password=CommunityTest!2026'             --data-urlencode 'password_repeat=CommunityTest!2026'             http://127.0.0.1:18010/setup)"
+          test "$setup_code" = "303"
+          setup_location="$(tr -d '\r' < /tmp/setup.headers | awk 'tolower($1)=="location:" {print $2}')"
+          test "$setup_location" = "/first-run"
+
+          wizard_code="$(curl --silent --output /tmp/first-run.html --cookie /tmp/voltcore-cookies.txt --write-out '%{http_code}' http://127.0.0.1:18010/first-run)"
+          test "$wizard_code" = "200"
+          grep -q "VoltCore Community einrichten" /tmp/first-run.html
+
+          finish_code="$(curl --silent --output /tmp/finish.body --dump-header /tmp/first-run.headers --cookie /tmp/voltcore-cookies.txt --cookie-jar /tmp/voltcore-cookies.txt --write-out '%{http_code}'             --data-urlencode 'organization_name=Community Test'             --data-urlencode 'display_name=VoltCore Community Test'             --data-urlencode 'tariff_name=Standardtarif'             --data-urlencode 'default_monthly_kwh=0'             http://127.0.0.1:18010/first-run)"
+          test "$finish_code" = "303"
+          finish_location="$(tr -d '\r' < /tmp/first-run.headers | awk 'tolower($1)=="location:" {print $2}')"
+          test "$finish_location" = "/"
+
+          dashboard_code="$(curl --silent --output /tmp/dashboard.html --cookie /tmp/voltcore-cookies.txt --write-out '%{http_code}' http://127.0.0.1:18010/)"
+          test "$dashboard_code" = "200"
+          grep -q "VoltCore Community Test" /tmp/dashboard.html
+          echo "Complete Community first-run flow passed."
+
       - name: Container logs on failure
         if: failure()
         run: docker logs voltcore-community-ci || true
