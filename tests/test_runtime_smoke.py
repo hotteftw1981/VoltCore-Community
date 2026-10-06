@@ -31,10 +31,9 @@ class CommunityRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(branding["product_name"], "VoltCore Community")
         self.assertEqual(branding["display_name"], "VoltCore Community")
 
-    def test_registration_is_opt_in_and_has_no_weekly_hours(self):
-        cfg = db.registration_settings()
-        self.assertFalse(cfg["enabled"])
-        self.assertNotIn("weekly_hours", {field["id"] for field in cfg["fields"]})
+    def test_public_surface_is_backend_only(self):
+        self.assertNotIn("/public/ladeguthaben", main.PUBLIC_PATHS)
+        self.assertNotIn("/public/access-request", main.PUBLIC_PATHS)
 
 
 if __name__ == "__main__":
