@@ -12,14 +12,73 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: pip
+
       - name: Install dependencies
         run: pip install -r requirements.txt
+
       - name: Compile
         run: python -m compileall -q app
+
       - name: Community tests
         run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Build Community container
+        run: docker build --pull -t voltcore-community-ci:${{ github.sha }} .
+
+      - name: Start Community container
+        run: |
+          docker run -d             --name voltcore-community-ci             -p 18010:8000             -p 19010:9000             -v voltcore-community-ci-data:/data             voltcore-community-ci:${{ github.sha }}
+
+      - name: Wait for health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent --show-error http://127.0.0.1:18010/health > /tmp/voltcore-health.json; then
+              cat /tmp/voltcore-health.json
+              python - <<'PY'
+          import json
+          from pathlib import Path
+          payload=json.loads(Path("/tmp/voltcore-health.json").read_text())
+          assert payload.get("status")=="ok", payload
+          assert payload.get("version"), payload
+          print("VoltCore Community container is healthy:", payload)
+          PY
+              exit 0
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -qx voltcore-community-ci; then
+              echo "Container stopped before becoming healthy."
+              docker logs voltcore-community-ci || true
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Timed out waiting for /health."
+          docker logs voltcore-community-ci || true
+          exit 1
+
+      - name: Verify fresh first-run state
+        shell: bash
+        run: |
+          set -euo pipefail
+          code="$(curl --silent --output /tmp/root.html --write-out '%{http_code}' http://127.0.0.1:18010/)"
+          test "$code" = "303" || test "$code" = "307"
+          location="$(curl --silent --head http://127.0.0.1:18010/ | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}')"
+          test "$location" = "/setup"
+          echo "Fresh installation correctly redirects to /setup."
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs voltcore-community-ci || true
+
+      - name: Cleanup container
+        if: always()
+        run: |
+          docker rm -f voltcore-community-ci >/dev/null 2>&1 || true
+          docker volume rm voltcore-community-ci-data >/dev/null 2>&1 || true
