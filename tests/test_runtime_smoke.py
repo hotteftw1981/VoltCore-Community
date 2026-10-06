@@ -31,10 +31,12 @@ class CommunityRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(branding["product_name"], "VoltCore Community")
         self.assertEqual(branding["display_name"], "VoltCore Community")
 
-    def test_registration_is_opt_in_and_has_no_weekly_hours(self):
-        cfg = db.registration_settings()
-        self.assertFalse(cfg["enabled"])
-        self.assertNotIn("weekly_hours", {field["id"] for field in cfg["fields"]})
+    def test_backend_only_runtime_has_no_public_registration(self):
+        self.assertFalse(hasattr(db, "registration_settings"))
+        paths = {getattr(route, "path", "") for route in main.app.routes}
+        self.assertNotIn("/public/access-request", paths)
+        self.assertNotIn("/registration-onboarding", paths)
+        self.assertNotIn("/registration-requests", paths)
 
 
 if __name__ == "__main__":
