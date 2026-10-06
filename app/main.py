@@ -538,11 +538,33 @@ async def first_run_submit(request: Request):
             raise ValueError("Das Standard-Ladeguthaben ist ungültig.")
         db.set_setting("community_free_credit_enabled","1" if credit_enabled else "0")
         db.set_setting("community_default_monthly_kwh",str(round(default_kwh,3) if credit_enabled else 0))
+
+        invite_email=str(form.get("invite_email") or "").strip()
+        if invite_email:
+            if not smtp_enabled:
+                raise ValueError("Für eine Benutzereinladung muss der E-Mail-Versand aktiviert sein.")
+            invitation=invites.create_invite(
+                invite_email,
+                str(form.get("invite_display_name") or "").strip() or None,
+                str(form.get("invite_role") or "user"),
+                created_by=auth.get("id"),
+            )
+            mailer.send_template(
+                "user_invite",
+                [invitation["email"]],
+                {
+                    "name": invitation.get("display_name"),
+                    "invite_url": "/invite?token="+invitation["token"],
+                    "detail": "Die Einladung ist 72 Stunden gültig. Legen Sie über den Link Ihren Benutzernamen und Ihr Passwort fest.",
+                },
+                str(request.base_url).rstrip("/"),
+            )
+
         db.set_setting("community_first_run_completed","1")
         db.add_activity(
             system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
             action="Community-Ersteinrichtung abgeschlossen",category="System",target=display_name,
-            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatsguthaben: {'aktiv' if credit_enabled else 'aus'}",
+            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatsguthaben: {'aktiv' if credit_enabled else 'aus'} · Einladung: {'gesendet' if invite_email else 'übersprungen'}",
         )
     except (ValueError,TypeError) as exc:
         return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error=str(exc))
