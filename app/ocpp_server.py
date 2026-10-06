@@ -21,22 +21,6 @@ from .security import connection_security_decision, transport_is_secure, normali
 log = logging.getLogger("voltcore.community.ocpp")
 
 ACTIVE_CONNECTIONS = {}
-SMART_CHARGING_TRIGGER = None
-
-def register_smart_charging_trigger(callback):
-    """Register a lightweight callback used to wake the load-management worker."""
-    global SMART_CHARGING_TRIGGER
-    SMART_CHARGING_TRIGGER = callback
-
-def _trigger_smart_charging(reason):
-    callback=SMART_CHARGING_TRIGGER
-    if callback is None:
-        return
-    try:
-        callback(reason)
-    except Exception:
-        log.exception("Smart Charging event trigger failed")
-
 LOCAL_LIST_LOCKS = {}
 
 def _local_list_lock(cp_id):
@@ -277,10 +261,6 @@ CAPABILITY_CONFIG_KEYS = (
     "ClockAlignedDataInterval",
     "MeterValuesSampledData",
     "MeterValuesAlignedData",
-    "ChargeProfileMaxStackLevel",
-    "ChargingScheduleAllowedChargingRateUnit",
-    "ChargingScheduleMaxPeriods",
-    "MaxChargingProfilesInstalled",
 )
 
 
@@ -348,9 +328,7 @@ async def probe_capabilities(cp_id):
     def advertised(name):
         return name.casefold() in profile_set
 
-    smart_keys={"ChargeProfileMaxStackLevel","ChargingScheduleAllowedChargingRateUnit","ChargingScheduleMaxPeriods","MaxChargingProfilesInstalled"}
     local_keys={"LocalAuthListEnabled","LocalAuthListMaxLength","LocalAuthorizeOffline"}
-    smart=True if advertised("SmartCharging") or bool(recognized & smart_keys) else (False if profile_text else None)
     local_auth=False if local_list_version==-1 else (True if advertised("LocalAuthListManagement") or local_list_version is not None or bool(recognized & local_keys) else (False if profile_text else None))
 
     capabilities={
@@ -359,11 +337,7 @@ async def probe_capabilities(cp_id):
             "detail":"Remote Start/Stop, Reset, Unlock und Availability werden über OCPP Core gesendet; die endgültige Unterstützung bestätigt erst die Geräteantwort.",
             "evidence":"Aktive OCPP-1.6J-Verbindung",
         },
-        "smart_charging":_capability_state(smart,"Charging Profiles / Lastmanagement", "SupportedFeatureProfiles oder Charging-Profile-Konfigurationsschlüssel"),
         "local_auth_list":_capability_state(local_auth,"Lokale RFID-Liste für Offline-Autorisierung",f"GetLocalListVersion: {local_list_probe}"),
-        "firmware_management":_capability_state(True if advertised("FirmwareManagement") else False if profile_text else None,"Firmware-Management über OCPP","SupportedFeatureProfiles"),
-        "reservation":_capability_state(True if advertised("Reservation") else False if profile_text else None,"Reservierungen über OCPP","SupportedFeatureProfiles"),
-        "remote_trigger":_capability_state(True if advertised("RemoteTrigger") else False if profile_text else None,"TriggerMessage / Remote Trigger","SupportedFeatureProfiles"),
     }
     elapsed_ms=max(0,int((datetime.now(timezone.utc)-started).total_seconds()*1000))
     snapshot=db.save_ocpp_capability_snapshot(
@@ -443,83 +417,6 @@ async def remote_command(cp_id, command, **kwargs):
         if reset_type not in {"Soft","Hard"}: raise ValueError("Ungültiger Reset-Typ")
         request=call.Reset(type=reset_type)
         event_type="Reset"
-    elif command == "set_charging_profile":
-        connector=kwargs.get("connector_id")
-        limit_kw=kwargs.get("limit_kw")
-        if connector in (None,""): raise ValueError("Connector fehlt")
-        try: limit_kw=float(limit_kw)
-        except (TypeError,ValueError): raise ValueError("Leistungslimit ist ungültig")
-        if limit_kw < 0: raise ValueError("Leistungslimit darf nicht negativ sein")
-        profile_id=int(kwargs.get("profile_id") or (100000 + int(connector)))
-        transaction_id=kwargs.get("transaction_id")
-        tx_id=None
-        if transaction_id not in (None,""):
-            try: tx_id=int(transaction_id)
-            except (TypeError,ValueError): tx_id=None
-        profile={
-            "chargingProfileId":profile_id,
-            "stackLevel":100,
-            "chargingProfilePurpose":"TxProfile" if tx_id is not None else "TxDefaultProfile",
-            "chargingProfileKind":"Absolute",
-            "chargingSchedule":{
-                "startSchedule":datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z"),
-                "chargingRateUnit":"W",
-                "chargingSchedulePeriod":[{"startPeriod":0,"limit":round(limit_kw*1000,1)}],
-            },
-        }
-        if tx_id is not None: profile["transactionId"]=tx_id
-        request=call.SetChargingProfile(connector_id=int(connector),cs_charging_profiles=profile)
-        event_type="SetChargingProfile"
-    elif command == "clear_charging_profile":
-        profile_id=kwargs.get("profile_id")
-        if profile_id in (None,""): raise ValueError("Profil-ID fehlt")
-        request=call.ClearChargingProfile(id=int(profile_id))
-        event_type="ClearChargingProfile"
-    elif command == "change_configuration":
-        key=str(kwargs.get("key") or "").strip()
-        value=str(kwargs.get("value") if kwargs.get("value") is not None else "").strip()
-        if not key: raise ValueError("Konfigurationsschlüssel fehlt")
-        if len(key)>120 or len(value)>1000: raise ValueError("Konfigurationswert ist zu lang")
-        request=call.ChangeConfiguration(key=key,value=value)
-        event_type="ChangeConfiguration"
-    elif command == "trigger_message":
-        requested=str(kwargs.get("requested_message") or "").strip()
-        allowed={"BootNotification","DiagnosticsStatusNotification","FirmwareStatusNotification","Heartbeat","MeterValues","StatusNotification"}
-        if requested not in allowed: raise ValueError("Nicht unterstützter TriggerMessage-Typ")
-        connector=kwargs.get("connector_id")
-        request=call.TriggerMessage(requested_message=requested,connector_id=int(connector) if connector not in (None,"",0,"0") else None)
-        event_type="TriggerMessage"
-    elif command == "get_diagnostics":
-        location=str(kwargs.get("location") or "").strip()
-        if not location: raise ValueError("Upload-Ziel für Diagnose fehlt")
-        request=call.GetDiagnostics(
-            location=location,
-            retries=int(kwargs.get("retries") or 0) or None,
-            retry_interval=int(kwargs.get("retry_interval") or 0) or None,
-        )
-        event_type="GetDiagnostics"
-    elif command == "update_firmware":
-        location=str(kwargs.get("location") or "").strip()
-        retrieve_date=str(kwargs.get("retrieve_date") or "").strip()
-        if not location or not retrieve_date: raise ValueError("Firmware-URL und Abrufzeit fehlen")
-        request=call.UpdateFirmware(
-            location=location,retrieve_date=retrieve_date,
-            retries=int(kwargs.get("retries") or 0) or None,
-            retry_interval=int(kwargs.get("retry_interval") or 0) or None,
-        )
-        event_type="UpdateFirmware"
-    elif command == "reserve":
-        connector=kwargs.get("connector_id"); id_tag=str(kwargs.get("id_tag") or "").strip()
-        expiry=str(kwargs.get("expiry_date") or "").strip(); reservation_id=kwargs.get("reservation_id")
-        if connector in (None,"") or int(connector)<=0: raise ValueError("Connector fehlt")
-        if not id_tag or not expiry or reservation_id in (None,""): raise ValueError("Reservierungsdaten unvollständig")
-        request=call.ReserveNow(connector_id=int(connector),expiry_date=expiry,id_tag=id_tag,reservation_id=int(reservation_id))
-        event_type="ReserveNow"
-    elif command == "cancel_reservation":
-        reservation_id=kwargs.get("reservation_id")
-        if reservation_id in (None,""): raise ValueError("Reservierungs-ID fehlt")
-        request=call.CancelReservation(reservation_id=int(reservation_id))
-        event_type="CancelReservation"
     else:
         raise ValueError("Unbekannter Remote-Befehl")
     started_at=datetime.now(timezone.utc)
@@ -540,20 +437,10 @@ async def remote_command(cp_id, command, **kwargs):
             return {"command":command,"status":status,"accepted":False,"elapsed_ms":elapsed_ms,"learned_capability":learned}
         db.record_remote_capability_result(str(cp_id),command,outcome="error",status=type(exc).__name__,detail=str(exc),response_ms=elapsed_ms)
         raise
-    extra={}
-    if command=="get_diagnostics":
-        filename=str(getattr(response,"file_name",None) or "").strip()
-        status="Accepted"
-        accepted=True
-        if filename: extra["file_name"]=filename
-    elif command=="update_firmware":
-        status="Accepted"
-        accepted=True
-    else:
-        status=_response_status(response)
-        token=_status_token(status)
-        accepted=token in {"accepted","unlocked","scheduled","rebootrequired"}
-    db.add_event(str(cp_id),event_type,(detail+"; " if detail else "")+f"response={status}"+(f"; file={extra.get('file_name')}" if extra.get("file_name") else ""),direction="OUT")
+    status=_response_status(response)
+    token=_status_token(status)
+    accepted=token in {"accepted","unlocked","scheduled","rebootrequired"}
+    db.add_event(str(cp_id),event_type,(detail+"; " if detail else "")+f"response={status}",direction="OUT")
     elapsed_ms=max(0,int((datetime.now(timezone.utc)-started_at).total_seconds()*1000))
     token=_status_token(status)
     if token in {"notsupported","notimplemented"}:
@@ -563,7 +450,7 @@ async def remote_command(cp_id, command, **kwargs):
     else:
         outcome="rejected"
     learned=db.record_remote_capability_result(str(cp_id),command,outcome=outcome,status=status,detail=detail,response_ms=elapsed_ms)
-    return {"command":command,"status":status,"accepted":accepted,"elapsed_ms":elapsed_ms,"learned_capability":learned,**extra}
+    return {"command":command,"status":status,"accepted":accepted,"elapsed_ms":elapsed_ms,"learned_capability":learned}
 
 
 def _remote_host(remote):
@@ -997,7 +884,6 @@ class ChargePoint(OcppChargePoint):
                 transaction_id=occupancy_finished.get("transaction_id"),
             )
         if cid > 0 and status_text in {"Available","Preparing","Charging","SuspendedEV","SuspendedEVSE","Finishing","Unavailable","Faulted"}:
-            _trigger_smart_charging(f"Status {self.id} C{cid}: {status_text}")
         return call_result.StatusNotification()
 
     @on(Action.diagnostics_status_notification)
@@ -1005,8 +891,6 @@ class ChargePoint(OcppChargePoint):
         status_text=getattr(status,"value",None) or str(status)
         db.mark_message(self.id,"DiagnosticsStatusNotification")
         db.add_event(self.id,"DiagnosticsStatusNotification",f"status={status_text}")
-        terminal=status_text in {"Uploaded","UploadFailed"}
-        db.update_latest_service_operation(self.id,"diagnostics",status_text,f"Diagnosestatus: {status_text}",completed=terminal)
         return call_result.DiagnosticsStatusNotification()
 
     @on(Action.firmware_status_notification)
@@ -1014,21 +898,10 @@ class ChargePoint(OcppChargePoint):
         status_text=getattr(status,"value",None) or str(status)
         db.mark_message(self.id,"FirmwareStatusNotification")
         db.add_event(self.id,"FirmwareStatusNotification",f"status={status_text}")
-        terminal=status_text in {"Installed","InstallationFailed","DownloadFailed"}
-        db.update_latest_service_operation(self.id,"firmware",status_text,f"Firmwarestatus: {status_text}",completed=terminal)
         return call_result.FirmwareStatusNotification()
 
     @on(Action.authorize)
     async def on_authorize(self, id_tag, **kwargs):
-        # V0.9.7.20: during a 60-second self-service enrollment window the
-        # presented tag is captured for the portal instead of starting a charge.
-        # The user must confirm the candidate in the portal before it becomes an
-        # active RFID credential. This keeps prank/accidental scans reversible.
-        enrollment = db.capture_rfid_enrollment_candidate(self.id, id_tag)
-        if enrollment and enrollment.get("captured"):
-            db.mark_message(self.id, "Authorize")
-            db.add_event(self.id, "Authorize", f"id_tag={id_tag}; accepted=False; reason=RFID self-enrollment candidate; enrollment_session={enrollment.get('session_id')}")
-            return call_result.Authorize(id_tag_info={"status": "Invalid"})
         decision = db.authorization_decision(id_tag,self.id)
         accepted = bool(decision.get("accepted"))
         status = decision.get("ocpp_status") or ("Accepted" if accepted else "Invalid")
@@ -1042,14 +915,6 @@ class ChargePoint(OcppChargePoint):
 
     @on(Action.start_transaction)
     async def on_start_transaction(self, connector_id, id_tag, meter_start, timestamp, **kwargs):
-        # Some stations skip Authorize and present the RFID only with
-        # StartTransaction. Capture that path as well during enrollment, but do
-        # not create a charging transaction until the chip was confirmed.
-        enrollment = db.capture_rfid_enrollment_candidate(self.id, id_tag)
-        if enrollment and enrollment.get("captured"):
-            db.mark_message(self.id, "StartTransaction")
-            db.add_event(self.id, "StartTransaction", f"connector={connector_id}; id_tag={id_tag}; rejected=true; reason=RFID self-enrollment candidate; enrollment_session={enrollment.get('session_id')}")
-            return call_result.StartTransaction(transaction_id=0, id_tag_info={"status": "Invalid"})
         # Some stations may start a transaction without a preceding Authorize or
         # after a long delay. Re-check the monthly user budget here as well.
         decision = db.authorization_decision(id_tag,self.id)
@@ -1062,15 +927,10 @@ class ChargePoint(OcppChargePoint):
         except (TypeError, ValueError):
             start_meter_kwh = None
         tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
-        reservation_id=kwargs.get("reservation_id")
-        if reservation_id not in (None,""):
-            try: db.set_ocpp_reservation_status(int(reservation_id),"Used")
-            except (TypeError,ValueError): pass
         db.upsert_charge_point(self.id, transaction_id=tx)
         db.set_status_notification(self.id, int(connector_id or 0), "Charging")
         db.mark_message(self.id, "StartTransaction")
         db.add_event(self.id, "StartTransaction", f"connector={connector_id}; id_tag={id_tag}; meter_start={meter_start}", transaction_id=tx)
-        _trigger_smart_charging(f"Session gestartet: {self.id} C{int(connector_id or 0)}")
         return call_result.StartTransaction(transaction_id=tx, id_tag_info={"status": "Accepted"})
 
     @on(Action.stop_transaction)
@@ -1102,8 +962,7 @@ class ChargePoint(OcppChargePoint):
             user=(db.get_user_by_rfid(tx_before.get("id_tag")) or {}); user_id=user.get("id")
         if user_id is not None:
             db.refresh_local_list_for_user(int(user_id))
-            asyncio.create_task(sync_pending_local_lists(reason="Ladebudget nach Session aktualisiert"))
-        _trigger_smart_charging(f"Session beendet: {self.id}")
+            asyncio.create_task(sync_pending_local_lists(reason="Benutzer-/RFID-Status nach Session aktualisiert"))
         return call_result.StopTransaction(id_tag_info={"status": "Accepted"})
 
     @on(Action.meter_values)
@@ -1227,7 +1086,6 @@ async def on_connect(websocket, path):
         db.upsert_charge_point(cp_id, status="Pending", onboarded=0, ignored=0, connector_count=0)
     db.mark_message(cp_id, "Connected")
     db.add_event(cp_id, "Connected")
-    _trigger_smart_charging(f"Ladepunkt online: {cp_id}")
     cp = ChargePoint(cp_id, websocket)
     ACTIVE_CONNECTIONS[cp_id]["charge_point"] = cp
     db.ensure_local_list_state(cp_id)
@@ -1253,7 +1111,6 @@ async def on_connect(websocket, path):
         ACTIVE_CONNECTIONS.pop(cp_id, None)
         db.upsert_charge_point(cp_id, status="Offline", power_kw=0)
         db.add_event(cp_id, "Disconnected")
-        _trigger_smart_charging(f"Ladepunkt offline: {cp_id}")
         log.info("Charge point disconnected: %s", cp_id)
 
 
