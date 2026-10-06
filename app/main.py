@@ -1093,6 +1093,8 @@ async def registration_requests_page(request:Request):
 
 @app.get("/registration-requests/{request_id}", response_class=HTMLResponse)
 async def registration_request_detail_page(request:Request,request_id:int,result:str|None=None):
+    if (request.state.auth_user or {}).get("role")!="admin":
+        return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
     item=db.access_request_view(request_id)
     if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
     message={"approved":"Antrag genehmigt und Ladeportal-Zugang erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
@@ -1101,6 +1103,8 @@ async def registration_request_detail_page(request:Request,request_id:int,result
 
 @app.post("/registration-requests/{request_id}/decision")
 async def registration_request_decision(request:Request,request_id:int,action:str=Form(...),note:str=Form(""),monthly_kwh_limit:str=Form(""),monthly_limit_mode:str=Form("warn")):
+    if (request.state.auth_user or {}).get("role")!="admin":
+        raise HTTPException(403,"Administratorrechte erforderlich")
     item=db.get_access_request(request_id)
     if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
     auth=request.state.auth_user or {}
