@@ -271,9 +271,6 @@ def init_db():
                 vehicle TEXT,
                 monthly_kwh_limit REAL,
                 monthly_limit_mode TEXT NOT NULL DEFAULT 'warn',
-                gamification_enabled INTEGER NOT NULL DEFAULT 1,
-                gamification_seen_award_id INTEGER,
-                gamification_seen_level INTEGER,
                 weekly_hours REAL,
                 budget_source TEXT NOT NULL DEFAULT 'manual',
                 charge_access_mode TEXT NOT NULL DEFAULT 'all',
@@ -462,127 +459,6 @@ def init_db():
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS achievements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                icon TEXT,
-                metric TEXT NOT NULL DEFAULT 'manual',
-                threshold REAL,
-                hidden INTEGER NOT NULL DEFAULT 0,
-                system_secret INTEGER NOT NULL DEFAULT 0,
-                category TEXT NOT NULL DEFAULT 'Allgemein',
-                rarity TEXT NOT NULL DEFAULT 'common',
-                xp INTEGER NOT NULL DEFAULT 50,
-                tier_group TEXT,
-                tier_name TEXT,
-                tier_rank INTEGER NOT NULL DEFAULT 0,
-                seed_key TEXT,
-                leaderboard_enabled INTEGER NOT NULL DEFAULT 0,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS achievement_awards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                achievement_id INTEGER NOT NULL,
-                awarded_at TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'automatic',
-                UNIQUE(user_id, achievement_id)
-            );
-            CREATE TABLE IF NOT EXISTS gamification_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                metric TEXT NOT NULL DEFAULT 'energy_kwh',
-                starts_at TEXT NOT NULL,
-                ends_at TEXT NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                min_sessions INTEGER NOT NULL DEFAULT 0,
-                min_session_kwh REAL NOT NULL DEFAULT 0,
-                reward_bonus_kwh REAL NOT NULL DEFAULT 0,
-                reward_valid_days INTEGER,
-                reward_bonus_enabled INTEGER NOT NULL DEFAULT 0,
-                winner_badge_enabled INTEGER NOT NULL DEFAULT 0,
-                winner_badge_name TEXT,
-                winner_badge_icon TEXT,
-                winner_badge_description TEXT,
-                winner_achievement_id INTEGER,
-                finalized_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS gamification_event_rewards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                bonus_grant_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                granted_at TEXT NOT NULL,
-                UNIQUE(event_id,user_id)
-            );
-            CREATE TABLE IF NOT EXISTS gamification_event_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                rank INTEGER,
-                metric_value REAL,
-                qualified INTEGER NOT NULL DEFAULT 0,
-                sessions INTEGER NOT NULL DEFAULT 0,
-                energy_kwh REAL NOT NULL DEFAULT 0,
-                details_json TEXT,
-                captured_at TEXT NOT NULL,
-                UNIQUE(event_id,user_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_vouchers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                amount_kwh REAL NOT NULL,
-                redeem_until TEXT,
-                bonus_valid_days INTEGER NOT NULL DEFAULT 90,
-                max_redemptions INTEGER NOT NULL DEFAULT 1,
-                active INTEGER NOT NULL DEFAULT 1,
-                note TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS bonus_grants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                remaining_kwh REAL NOT NULL,
-                granted_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'admin',
-                note TEXT,
-                voucher_id INTEGER,
-                active INTEGER NOT NULL DEFAULT 1
-            );
-            CREATE TABLE IF NOT EXISTS bonus_usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                grant_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                transaction_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                used_at TEXT NOT NULL,
-                UNIQUE(grant_id, transaction_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_voucher_redemptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                voucher_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                grant_id INTEGER NOT NULL,
-                redeemed_at TEXT NOT NULL,
-                UNIQUE(voucher_id, user_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_transfers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_user_id INTEGER NOT NULL,
-                to_user_id INTEGER NOT NULL,
-                source_grant_id INTEGER NOT NULL,
-                target_grant_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                transferred_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS rfid_card_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 card_id INTEGER NOT NULL,
@@ -736,8 +612,6 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN monthly_kwh_limit REAL")
         if "monthly_limit_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN monthly_limit_mode TEXT NOT NULL DEFAULT 'warn'")
-        if "gamification_enabled" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 1")
         if "weekly_hours" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN weekly_hours REAL")
         if "budget_source" not in user_columns:
@@ -746,13 +620,6 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN image_path TEXT")
         if "charge_access_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN charge_access_mode TEXT NOT NULL DEFAULT 'all'")
-        user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-        for name, statement in {
-            "gamification_seen_award_id": "ALTER TABLE users ADD COLUMN gamification_seen_award_id INTEGER",
-            "gamification_seen_level": "ALTER TABLE users ADD COLUMN gamification_seen_level INTEGER",
-        }.items():
-            if name not in user_columns:
-                conn.execute(statement)
         rfid_columns = {r[1] for r in conn.execute("PRAGMA table_info(rfid_cards)").fetchall()}
         for name, statement in {
             "issued_at": "ALTER TABLE rfid_cards ADD COLUMN issued_at TEXT",
@@ -800,51 +667,22 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
         conn.execute("DROP TABLE IF EXISTS rfid_enrollment_sessions")
         conn.execute("DROP TABLE IF EXISTS rfid_replacement_requests")
+        for table_name in (
+            "gamification_event_rewards","gamification_event_results","bonus_usage",
+            "bonus_voucher_redemptions","bonus_transfers","bonus_grants","bonus_vouchers",
+            "achievement_awards","gamification_events","achievements",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.execute("DELETE FROM app_settings WHERE key IN ('portal_leaderboard_show_names','bonus_default_valid_days','bonus_transfer_after_days','bonus_transfer_enabled')")
+        legacy_user_columns={r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        for legacy_col in ("gamification_enabled","gamification_seen_award_id","gamification_seen_level"):
+            if legacy_col in legacy_user_columns:
+                try:
+                    conn.execute(f"ALTER TABLE users DROP COLUMN {legacy_col}")
+                except sqlite3.OperationalError:
+                    pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_events_card ON rfid_card_events(card_id,created_at)")
         conn.execute("UPDATE rfid_cards SET issued_at=COALESCE(issued_at,created_at) WHERE issued_at IS NULL")
-        achievement_columns = {r[1] for r in conn.execute("PRAGMA table_info(achievements)").fetchall()}
-        leaderboard_enabled_added = "leaderboard_enabled" not in achievement_columns
-        for name, statement in {
-            "system_secret": "ALTER TABLE achievements ADD COLUMN system_secret INTEGER NOT NULL DEFAULT 0",
-            "category": "ALTER TABLE achievements ADD COLUMN category TEXT NOT NULL DEFAULT 'Allgemein'",
-            "rarity": "ALTER TABLE achievements ADD COLUMN rarity TEXT NOT NULL DEFAULT 'common'",
-            "xp": "ALTER TABLE achievements ADD COLUMN xp INTEGER NOT NULL DEFAULT 50",
-            "tier_group": "ALTER TABLE achievements ADD COLUMN tier_group TEXT",
-            "tier_name": "ALTER TABLE achievements ADD COLUMN tier_name TEXT",
-            "tier_rank": "ALTER TABLE achievements ADD COLUMN tier_rank INTEGER NOT NULL DEFAULT 0",
-            "seed_key": "ALTER TABLE achievements ADD COLUMN seed_key TEXT",
-            "leaderboard_enabled": "ALTER TABLE achievements ADD COLUMN leaderboard_enabled INTEGER NOT NULL DEFAULT 0",
-        }.items():
-            if name not in achievement_columns:
-                conn.execute(statement)
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_achievements_seed_key ON achievements(seed_key) WHERE seed_key IS NOT NULL")
-        if leaderboard_enabled_added:
-            conn.execute("""UPDATE achievements SET leaderboard_enabled=1 WHERE seed_key IN (
-                'energy-100','sessions-10','early-5','evening-10','night-5','weekend-10',
-                'active-days-30','months-3','week-streak-4','cp-2','vehicles-2','single-30',
-                'peak-11','max-month-energy-500','max-month-sessions-40','charging-hours-100',
-                'long-10','quick-20'
-            ) AND COALESCE(system_secret,0)=0""")
-        gamification_event_columns = {r[1] for r in conn.execute("PRAGMA table_info(gamification_events)").fetchall()}
-        reward_enabled_added = "reward_bonus_enabled" not in gamification_event_columns
-        for name, statement in {
-            "min_sessions": "ALTER TABLE gamification_events ADD COLUMN min_sessions INTEGER NOT NULL DEFAULT 0",
-            "min_session_kwh": "ALTER TABLE gamification_events ADD COLUMN min_session_kwh REAL NOT NULL DEFAULT 0",
-            "reward_bonus_kwh": "ALTER TABLE gamification_events ADD COLUMN reward_bonus_kwh REAL NOT NULL DEFAULT 0",
-            "reward_valid_days": "ALTER TABLE gamification_events ADD COLUMN reward_valid_days INTEGER",
-            "reward_bonus_enabled": "ALTER TABLE gamification_events ADD COLUMN reward_bonus_enabled INTEGER NOT NULL DEFAULT 0",
-            "winner_badge_enabled": "ALTER TABLE gamification_events ADD COLUMN winner_badge_enabled INTEGER NOT NULL DEFAULT 0",
-            "winner_badge_name": "ALTER TABLE gamification_events ADD COLUMN winner_badge_name TEXT",
-            "winner_badge_icon": "ALTER TABLE gamification_events ADD COLUMN winner_badge_icon TEXT",
-            "winner_badge_description": "ALTER TABLE gamification_events ADD COLUMN winner_badge_description TEXT",
-            "winner_achievement_id": "ALTER TABLE gamification_events ADD COLUMN winner_achievement_id INTEGER",
-            "finalized_at": "ALTER TABLE gamification_events ADD COLUMN finalized_at TEXT",
-        }.items():
-            if name not in gamification_event_columns:
-                conn.execute(statement)
-        if reward_enabled_added:
-            # Preserve all V0.9.5 events that already had a configured kWh reward.
-            conn.execute("UPDATE gamification_events SET reward_bonus_enabled=1 WHERE COALESCE(reward_bonus_kwh,0)>0")
         transaction_columns = {r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()}
         for col in ("user_id", "rfid_card_id"):
             if col not in transaction_columns: conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} INTEGER")
@@ -1019,12 +857,6 @@ def init_db():
                   AND c.status='Finishing'
               )""")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_source_key ON transactions(import_source,import_key) WHERE import_source IS NOT NULL AND import_key IS NOT NULL")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_grants_user_expiry ON bonus_grants(user_id,active,expires_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_usage_transaction ON bonus_usage(transaction_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_voucher_redemptions_voucher ON bonus_voucher_redemptions(voucher_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_transfers_from ON bonus_transfers(from_user_id,transferred_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_transfers_to ON bonus_transfers(to_user_id,transferred_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_gamification_event_rewards_event ON gamification_event_rewards(event_id,granted_at)")
 
         meter_columns = {r[1] for r in conn.execute("PRAGMA table_info(meter_samples)").fetchall()}
         for name, statement in {
@@ -2050,11 +1882,6 @@ def finalize_post_session_occupancy(charge_point_id, connector_id, observed_at=N
             WHERE id=? AND unplugged_at IS NULL""",(unplugged_dt.isoformat(),seconds,int(row["id"])))
         conn.commit()
         result={"transaction_id":int(row["id"]),"user_id":row["user_id"],"seconds":round(seconds,3),"unplugged_at":unplugged_dt.isoformat()}
-    if result and result.get("user_id"):
-        try:
-            evaluate_user_achievements(int(result["user_id"]))
-        except Exception:
-            pass
     return result
 
 
@@ -2065,12 +1892,10 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
     reading is used as a fallback. This keeps the final session energy consistent without
     inventing data.
     """
-    achievement_user_id=None
     with _lock, _connect() as conn:
         row=conn.execute("SELECT charge_point_id,connector_id,meter_start_kwh,last_meter_kwh,user_id FROM transactions WHERE id=?",(tx,)).fetchone()
         if not row:
             return None
-        achievement_user_id=row[4]
         start = row[2]
         last = row[3]
         stop = meter_stop_kwh
@@ -2112,14 +1937,7 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
         station=conn.execute("SELECT station_status FROM charge_points WHERE id=?",(row[0],)).fetchone()
         overall=_overall_status_from_rows(station[0] if station else None, connector_rows)
         conn.execute("UPDATE charge_points SET status=? WHERE id=?",(overall,row[0]))
-        if achievement_user_id and session_energy is not None:
-            _allocate_bonus_for_transaction_conn(conn, int(tx), int(achievement_user_id), float(session_energy or 0), end_ts)
         conn.commit()
-    if achievement_user_id:
-        try:
-            evaluate_user_achievements(int(achievement_user_id))
-        except Exception:
-            pass
     return session_energy
 
 def active_transactions_for_charge_point(cp_id, limit=20):
@@ -2644,9 +2462,7 @@ def _rfid_local_entry_conn(conn, uid, charge_point_id=None):
             used=_user_month_energy_conn(conn,int(user_id),start_utc,end_utc)
             state=_budget_status(row[5],used,row[6])
             if state.get("blocked"):
-                bonus=_bonus_wallet_conn(conn,int(user_id))
-                if float(bonus.get("available_kwh") or 0)<=1e-9:
-                    return None
+                return None
         except Exception:
             pass
     info={"status":"Accepted"}
@@ -2852,7 +2668,7 @@ def user_may_charge_at(user_id,charge_point_id):
         return bool(conn.execute("SELECT 1 FROM user_charge_point_access WHERE user_id=? AND charge_point_id=?",(int(user_id),str(charge_point_id))).fetchone())
 
 
-def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=True,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
+def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
     """Create a neutral Community charging user.
 
     weekly_hours and budget_source remain accepted for backwards compatibility,
@@ -2861,11 +2677,10 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
     limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
-        gamification = 1 if gamification_enabled else 0
         access_mode=_normalize_charge_access_mode(charge_access_mode)
         cur=conn.execute(
-            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (name,role,department,status,email,phone,limit_value,mode,gamification,None,"manual",access_mode),
+            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (name,role,department,status,email,phone,limit_value,mode,None,"manual",access_mode),
         )
         user_id=int(cur.lastrowid)
         _set_user_charge_access_conn(conn,user_id,access_mode,allowed_charge_point_ids)
@@ -2877,7 +2692,7 @@ def update_user(user_id,**fields):
     access_ids=fields.pop("allowed_charge_point_ids",None)
     fields.pop("weekly_hours",None)
     fields.pop("budget_source",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled"}
+    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2887,8 +2702,6 @@ def update_user(user_id,**fields):
             value = None if value in (None, "") else max(0.0, float(value))
         elif k == "monthly_limit_mode":
             value = "block" if str(value).lower() == "block" else "warn"
-        elif k == "gamification_enabled":
-            value = 1 if value else 0
         updates.append((k,value))
     if not updates and access_mode is None and access_ids is None:return False
     with _lock,_connect() as conn:
@@ -2926,7 +2739,6 @@ def _user_delete_check_conn(conn, user_id):
     legacy=str(user["rfid"] or "").strip()
     if legacy and legacy not in id_tags:
         id_tags.append(legacy)
-
     tx_where=["user_id=?"]
     tx_args=[uid]
     if card_ids:
@@ -2937,88 +2749,40 @@ def _user_delete_check_conn(conn, user_id):
         marks=",".join("?" for _ in id_tags)
         tx_where.append(f"(user_id IS NULL AND id_tag IN ({marks}))")
         tx_args.extend(id_tags)
-    tx_rows=conn.execute(
-        "SELECT id,status,ended_at FROM transactions WHERE "+(" OR ".join(tx_where)),
-        tx_args,
-    ).fetchall()
+    tx_rows=conn.execute("SELECT id,status,ended_at FROM transactions WHERE "+(" OR ".join(tx_where)),tx_args).fetchall()
     transaction_ids=[int(r["id"]) for r in tx_rows]
     transactions=len(transaction_ids)
     active_transactions=sum(1 for r in tx_rows if str(r["status"] or "")=="Active" and not r["ended_at"])
-
-    checks={
-        "transactions":transactions,
-        "bonus_grants":int(conn.execute("SELECT COUNT(*) FROM bonus_grants WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_usage":int(conn.execute("SELECT COUNT(*) FROM bonus_usage WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "voucher_redemptions":int(conn.execute("SELECT COUNT(*) FROM bonus_voucher_redemptions WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_transfers":int(conn.execute("SELECT COUNT(*) FROM bonus_transfers WHERE from_user_id=? OR to_user_id=?",(uid,uid)).fetchone()[0] or 0),
-        "event_rewards":int(conn.execute("SELECT COUNT(*) FROM gamification_event_rewards WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "event_results":int(conn.execute("SELECT COUNT(*) FROM gamification_event_results WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-    }
-    blockers={k:v for k,v in checks.items() if v>0}
-    labels={
-        "transactions":"Ladevorgänge",
-        "bonus_grants":"Bonusgutschriften",
-        "bonus_usage":"Bonusverbrauch",
-        "voucher_redemptions":"Gutschein-Einlösungen",
-        "bonus_transfers":"Bonusübertragungen",
-        "event_rewards":"Event-Prämien",
-        "event_results":"historische Event-Ergebnisse",
-    }
-    reasons=[f"{labels.get(k,k)}: {v}" for k,v in blockers.items()]
-
-    purge_reasons=[]
-    if active_transactions:
-        purge_reasons.append(f"Aktive Ladevorgänge: {active_transactions}")
-    if checks["bonus_transfers"]:
-        purge_reasons.append(f"Bonusübertragungen mit anderen Benutzern: {checks['bonus_transfers']}")
-    can_purge=(active_transactions==0 and checks["bonus_transfers"]==0)
-
+    blockers={"transactions":transactions} if transactions else {}
+    reasons=[f"Ladevorgänge: {transactions}"] if transactions else []
+    purge_reasons=[f"Aktive Ladevorgänge: {active_transactions}"] if active_transactions else []
     meter_samples=transaction_events=diagnostic_events=0
     if transaction_ids:
         marks=",".join("?" for _ in transaction_ids)
         meter_samples=int(conn.execute(f"SELECT COUNT(*) FROM meter_samples WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
         transaction_events=int(conn.execute(f"SELECT COUNT(*) FROM events WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
         diagnostic_events=int(conn.execute(f"SELECT COUNT(*) FROM diagnostic_events WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
-
-    grant_ids=[int(r[0]) for r in conn.execute("SELECT id FROM bonus_grants WHERE user_id=?",(uid,)).fetchall()]
     removable={
-        "transactions":transactions,
-        "meter_samples":meter_samples,
-        "transaction_events":transaction_events,
-        "diagnostic_events":diagnostic_events,
+        "transactions":transactions,"meter_samples":meter_samples,
+        "transaction_events":transaction_events,"diagnostic_events":diagnostic_events,
         "rfid_cards":len(card_ids),
         "vehicle_links":int(conn.execute("SELECT COUNT(*) FROM user_vehicles WHERE user_id=?",(uid,)).fetchone()[0] or 0),
         "charge_point_links":int(conn.execute("SELECT COUNT(*) FROM user_charge_point_access WHERE user_id=?",(uid,)).fetchone()[0] or 0),
         "billing_group_links":int(conn.execute("SELECT COUNT(*) FROM user_billing_groups WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "achievements":int(conn.execute("SELECT COUNT(*) FROM achievement_awards WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_grants":checks["bonus_grants"],
-        "bonus_usage":checks["bonus_usage"],
-        "voucher_redemptions":checks["voucher_redemptions"],
-        "event_rewards":checks["event_rewards"],
-        "event_results":checks["event_results"],
     }
     return {
-        "user_id":int(user["id"]),
-        "name":user["name"],
-        "status":user["status"],
-        "can_delete":not bool(blockers),
-        "can_purge":can_purge,
-        "active_transactions":active_transactions,
-        "blockers":blockers,
-        "reasons":reasons,
-        "purge_reasons":purge_reasons,
-        "removable":removable,
-        "card_ids":card_ids,
-        "card_uids":id_tags,
-        "transaction_ids":transaction_ids,
-        "grant_ids":grant_ids,
+        "user_id":int(user["id"]),"name":user["name"],"status":user["status"],
+        "can_delete":not bool(blockers),"can_purge":active_transactions==0,
+        "active_transactions":active_transactions,"blockers":blockers,"reasons":reasons,
+        "purge_reasons":purge_reasons,"removable":removable,
+        "card_ids":card_ids,"card_uids":id_tags,"transaction_ids":transaction_ids,
     }
 
 
 def _public_user_delete_check(check):
     if check is None:
         return None
-    hidden={"card_ids","card_uids","transaction_ids","grant_ids"}
+    hidden={"card_ids","card_uids","transaction_ids"}
     return {k:v for k,v in check.items() if k not in hidden}
 
 
@@ -3034,7 +2798,6 @@ def delete_user_permanently(user_id):
             return False,"not_found",None
         if not check["can_delete"]:
             return False,"history",_public_user_delete_check(check)
-
         uid=int(user_id)
         card_ids=list(check.get("card_ids") or [])
         card_uids=list(check.get("card_uids") or [])
@@ -3043,12 +2806,10 @@ def delete_user_permanently(user_id):
                 marks=",".join("?" for _ in card_ids)
                 conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
                 conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
-            else:
             conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
             conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
             if card_uids:
@@ -3063,8 +2824,8 @@ def delete_user_permanently(user_id):
 def purge_user_with_history(user_id):
     """Destructive admin-only cleanup for explicit test/error data.
 
-    The caller must provide its own authorization and confirmation. Active charging
-    sessions and cross-user bonus transfers deliberately block this operation.
+    The caller must provide its own authorization and confirmation.
+    Active charging sessions deliberately block this operation.
     """
     with _lock,_connect() as conn:
         check=_user_delete_check_conn(conn,user_id)
@@ -3072,7 +2833,6 @@ def purge_user_with_history(user_id):
             return False,"not_found",None
         if not check["can_purge"]:
             return False,"unsafe",_public_user_delete_check(check)
-
         uid=int(user_id)
         card_ids=list(check.get("card_ids") or [])
         card_uids=list(check.get("card_uids") or [])
@@ -3082,26 +2842,15 @@ def purge_user_with_history(user_id):
                 marks=",".join("?" for _ in transaction_ids)
                 conn.execute(f"UPDATE charge_points SET transaction_id=NULL,power_kw=0 WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"UPDATE connectors SET transaction_id=NULL,power_kw=0 WHERE transaction_id IN ({marks})",transaction_ids)
-                conn.execute(f"DELETE FROM bonus_usage WHERE user_id=? OR transaction_id IN ({marks})",[uid]+transaction_ids)
                 conn.execute(f"DELETE FROM meter_samples WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM events WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM diagnostic_events WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"UPDATE diagnostic_states SET transaction_id=NULL WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM transactions WHERE id IN ({marks})",transaction_ids)
-            else:
-                conn.execute("DELETE FROM bonus_usage WHERE user_id=?",(uid,))
-
-            conn.execute("DELETE FROM gamification_event_rewards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM gamification_event_results WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM bonus_voucher_redemptions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM bonus_grants WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
-
             if card_ids:
                 marks=",".join("?" for _ in card_ids)
                 conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
                 conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
-            else:
             conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
@@ -3286,20 +3035,9 @@ def user_monthly_budget(user_id, now=None):
         limit_value=user["monthly_kwh_limit"]
         mode=user["monthly_limit_mode"] or "warn"
         state=_budget_status(limit_value,used,mode)
-        bonus=_bonus_wallet_conn(conn,user_id,now=now)
-        # A hard monthly limit blocks only when both the regular monthly budget
-        # and all valid bonus kWh are exhausted. Bonus never lowers the regular
-        # progress bar: the monthly budget is consumed first, then FEFO bonus.
-        if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-            state["blocked"]=False
-            state["status"]="bonus"
-            state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
         base_used=used if limit_value is None else min(max(0.0,used),max(0.0,float(limit_value)))
-        return {
-            "month":month_key,"limit_kwh":None if limit_value is None else float(limit_value),
-            "used_kwh":round(used,3),"base_used_kwh":round(base_used,3),"mode":mode,
-            "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"],**state
-        }
+        return {"month":month_key,"limit_kwh":None if limit_value is None else float(limit_value),
+                "used_kwh":round(used,3),"base_used_kwh":round(base_used,3),"mode":mode,**state}
 
 def user_budget_summary(now=None):
     start_utc,end_utc,month_key=_month_bounds_utc(now)
@@ -3309,10 +3047,8 @@ def user_budget_summary(now=None):
         for user in users:
             used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
             state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
-            bonus=_bonus_wallet_conn(conn,user["id"],now=now)
-            effective_blocked=bool(state["blocked"] and bonus["available_kwh"] <= 1e-9)
             if state["status"] == "unlimited": summary["unlimited"] += 1
-            elif effective_blocked: summary["blocked"] += 1
+            elif state["blocked"]: summary["blocked"] += 1
             elif (state["percent"] or 0) >= 70: summary["warning"] += 1
             else: summary["ok"] += 1
         return summary
@@ -3611,17 +3347,11 @@ def list_users_rich():
             item["costs"]=round(float((cost_row or [0])[0] or 0)/100.0,2)
             used=_user_month_energy_conn(conn,item["id"],start_utc,end_utc)
             state=_budget_status(item.get("monthly_kwh_limit"),used,item.get("monthly_limit_mode") or "warn")
-            bonus=_bonus_wallet_conn(conn,item["id"])
-            if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                state["blocked"]=False; state["status"]="bonus"; state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
-            item.update({
-                "budget_month":month_key,"month_energy_kwh":round(used,3),
+            item.update({"budget_month":month_key,"month_energy_kwh":round(used,3),
                 "monthly_limit_kwh":None if item.get("monthly_kwh_limit") is None else float(item.get("monthly_kwh_limit")),
-                "monthly_limit_mode":item.get("monthly_limit_mode") or "warn",
-                "budget_status":state["status"],"status_label":state["status_label"],
-                "percent":state["percent"],"remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"],
-                "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"]
-            })
+                "monthly_limit_mode":item.get("monthly_limit_mode") or "warn","budget_status":state["status"],
+                "status_label":state["status_label"],"percent":state["percent"],
+                "remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"]})
             result.append(item)
         return result
 
@@ -4550,10 +4280,7 @@ def sync_notifications():
                 continue
             if pct >= 100:
                 threshold=100
-                bonus=_bonus_wallet_conn(conn,user["id"])
-                if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                    sev,title="warning","Monatsbudget verbraucht – Bonus aktiv"
-                elif state.get("blocked"):
+                if state.get("blocked"):
                     sev,title="critical","Monatslimit erreicht – Laden gesperrt"
                 else:
                     sev,title="critical","Monatsbudget vollständig verbraucht"
@@ -5017,7 +4744,7 @@ def _apply_tariff_to_tx_conn(conn, tx_id, user_id, cp_id, started_at):
     conn.execute("UPDATE transactions SET tariff_id=?,tariff_name=?,tariff_source=?,price_cents_per_kwh=?,cost_center=?,billing_group_id=?,billing_group_name=? WHERE id=?",(tariff["id"],tariff["name"],tariff["source"],tariff["price_cents_per_kwh"],tariff.get("cost_center") or tariff.get("billing_group_cost_center"),tariff.get("billing_group_id"),tariff.get("billing_group_name"),tx_id))
 
 def _update_tx_cost_conn(conn, tx_id):
-    """Freeze the chargeable session cost after monthly allowance and bonus kWh."""
+    """Freeze the chargeable session cost after the configured monthly allowance."""
     row=conn.execute("SELECT id,energy_kwh,price_cents_per_kwh,user_id,id_tag,started_at FROM transactions WHERE id=?",(tx_id,)).fetchone()
     if not row or row["energy_kwh"] is None:
         return
@@ -5045,10 +4772,7 @@ def _update_tx_cost_conn(conn, tx_id):
                       AND started_at>=? AND started_at<? AND (ended_at IS NOT NULL OR status<>'Active')""",
                     (tx_id,user_id,user_id,user_id,start_utc,end_utc)).fetchone()[0]
                 base_remaining=max(0.0,max(0.0,float(user["monthly_kwh_limit"]))-float(prior or 0))
-                bonus=conn.execute("""SELECT COALESCE(SUM(remaining_kwh),0) FROM bonus_grants
-                    WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001 AND granted_at<=? AND expires_at>?""",
-                    (user_id,started.isoformat(),started.isoformat())).fetchone()[0]
-                chargeable_energy=max(0.0,energy-base_remaining-float(bonus or 0))
+                chargeable_energy=max(0.0,energy-base_remaining)
 
     if chargeable_energy<=1e-9:
         conn.execute("UPDATE transactions SET cost_cents=0 WHERE id=?",(tx_id,))
@@ -5132,857 +4856,6 @@ LEADERBOARD_METRIC_ALIASES={
 LEADERBOARD_ALWAYS_ENABLED={"energy_kwh","sessions","xp","achievement_count"}
 
 
-def _leaderboard_metric_key(metric):
-    key=LEADERBOARD_METRIC_ALIASES.get(str(metric or ""),str(metric or ""))
-    return key if key in LEADERBOARD_METRIC_META else None
-
-
-
-def list_achievements(include_inactive=True):
-    """Administrative catalogue. Secret achievements stay hidden from players, not admins."""
-    with _lock, _connect() as conn:
-        where="" if include_inactive else "WHERE a.active=1"
-        return [dict(r) for r in conn.execute(f"""SELECT a.*,
-            (SELECT COUNT(*) FROM achievement_awards x JOIN users ux ON ux.id=x.user_id WHERE x.achievement_id=a.id AND COALESCE(ux.gamification_enabled,1)=1) AS awarded_count,
-            EXISTS(SELECT 1 FROM gamification_events ge WHERE ge.winner_achievement_id=a.id) AS event_badge
-            FROM achievements a {where}
-            ORDER BY a.active DESC,COALESCE(a.category,'Allgemein') COLLATE NOCASE,
-                     COALESCE(a.tier_group,''),COALESCE(a.tier_rank,0),a.name COLLATE NOCASE""").fetchall()]
-
-
-def _achievement_fields(name, description=None, icon=None, metric="manual", threshold=None, hidden=False,
-                        system_secret=False, active=True, category="Allgemein", rarity="common", xp=50,
-                        tier_group=None, tier_name=None, tier_rank=0, leaderboard_enabled=False):
-    metric=str(metric or "manual")
-    if metric not in ACHIEVEMENT_METRICS:
-        raise ValueError("Ungültige Achievement-Metrik")
-    rarity=str(rarity or "common").strip().lower()
-    if rarity not in ACHIEVEMENT_RARITIES:
-        raise ValueError("Ungültige Seltenheit")
-    clean_name=str(name or "").strip()
-    if not clean_name:
-        raise ValueError("Name ist erforderlich")
-    try:
-        xp=max(0,min(100000,int(xp or 0)))
-        tier_rank=max(0,min(99,int(tier_rank or 0)))
-    except (TypeError,ValueError):
-        raise ValueError("XP und Stufenrang müssen ganze Zahlen sein")
-    return {
-        "name":clean_name,
-        "description":str(description).strip() if description not in (None,"") else None,
-        "icon":str(icon or "🏅").strip() or "🏅",
-        "metric":metric,
-        "threshold":None if threshold in (None,"") else float(threshold),
-        "hidden":1 if hidden else 0,
-        "system_secret":1 if system_secret else 0,
-        "active":1 if active else 0,
-        "category":str(category or "Allgemein").strip() or "Allgemein",
-        "rarity":rarity,
-        "xp":xp,
-        "tier_group":str(tier_group).strip() if tier_group not in (None,"") else None,
-        "tier_name":str(tier_name).strip() if tier_name not in (None,"") else None,
-        "tier_rank":tier_rank,
-        "leaderboard_enabled":1 if (leaderboard_enabled and not system_secret and _leaderboard_metric_key(metric)) else 0,
-    }
-
-
-def create_achievement(name, description=None, icon=None, metric="manual", threshold=None, hidden=False,
-                       system_secret=False, active=True, category="Allgemein", rarity="common", xp=50,
-                       tier_group=None, tier_name=None, tier_rank=0, leaderboard_enabled=False):
-    fields=_achievement_fields(name,description,icon,metric,threshold,hidden,system_secret,active,category,rarity,xp,tier_group,tier_name,tier_rank,leaderboard_enabled)
-    keys=list(fields)
-    with _lock,_connect() as conn:
-        cur=conn.execute(
-            "INSERT INTO achievements("+",".join(keys)+",created_at) VALUES("+",".join("?" for _ in keys)+",?)",
-            [fields[k] for k in keys]+[utc_now()],
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def update_achievement(achievement_id, **fields):
-    current=get_achievement(achievement_id)
-    if not current:
-        return False
-    merged={k:current.get(k) for k in (
-        "name","description","icon","metric","threshold","hidden","system_secret","active",
-        "category","rarity","xp","tier_group","tier_name","tier_rank","leaderboard_enabled"
-    )}
-    merged.update({k:v for k,v in fields.items() if k in merged})
-    cleaned=_achievement_fields(**merged)
-    with _lock,_connect() as conn:
-        keys=list(cleaned)
-        cur=conn.execute(
-            "UPDATE achievements SET "+", ".join(f"{k}=?" for k in keys)+" WHERE id=?",
-            [cleaned[k] for k in keys]+[int(achievement_id)],
-        )
-        conn.commit()
-        changed=cur.rowcount>0
-    if changed and any(k in fields for k in {"metric","threshold","active"}):
-        reconcile_automatic_achievements()
-    return changed
-
-
-def get_achievement(achievement_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT * FROM achievements WHERE id=?",(int(achievement_id),)).fetchone()
-        return dict(row) if row else None
-
-
-def _achievement_tx_rows_conn(conn, user_id):
-    return conn.execute("""SELECT t.* FROM transactions t
-        WHERE t.user_id=? OR (
-          t.user_id IS NULL AND (
-            t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?)
-            OR t.id_tag=(SELECT rfid FROM users WHERE id=?)
-          )
-        )
-        ORDER BY t.started_at""",(user_id,user_id,user_id)).fetchall()
-
-
-def _tx_local_start(row):
-    dt=_parse_iso_utc(row["started_at"] if "started_at" in row.keys() else None)
-    return dt.astimezone(ZoneInfo("Europe/Berlin")) if dt else None
-
-
-def _max_consecutive_iso_weeks(rows):
-    weeks=sorted({(dt.isocalendar().year,dt.isocalendar().week) for r in rows if (dt:=_tx_local_start(r))})
-    if not weeks:
-        return 0
-    monday_dates=[]
-    for year,week in weeks:
-        try:
-            monday_dates.append(datetime.fromisocalendar(year,week,1).date())
-        except ValueError:
-            pass
-    monday_dates=sorted(set(monday_dates))
-    best=cur=1 if monday_dates else 0
-    for prev,nxt in zip(monday_dates,monday_dates[1:]):
-        if (nxt-prev).days==7:
-            cur+=1
-            best=max(best,cur)
-        else:
-            cur=1
-    return best
-
-
-def _achievement_metric_value_conn(conn, user_id, metric):
-    rows=_achievement_tx_rows_conn(conn,user_id)
-    now_local=datetime.now(ZoneInfo("Europe/Berlin"))
-    if metric=="energy_month":
-        start,end,_=_month_bounds_utc()
-        return _user_month_energy_conn(conn,user_id,start,end)
-    if metric=="energy_year":
-        return sum(float(r["energy_kwh"] or 0) for r in rows if (dt:=_tx_local_start(r)) and dt.year==now_local.year)
-    if metric=="sessions_month":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and dt.year==now_local.year and dt.month==now_local.month))
-    if metric=="sessions_year":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and dt.year==now_local.year))
-    if metric=="energy_total":
-        return sum(float(r["energy_kwh"] or 0) for r in rows)
-    if metric=="sessions_total":
-        return float(len(rows))
-    if metric=="stand_minutes_total":
-        total=0.0
-        for r in rows:
-            _,s,_=_analytics_row_timing_conn(conn,r)
-            total+=s/60.0
-        return total
-    if metric=="charging_hours_total":
-        total=0.0
-        for r in rows:
-            charging,_,_=_analytics_row_timing_conn(conn,r)
-            total+=charging/3600.0
-        return total
-    if metric=="max_session_energy":
-        return max([float(r["energy_kwh"] or 0) for r in rows] or [0.0])
-    if metric=="max_session_power":
-        return max([float(r["max_power_kw"] or 0) for r in rows] or [0.0])
-    if metric=="distinct_charge_points":
-        return float(len({str(r["charge_point_id"]) for r in rows if r["charge_point_id"] not in (None,"")}))
-    if metric=="distinct_vehicles":
-        return float(len({int(r["vehicle_id"]) for r in rows if r["vehicle_id"] not in (None,"")}))
-    if metric=="days_active":
-        return float(len({dt.date().isoformat() for r in rows if (dt:=_tx_local_start(r))}))
-    if metric=="months_active":
-        return float(len({(dt.year,dt.month) for r in rows if (dt:=_tx_local_start(r))}))
-    if metric=="weekend_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and dt.weekday()>=5))
-    if metric=="early_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and 5<=dt.hour<8))
-    if metric=="evening_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and 17<=dt.hour<22))
-    if metric=="night_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and (dt.hour>=22 or dt.hour<5)))
-    if metric=="midnight_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and dt.hour==0))
-    if metric in {"long_sessions","quick_sessions"}:
-        count=0
-        for r in rows:
-            charging,stand,connection=_analytics_row_timing_conn(conn,r)
-            seconds=max(float(connection or 0),float(charging or 0)+float(stand or 0))
-            energy=float(r["energy_kwh"] or 0)
-            if metric=="long_sessions" and seconds>=4*3600:
-                count+=1
-            if metric=="quick_sessions" and energy>0 and 0<seconds<=45*60:
-                count+=1
-        return float(count)
-    if metric=="prompt_unplug_sessions":
-        count=0
-        for r in rows:
-            if "post_session_occupied_seconds" not in r.keys() or r["post_session_occupied_seconds"] is None:
-                continue
-            try: seconds=float(r["post_session_occupied_seconds"])
-            except (TypeError,ValueError): continue
-            if float(r["energy_kwh"] or 0)>0 and 0<=seconds<=PROMPT_UNPLUG_SECONDS:
-                count+=1
-        return float(count)
-    if metric=="exact_42_sessions":
-        return float(sum(1 for r in rows if 41.95<=float(r["energy_kwh"] or 0)<=42.05))
-    if metric in {"max_month_energy","max_month_sessions"}:
-        months={}
-        for r in rows:
-            dt=_tx_local_start(r)
-            if not dt:
-                continue
-            key=(dt.year,dt.month)
-            bucket=months.setdefault(key,{"energy":0.0,"sessions":0})
-            bucket["energy"]+=float(r["energy_kwh"] or 0)
-            bucket["sessions"]+=1
-        if not months:
-            return 0.0
-        key="energy" if metric=="max_month_energy" else "sessions"
-        return float(max(x[key] for x in months.values()))
-    if metric=="week_streak":
-        return float(_max_consecutive_iso_weeks(rows))
-    return 0.0
-
-
-def evaluate_user_achievements(user_id):
-    """Reconcile automatic achievements against their current definition."""
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user or not bool(user["gamification_enabled"]):
-            return []
-        conn.execute("""DELETE FROM achievement_awards
-            WHERE user_id=? AND source='automatic' AND achievement_id IN (
-                SELECT id FROM achievements WHERE active=1 AND (metric='manual' OR threshold IS NULL)
-            )""",(user_id,))
-        defs=conn.execute("SELECT * FROM achievements WHERE active=1 AND metric<>'manual' AND threshold IS NOT NULL ORDER BY id").fetchall()
-        awarded=[]
-        metric_cache={}
-        for a in defs:
-            metric=str(a["metric"])
-            if metric not in metric_cache:
-                metric_cache[metric]=_achievement_metric_value_conn(conn,user_id,metric)
-            value=metric_cache[metric]
-            qualifies=value+1e-9>=float(a["threshold"])
-            if qualifies:
-                cur=conn.execute("INSERT OR IGNORE INTO achievement_awards(user_id,achievement_id,awarded_at,source) VALUES(?,?,?,'automatic')",(user_id,a["id"],utc_now()))
-                if cur.rowcount:
-                    awarded.append(int(a["id"]))
-            else:
-                conn.execute("DELETE FROM achievement_awards WHERE user_id=? AND achievement_id=? AND source='automatic'",(user_id,a["id"]))
-        conn.commit()
-        return awarded
-
-
-def reconcile_automatic_achievements():
-    with _lock,_connect() as conn:
-        user_ids=[int(r[0]) for r in conn.execute("SELECT id FROM users WHERE COALESCE(gamification_enabled,1)=1").fetchall()]
-    for user_id in user_ids:
-        evaluate_user_achievements(user_id)
-    return len(user_ids)
-
-
-def award_achievement(user_id, achievement_id, source="manual"):
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT id,gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user:
-            raise ValueError("Benutzer nicht gefunden")
-        if not bool(user["gamification_enabled"]):
-            raise ValueError("Benutzer nimmt nicht an Achievements, Events oder Ranglisten teil")
-        if not conn.execute("SELECT id FROM achievements WHERE id=? AND active=1",(achievement_id,)).fetchone():
-            raise ValueError("Achievement nicht gefunden")
-        conn.execute("INSERT OR IGNORE INTO achievement_awards(user_id,achievement_id,awarded_at,source) VALUES(?,?,?,?)",(user_id,achievement_id,utc_now(),source))
-        conn.commit()
-
-
-def revoke_achievement(user_id, achievement_id):
-    with _lock,_connect() as conn:
-        cur=conn.execute("DELETE FROM achievement_awards WHERE user_id=? AND achievement_id=?",(user_id,achievement_id))
-        conn.commit()
-        return cur.rowcount>0
-
-
-def earned_achievement_count(user_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT COUNT(*) FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(int(user_id),)).fetchone()
-        return int(row[0] or 0) if row else 0
-
-
-def earned_achievements_for_user(user_id, limit=8):
-    try:
-        limit=max(1,min(20,int(limit or 8)))
-    except (TypeError,ValueError):
-        limit=8
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT a.*,x.awarded_at,x.source FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1
-            ORDER BY x.awarded_at DESC,a.name COLLATE NOCASE LIMIT ?""",(int(user_id),limit)).fetchall()
-        result=[]
-        for r in rows:
-            d=dict(r)
-            d["earned"]=True
-            d["event_badge"]=str(d.get("source") or "").startswith("event:")
-            d["display_name"]=d.get("name")
-            d["display_description"]=d.get("description") or ""
-            d["display_icon"]=d.get("icon") or "🏅"
-            result.append(d)
-        return result
-
-
-def _xp_floor(level):
-    level=max(1,int(level))
-    return 125*(level-1)*level//2
-
-
-def _level_title(level):
-    bands=[
-        (40,"Grid Grandmaster"),(30,"Ladelegende"),(25,"Lord of the kWh"),
-        (20,"Voltage Veteran"),(16,"High Voltage"),(12,"Watt-Wizard"),
-        (8,"Watt-Sammler"),(5,"Ampere-Akrobat"),(3,"Lade-Fan"),(1,"Stecker-Neuling"),
-    ]
-    return next(title for minimum,title in bands if level>=minimum)
-
-
-def _gamification_level_data(total_xp):
-    total_xp=max(0,int(total_xp or 0))
-    level=1
-    while level<99 and total_xp>=_xp_floor(level+1):
-        level+=1
-    current_floor=_xp_floor(level)
-    next_floor=_xp_floor(level+1)
-    span=max(1,next_floor-current_floor)
-    progress=max(0.0,min(100.0,(total_xp-current_floor)/span*100.0))
-    total_progress=max(0.0,min(100.0,total_xp/max(1,next_floor)*100.0))
-    return {
-        "xp":total_xp,
-        "level":level,
-        "title":_level_title(level),
-        "level_xp":total_xp-current_floor,
-        "next_level_xp":span,
-        "next_level_total_xp":next_floor,
-        "xp_to_next":max(0,next_floor-total_xp),
-        "progress_pct":round(progress,1),
-        "total_progress_pct":round(total_progress,1),
-    }
-
-
-def user_gamification_profile(user_id):
-    evaluate_user_achievements(user_id)
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT COALESCE(a.xp,0) AS xp,COALESCE(a.rarity,'common') AS rarity,
-                                   COALESCE(a.category,'Allgemein') AS category
-            FROM achievement_awards x JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(int(user_id),)).fetchall()
-    total_xp=sum(max(0,int(r["xp"] or 0)) for r in rows)
-    rarity_counts={}
-    category_counts={}
-    for r in rows:
-        rarity=str(r["rarity"] or "common")
-        category=str(r["category"] or "Allgemein")
-        rarity_counts[rarity]=rarity_counts.get(rarity,0)+1
-        category_counts[category]=category_counts.get(category,0)+1
-    return {
-        **_gamification_level_data(total_xp),
-        "achievement_count":len(rows),
-        "rarity_counts":rarity_counts,
-        "category_counts":category_counts,
-    }
-
-
-def portal_gamification_reveals(user_id, limit=6):
-    """Return newly earned achievements / level-ups for the real user portal.
-
-    Existing installations are baselined on first access so an upgrade does not
-    replay the complete historic achievement catalogue. Afterwards only awards
-    earned since the last acknowledgement are revealed. Secret achievements are
-    only exposed here after they have actually been awarded.
-    """
-    uid=int(user_id)
-    profile=user_gamification_profile(uid)
-    current_level=int(profile.get("level") or 1)
-    with _lock,_connect() as conn:
-        user=conn.execute("""SELECT gamification_enabled,gamification_seen_award_id,gamification_seen_level
-            FROM users WHERE id=?""",(uid,)).fetchone()
-        if not user or not bool(user["gamification_enabled"]):
-            return {"pending":False,"achievements":[],"level_up":None,"ack_award_id":0,"ack_level":current_level}
-        max_row=conn.execute("""SELECT COALESCE(MAX(x.id),0) FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(uid,)).fetchone()
-        max_award_id=int(max_row[0] or 0)
-        seen_award=user["gamification_seen_award_id"]
-        seen_level=user["gamification_seen_level"]
-
-        # V0.9.7.50 migration baseline: do not flood existing users with every
-        # achievement they earned before the reveal feature existed.
-        if seen_award is None or seen_level is None:
-            conn.execute("""UPDATE users SET gamification_seen_award_id=?,gamification_seen_level=?
-                WHERE id=?""",(max_award_id,current_level,uid))
-            conn.commit()
-            return {"pending":False,"achievements":[],"level_up":None,
-                    "ack_award_id":max_award_id,"ack_level":current_level}
-
-        try: limit=max(1,min(12,int(limit or 6)))
-        except (TypeError,ValueError): limit=6
-        rows=conn.execute("""SELECT x.id AS award_id,x.awarded_at,x.source,
-                    a.id AS achievement_id,a.name,a.description,a.icon,a.category,a.rarity,a.xp,
-                    a.tier_group,a.tier_name,a.tier_rank,a.hidden,a.system_secret
-            FROM achievement_awards x JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1 AND x.id>?
-            ORDER BY x.id ASC LIMIT ?""",(uid,int(seen_award or 0),limit)).fetchall()
-        achievements=[]
-        rarity_labels={"common":"Gewöhnlich","uncommon":"Ungewöhnlich","rare":"Selten",
-                       "epic":"Episch","legendary":"Legendär","secret":"Geheim"}
-        for row in rows:
-            d=dict(row)
-            d["display_name"]=d.get("name") or "Achievement"
-            d["display_description"]=d.get("description") or ""
-            d["display_icon"]=d.get("icon") or "🏅"
-            d["rarity_label"]=rarity_labels.get(str(d.get("rarity") or "common"),str(d.get("rarity") or "common"))
-            achievements.append(d)
-
-        level_up=None
-        if current_level>int(seen_level or 1):
-            level_up={
-                "from_level":int(seen_level or 1),
-                "level":current_level,
-                "title":profile.get("title") or _level_title(current_level),
-                "xp":int(profile.get("xp") or 0),
-                "xp_to_next":int(profile.get("xp_to_next") or 0),
-            }
-        return {
-            "pending":bool(achievements or level_up),
-            "achievements":achievements,
-            "level_up":level_up,
-            "ack_award_id":max_award_id,
-            "ack_level":current_level,
-        }
-
-
-def acknowledge_portal_gamification_reveals(user_id, award_id=None, level=None):
-    uid=int(user_id)
-    profile=user_gamification_profile(uid)
-    current_level=int(profile.get("level") or 1)
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT gamification_seen_award_id,gamification_seen_level
-            FROM users WHERE id=?""",(uid,)).fetchone()
-        if not row:
-            return False
-        max_row=conn.execute("""SELECT COALESCE(MAX(x.id),0) FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(uid,)).fetchone()
-        max_award_id=int(max_row[0] or 0)
-        old_award=int(row["gamification_seen_award_id"] or 0)
-        old_level=int(row["gamification_seen_level"] or 1)
-        try: requested_award=int(award_id if award_id is not None else max_award_id)
-        except (TypeError,ValueError): requested_award=max_award_id
-        try: requested_level=int(level if level is not None else current_level)
-        except (TypeError,ValueError): requested_level=current_level
-        new_award=max(old_award,min(max_award_id,max(0,requested_award)))
-        new_level=max(old_level,min(current_level,max(1,requested_level)))
-        conn.execute("""UPDATE users SET gamification_seen_award_id=?,gamification_seen_level=?
-            WHERE id=?""",(new_award,new_level,uid))
-        conn.commit()
-        return True
-
-
-def gamification_overview():
-    reconcile_automatic_achievements()
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT u.id,u.name,
-            COALESCE(SUM(CASE WHEN a.active=1 THEN COALESCE(a.xp,0) ELSE 0 END),0) AS xp,
-            COUNT(CASE WHEN a.active=1 THEN a.id END) AS achievement_count
-            FROM users u
-            LEFT JOIN achievement_awards x ON x.user_id=u.id
-            LEFT JOIN achievements a ON a.id=x.achievement_id
-            WHERE u.status='Aktiv' AND COALESCE(u.gamification_enabled,1)=1
-            GROUP BY u.id,u.name""").fetchall()
-    items=[]
-    for r in rows:
-        progress=_gamification_level_data(int(r["xp"] or 0))
-        items.append({
-            "user_id":int(r["id"]),"name":r["name"],
-            "achievement_count":int(r["achievement_count"] or 0),
-            **progress,
-        })
-    items.sort(key=lambda x:(-x["xp"],-x["achievement_count"],x["name"].casefold()))
-    rank=0; last=None
-    for i,item in enumerate(items,1):
-        if last is None or item["xp"]!=last:
-            rank=i; last=item["xp"]
-        item["rank"]=rank
-    return items
-
-
-
-def achievements_for_user(user_id, include_locked=True):
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user or not bool(user["gamification_enabled"]):
-            return []
-    evaluate_user_achievements(user_id)
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT a.*,x.awarded_at,x.source FROM achievements a
-            LEFT JOIN achievement_awards x ON x.achievement_id=a.id AND x.user_id=?
-            WHERE a.active=1 AND (COALESCE(a.system_secret,0)=0 OR x.awarded_at IS NOT NULL) ORDER BY x.awarded_at IS NULL,a.hidden,a.name COLLATE NOCASE""",(user_id,)).fetchall()
-        result=[]
-        for r in rows:
-            d=dict(r); d["earned"]=bool(d.get("awarded_at"))
-            d["event_badge"]=bool(d.get("earned") and str(d.get("source") or "").startswith("event:"))
-            if d["event_badge"]:
-                try: d["event_id"]=int(str(d.get("source")).split(":",1)[1])
-                except (TypeError,ValueError,IndexError): d["event_id"]=None
-            if d["hidden"] and not d["earned"]:
-                d["display_name"]="???"; d["display_description"]="Verstecktes Achievement"; d["display_icon"]="❓"
-            else:
-                d["display_name"]=d["name"]; d["display_description"]=d.get("description") or ""; d["display_icon"]=d.get("icon") or "🏅"
-            if include_locked or d["earned"]: result.append(d)
-        return result
-
-
-def _event_state(event, now=None):
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    start=_parse_iso_utc(event["starts_at"])
-    end=_parse_iso_utc(event["ends_at"])
-    if start and now_dt < start: return "planned"
-    if end and now_dt >= end: return "ended"
-    return "running"
-
-
-def list_gamification_events(include_inactive=True):
-    # Finalize ended events before reading so the archive always reflects the
-    # immutable result snapshot and any configured prizes.
-    finalize_ended_gamification_events()
-    with _lock,_connect() as conn:
-        where="" if include_inactive else "WHERE e.active=1"
-        rows=conn.execute(f"""SELECT e.*,
-            (SELECT COUNT(*) FROM gamification_event_rewards r WHERE r.event_id=e.id) AS reward_count,
-            (SELECT COALESCE(SUM(r.amount_kwh),0) FROM gamification_event_rewards r WHERE r.event_id=e.id) AS reward_total_kwh,
-            (SELECT COUNT(*) FROM achievement_awards aa WHERE aa.source=('event:' || e.id)) AS badge_award_count,
-            (SELECT COUNT(*) FROM gamification_event_results rr WHERE rr.event_id=e.id AND rr.qualified=1) AS qualified_count,
-            (SELECT COUNT(*) FROM gamification_event_results rr WHERE rr.event_id=e.id AND (rr.sessions>0 OR rr.energy_kwh>0)) AS participant_count
-            FROM gamification_events e {where} ORDER BY e.starts_at DESC,e.id DESC""").fetchall()
-        now=datetime.now(timezone.utc)
-        result=[]
-        for row in rows:
-            d=dict(row)
-            d["event_state"]=_event_state(d,now)
-            d["finalized"]=bool(d.get("finalized_at"))
-            result.append(d)
-        return result
-
-
-EVENT_METRICS={
-    "energy_kwh",
-    "sessions",
-    "avg_stand_seconds",
-    "total_stand_seconds",
-    "unplug_ratio",
-    "avg_energy_kwh",
-    "qualified_sessions",
-}
-EVENT_QUALIFICATION_METRICS={"avg_stand_seconds","total_stand_seconds","unplug_ratio","avg_energy_kwh","qualified_sessions"}
-EVENT_TIMING_METRICS={"avg_stand_seconds","total_stand_seconds","unplug_ratio"}
-EVENT_ASCENDING_METRICS={"avg_stand_seconds","total_stand_seconds"}
-
-
-def _validate_event_fields(metric, starts_at, ends_at, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                           reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    if metric not in EVENT_METRICS:
-        raise ValueError("Ungültige Ranking-Metrik")
-    if _parse_iso_utc(ends_at) <= _parse_iso_utc(starts_at):
-        raise ValueError("Ende muss nach Beginn liegen")
-    minimum_sessions=max(0,int(min_sessions or 0))
-    minimum_kwh=max(0.0,float(min_session_kwh or 0))
-    reward=max(0.0,float(reward_bonus_kwh or 0))
-    reward_enabled=(reward>0) if reward_bonus_enabled is None else bool(reward_bonus_enabled)
-    valid_days=None if reward_valid_days in (None,"") else max(1,min(730,int(reward_valid_days)))
-    badge_enabled=bool(winner_badge_enabled)
-    badge_name=str(winner_badge_name or "").strip() or None
-    badge_icon=str(winner_badge_icon or "").strip() or "🏆"
-    badge_description=str(winner_badge_description or "").strip() or None
-    if metric in EVENT_QUALIFICATION_METRICS:
-        if minimum_sessions < 1: raise ValueError("Für diese Wertung ist mindestens eine qualifizierende Session erforderlich")
-        if minimum_kwh <= 0: raise ValueError("Für diese Wertung muss eine Mindestenergie je Session festgelegt werden")
-    if reward_enabled and reward <= 0:
-        raise ValueError("Für die automatische Bonusauszahlung muss eine Bonusmenge größer 0 festgelegt werden")
-    return minimum_sessions,minimum_kwh,reward,valid_days,reward_enabled,badge_enabled,badge_name,badge_icon,badge_description
-
-
-def create_gamification_event(name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    if not str(name or "").strip(): raise ValueError("Eventname fehlt")
-    if winner_badge_enabled and not winner_badge_name:
-        winner_badge_name=f"Sieger: {str(name).strip()}"
-    if winner_badge_enabled and not winner_badge_description:
-        winner_badge_description=f"Gewinner des Events „{str(name).strip()}“."
-    with _lock,_connect() as conn:
-        cur=conn.execute("""INSERT INTO gamification_events(name,description,metric,starts_at,ends_at,active,created_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(str(name).strip(),description or None,metric,starts_at,ends_at,1 if active else 0,utc_now(),min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,1 if reward_bonus_enabled else 0,1 if winner_badge_enabled else 0,winner_badge_name,winner_badge_icon,winner_badge_description))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def update_gamification_event(event_id, name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    if not str(name or "").strip(): raise ValueError("Eventname fehlt")
-    if winner_badge_enabled and not winner_badge_name:
-        winner_badge_name=f"Sieger: {str(name).strip()}"
-    if winner_badge_enabled and not winner_badge_description:
-        winner_badge_description=f"Gewinner des Events „{str(name).strip()}“."
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT finalized_at,winner_achievement_id FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return False
-        if event["finalized_at"]:
-            raise ValueError("Ein bereits abgeschlossenes Event ist archiviert und kann nicht mehr verändert werden")
-        paid=conn.execute("SELECT 1 FROM gamification_event_rewards WHERE event_id=? LIMIT 1",(event_id,)).fetchone()
-        badge_awarded=conn.execute("SELECT 1 FROM achievement_awards WHERE source=? LIMIT 1",(f"event:{event_id}",)).fetchone()
-        if paid or badge_awarded:
-            raise ValueError("Ein bereits automatisch prämiertes oder ausgezeichnetes Event kann nicht mehr verändert werden")
-        cur=conn.execute("""UPDATE gamification_events SET name=?,description=?,metric=?,starts_at=?,ends_at=?,active=?,min_sessions=?,min_session_kwh=?,reward_bonus_kwh=?,reward_valid_days=?,reward_bonus_enabled=?,winner_badge_enabled=?,winner_badge_name=?,winner_badge_icon=?,winner_badge_description=? WHERE id=?""",
-            (str(name).strip(),description or None,metric,starts_at,ends_at,1 if active else 0,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,1 if reward_bonus_enabled else 0,1 if winner_badge_enabled else 0,winner_badge_name,winner_badge_icon,winner_badge_description,event_id))
-        conn.commit(); return cur.rowcount>0
-
-
-def set_gamification_event_active(event_id, active):
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT finalized_at FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return False
-        if event["finalized_at"] and bool(active):
-            raise ValueError("Ein archiviertes Event kann nicht wieder aktiviert werden")
-        cur=conn.execute("UPDATE gamification_events SET active=? WHERE id=?",(1 if active else 0,event_id)); conn.commit(); return cur.rowcount>0
-
-
-def _event_user_join_sql():
-    return "(t.user_id=u.id OR (t.user_id IS NULL AND (t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=u.id) OR t.id_tag=u.rfid)))"
-
-
-def _rank_event_items(items, ascending=False):
-    if ascending:
-        items.sort(key=lambda x:(not x.get("qualified",False), x.get("value") if x.get("qualified") else float("inf"), -int(x.get("sessions") or 0), x.get("name","").casefold()))
-    else:
-        items.sort(key=lambda x:(not x.get("qualified",False), -(x.get("value") if x.get("qualified") and x.get("value") is not None else -1), -int(x.get("sessions") or 0), x.get("name","").casefold()))
-    rank=0; last=None; position=0
-    for item in items:
-        if not item.get("qualified") or item.get("value") is None:
-            item["rank"]=None
-            continue
-        position+=1
-        value=float(item["value"])
-        if last is None or abs(value-last)>1e-9:
-            rank=position; last=value
-        item["rank"]=rank
-    return items
-
-
-def _event_leaderboard_conn(conn, event):
-    metric=event["metric"]
-    if metric in EVENT_QUALIFICATION_METRICS:
-        min_sessions=max(1,int(event["min_sessions"] or 0))
-        min_kwh=max(0.0,float(event["min_session_kwh"] or 0))
-        timing_sql=""
-        if metric=="unplug_ratio":
-            timing_sql=""" AND t.ended_at IS NOT NULL
-              AND t.post_session_occupied_seconds IS NOT NULL"""
-        elif metric in EVENT_TIMING_METRICS:
-            timing_sql=""" AND t.ended_at IS NOT NULL
-              AND COALESCE(t.timing_quality,'')<>'connection_only'
-              AND EXISTS(SELECT 1 FROM meter_samples ms WHERE ms.transaction_id=t.id AND ms.power_kw IS NOT NULL)"""
-        rows=conn.execute(f"""SELECT u.id,u.name,
-            COUNT(t.id) AS sessions, COALESCE(SUM(t.energy_kwh),0) AS energy_kwh,
-            COALESCE(AVG(t.energy_kwh),0) AS avg_energy_kwh,
-            COALESCE(AVG(t.stand_seconds),0) AS avg_stand_seconds,
-            COALESCE(SUM(t.stand_seconds),0) AS total_stand_seconds,
-            COALESCE(SUM(CASE WHEN t.id IS NOT NULL AND t.post_session_occupied_seconds IS NOT NULL AND t.post_session_occupied_seconds<=? THEN 1 ELSE 0 END),0) AS quick_unplug_sessions
-            FROM users u LEFT JOIN transactions t ON {_event_user_join_sql()}
-              AND t.started_at>=? AND t.started_at<? AND COALESCE(t.energy_kwh,0)>=? {timing_sql}
-            WHERE u.status='Aktiv' AND COALESCE(u.gamification_enabled,1)=1 GROUP BY u.id,u.name""",
-            (PROMPT_UNPLUG_SECONDS,event["starts_at"],event["ends_at"],min_kwh)).fetchall()
-        items=[]
-        for r in rows:
-            sessions=int(r["sessions"] or 0); qualified=sessions>=min_sessions
-            energy=round(float(r["energy_kwh"] or 0),3)
-            avg_energy=float(r["avg_energy_kwh"] or 0)
-            avg_stand=float(r["avg_stand_seconds"] or 0)
-            total_stand=float(r["total_stand_seconds"] or 0)
-            quick=int(r["quick_unplug_sessions"] or 0)
-            unplug_ratio=(quick/sessions*100.0) if sessions else 0.0
-            values={
-                "avg_stand_seconds":avg_stand,
-                "total_stand_seconds":total_stand,
-                "unplug_ratio":unplug_ratio,
-                "avg_energy_kwh":avg_energy,
-                "qualified_sessions":float(sessions),
-            }
-            value=values[metric] if qualified else None
-            items.append({"user_id":int(r["id"]),"name":r["name"],"sessions":sessions,"energy_kwh":energy,
-                "avg_energy_kwh":round(avg_energy,3),"avg_stand_seconds":round(avg_stand,3),"total_stand_seconds":round(total_stand,3),
-                "stand_seconds":round(total_stand,3),"quick_unplug_sessions":quick,"unplug_ratio":round(unplug_ratio,3),
-                "value":value,"qualified":qualified,"qualification_sessions":sessions,"min_sessions":min_sessions,"min_session_kwh":min_kwh,
-                "timing_required":metric in EVENT_TIMING_METRICS})
-        return _rank_event_items(items,metric in EVENT_ASCENDING_METRICS)
-    rows=conn.execute(f"""SELECT u.id,u.name,
-        COUNT(t.id) AS sessions, COALESCE(SUM(t.energy_kwh),0) AS energy_kwh
-        FROM users u LEFT JOIN transactions t ON {_event_user_join_sql()}
-          AND t.started_at>=? AND t.started_at<?
-        WHERE u.status='Aktiv' AND COALESCE(u.gamification_enabled,1)=1 GROUP BY u.id,u.name""",(event["starts_at"],event["ends_at"])).fetchall()
-    items=[]
-    for r in rows:
-        value=float(r["energy_kwh"] or 0) if metric=="energy_kwh" else float(r["sessions"] or 0)
-        items.append({"user_id":int(r["id"]),"name":r["name"],"sessions":int(r["sessions"] or 0),"energy_kwh":round(float(r["energy_kwh"] or 0),3),"value":value,"qualified":value>0})
-    return _rank_event_items(items,False)
-
-
-def preview_gamification_event(name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    event={"id":None,"name":str(name or "Vorschau").strip() or "Vorschau","description":description,"metric":metric,"starts_at":starts_at,"ends_at":ends_at,
-        "active":1 if active else 0,"min_sessions":min_sessions,"min_session_kwh":min_session_kwh,"reward_bonus_kwh":reward_bonus_kwh,
-        "reward_valid_days":reward_valid_days,"reward_bonus_enabled":1 if reward_bonus_enabled else 0,"winner_badge_enabled":1 if winner_badge_enabled else 0,
-        "winner_badge_name":winner_badge_name,"winner_badge_icon":winner_badge_icon,"winner_badge_description":winner_badge_description}
-    with _lock,_connect() as conn:
-        board=_event_leaderboard_conn(conn,event)
-    participants=sum(1 for x in board if int(x.get("sessions") or 0)>0 or float(x.get("energy_kwh") or 0)>0)
-    qualified=sum(1 for x in board if x.get("qualified") and x.get("value") is not None)
-    return {**event,"leaderboard":board,"participant_count":participants,"qualified_count":qualified,"preview":True}
-
-
-def _event_rewards_conn(conn,event_id):
-    return [dict(r) for r in conn.execute("""SELECT r.*,u.name AS user_name FROM gamification_event_rewards r
-        JOIN users u ON u.id=r.user_id WHERE r.event_id=? ORDER BY r.id""",(event_id,)).fetchall()]
-
-
-def _event_badge_awards_conn(conn,event):
-    achievement_id=event["winner_achievement_id"] if "winner_achievement_id" in event.keys() else None
-    if not achievement_id:
-        return []
-    return [dict(r) for r in conn.execute("""SELECT aa.id,aa.user_id,aa.achievement_id,aa.awarded_at,aa.source,u.name AS user_name,a.name AS achievement_name,a.icon AS achievement_icon
-        FROM achievement_awards aa JOIN users u ON u.id=aa.user_id JOIN achievements a ON a.id=aa.achievement_id
-        WHERE aa.achievement_id=? AND aa.source=? ORDER BY aa.id""",(achievement_id,f"event:{event['id']}")).fetchall()]
-
-
-def _ensure_event_badge_conn(conn,event):
-    achievement_id=event["winner_achievement_id"] if "winner_achievement_id" in event.keys() else None
-    if achievement_id:
-        exists=conn.execute("SELECT id FROM achievements WHERE id=?",(achievement_id,)).fetchone()
-        if exists:
-            return int(achievement_id)
-    name=str(event["winner_badge_name"] or "").strip() or f"Sieger: {event['name']}"
-    icon=str(event["winner_badge_icon"] or "").strip() or "🏆"
-    description=str(event["winner_badge_description"] or "").strip() or f"Gewinner des Events „{event['name']}“."
-    cur=conn.execute("""INSERT INTO achievements(name,description,icon,metric,threshold,hidden,system_secret,active,created_at)
-        VALUES(?,?,?,'manual',NULL,0,0,1,?)""",(name,description,icon,utc_now()))
-    achievement_id=int(cur.lastrowid)
-    conn.execute("UPDATE gamification_events SET winner_achievement_id=? WHERE id=?",(achievement_id,event["id"]))
-    return achievement_id
-
-
-def _snapshot_event_results_conn(conn,event,board,captured_at):
-    if conn.execute("SELECT 1 FROM gamification_event_results WHERE event_id=? LIMIT 1",(event["id"],)).fetchone():
-        return
-    for item in board:
-        details={k:v for k,v in item.items() if k not in {"user_id","name","rank","value","qualified","sessions","energy_kwh"}}
-        conn.execute("""INSERT OR IGNORE INTO gamification_event_results(event_id,user_id,rank,metric_value,qualified,sessions,energy_kwh,details_json,captured_at)
-            VALUES(?,?,?,?,?,?,?,?,?)""",(event["id"],item["user_id"],item.get("rank"),item.get("value"),1 if item.get("qualified") else 0,int(item.get("sessions") or 0),float(item.get("energy_kwh") or 0),json.dumps(details,ensure_ascii=False,separators=(",",":")),captured_at))
-
-
-def _event_snapshot_board_conn(conn,event):
-    rows=conn.execute("""SELECT rr.*,u.name FROM gamification_event_results rr JOIN users u ON u.id=rr.user_id
-        WHERE rr.event_id=? ORDER BY CASE WHEN rr.rank IS NULL THEN 1 ELSE 0 END,rr.rank,u.name COLLATE NOCASE""",(event["id"],)).fetchall()
-    board=[]
-    for row in rows:
-        d={"user_id":int(row["user_id"]),"name":row["name"],"rank":row["rank"],"value":row["metric_value"],"qualified":bool(row["qualified"]),
-           "sessions":int(row["sessions"] or 0),"energy_kwh":round(float(row["energy_kwh"] or 0),3)}
-        try: d.update(json.loads(row["details_json"] or "{}"))
-        except (TypeError,ValueError): pass
-        board.append(d)
-    return board
-
-
-def finalize_ended_gamification_events(now=None):
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    now_iso=now_dt.isoformat()
-    finalized=[]
-    with _lock,_connect() as conn:
-        events=conn.execute("""SELECT * FROM gamification_events e WHERE e.active=1 AND e.ends_at<=? AND e.finalized_at IS NULL
-            ORDER BY e.ends_at,e.id""",(now_iso,)).fetchall()
-        for event in events:
-            board=_event_leaderboard_conn(conn,event)
-            _snapshot_event_results_conn(conn,event,board,now_iso)
-            winners=[x for x in board if x.get("rank")==1 and x.get("qualified",True) and x.get("value") is not None and float(x.get("value") or 0)>=0]
-            if event["metric"] in {"energy_kwh","sessions"}:
-                winners=[x for x in winners if float(x.get("value") or 0)>0]
-            achievement_id=None
-            if winners and bool(event["winner_badge_enabled"]):
-                achievement_id=_ensure_event_badge_conn(conn,event)
-            reward_enabled=bool(event["reward_bonus_enabled"]) and float(event["reward_bonus_kwh"] or 0)>0
-            days=int(event["reward_valid_days"] or _bonus_policy_settings_conn(conn)["default_valid_days"]) if reward_enabled else None
-            expiry=now_dt+timedelta(days=max(1,min(730,days))) if reward_enabled else None
-            for winner in winners:
-                result={"event_id":int(event["id"]),"user_id":winner["user_id"]}
-                if achievement_id:
-                    cur=conn.execute("INSERT OR IGNORE INTO achievement_awards(user_id,achievement_id,awarded_at,source) VALUES(?,?,?,?)",
-                        (winner["user_id"],achievement_id,now_iso,f"event:{event['id']}"))
-                    if cur.rowcount:
-                        result["achievement_id"]=achievement_id
-                if reward_enabled and not conn.execute("SELECT 1 FROM gamification_event_rewards WHERE event_id=? AND user_id=?",(event["id"],winner["user_id"])).fetchone():
-                    amount=float(event["reward_bonus_kwh"] or 0)
-                    cur=conn.execute("""INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,active)
-                        VALUES(?,?,?,?,?,?,?,1)""",(winner["user_id"],amount,amount,now_iso,expiry.isoformat(),f"event:{event['id']}",f"Eventgewinn: {event['name']}"))
-                    grant_id=int(cur.lastrowid)
-                    conn.execute("INSERT INTO gamification_event_rewards(event_id,user_id,bonus_grant_id,amount_kwh,granted_at) VALUES(?,?,?,?,?)",
-                        (event["id"],winner["user_id"],grant_id,amount,now_iso))
-                    result.update({"grant_id":grant_id,"amount_kwh":amount})
-                if len(result)>2:
-                    finalized.append(result)
-            conn.execute("UPDATE gamification_events SET finalized_at=? WHERE id=?",(now_iso,event["id"]))
-        conn.commit()
-    return finalized
-
-
-def _event_detail_summary(event,board):
-    participants=sum(1 for x in board if int(x.get("sessions") or 0)>0 or float(x.get("energy_kwh") or 0)>0)
-    qualified=sum(1 for x in board if x.get("qualified") and x.get("value") is not None)
-    top3=[x for x in board if x.get("rank") is not None and int(x.get("rank") or 0)<=3]
-    return {"participant_count":participants,"qualified_count":qualified,"top3":top3}
-
-
-def gamification_event_detail(event_id):
-    finalize_ended_gamification_events()
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT * FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return None
-        d=dict(event)
-        d["event_state"]=_event_state(d)
-        d["finalized"]=bool(d.get("finalized_at"))
-        board=_event_snapshot_board_conn(conn,event) if d["finalized"] else _event_leaderboard_conn(conn,event)
-        d["leaderboard"]=board
-        d.update(_event_detail_summary(event,board))
-        d["rewards"]=_event_rewards_conn(conn,event_id)
-        d["badge_awards"]=_event_badge_awards_conn(conn,event)
-        return d
-
 BRANDING_DEFAULTS = {
     "product_name":"VoltCore Community",
     "organization_name":"Ihre Organisation",
@@ -6040,711 +4913,6 @@ def _setting_int(key, default, minimum=0, maximum=3650):
         value=int(default)
     return max(int(minimum), min(int(maximum), value))
 
-
-def _bonus_policy_settings_conn(conn):
-    def intval(key,default,minimum,maximum):
-        row=conn.execute("SELECT value FROM app_settings WHERE key=?",(key,)).fetchone()
-        try: value=int(row[0]) if row else int(default)
-        except (TypeError,ValueError): value=int(default)
-        return max(minimum,min(maximum,value))
-    def boolval(key,default):
-        row=conn.execute("SELECT value FROM app_settings WHERE key=?",(key,)).fetchone()
-        value=row[0] if row else ("1" if default else "0")
-        return str(value or "").strip().lower() in {"1","true","yes","on"}
-    validity=intval("bonus_default_valid_days",90,1,730)
-    transfer_after=intval("bonus_transfer_after_days",30,0,729)
-    if transfer_after>=validity: transfer_after=max(0,validity-1)
-    return {"default_valid_days":validity,"transfer_after_days":transfer_after,"transfer_enabled":boolval("bonus_transfer_enabled",True)}
-
-
-def bonus_policy_settings():
-    with _lock,_connect() as conn:
-        return _bonus_policy_settings_conn(conn)
-
-
-def set_bonus_policy_settings(default_valid_days, transfer_after_days, transfer_enabled=True):
-    validity=max(1,min(730,int(default_valid_days)))
-    transfer_after=max(0,min(729,int(transfer_after_days)))
-    if transfer_after>=validity:
-        raise ValueError("Weitergabe muss vor Ablauf der Bonusgültigkeit möglich werden")
-    set_setting("bonus_default_valid_days",validity)
-    set_setting("bonus_transfer_after_days",transfer_after)
-    set_setting("bonus_transfer_enabled","1" if transfer_enabled else "0")
-    return bonus_policy_settings()
-
-
-def active_event_leaderboards_for_portal(user_id):
-    now=utc_now()
-    show_names=setting_bool("portal_leaderboard_show_names", False)
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user or not bool(user["gamification_enabled"]):
-            return []
-        events=conn.execute("SELECT * FROM gamification_events WHERE active=1 AND starts_at<=? AND ends_at>? ORDER BY ends_at",(now,now)).fetchall()
-        result=[]
-        for event in events:
-            board=_event_leaderboard_conn(conn,event)
-            safe=[]
-            for item in board:
-                mine=item["user_id"]==user_id
-                safe.append({
-                    "rank":item["rank"],
-                    "name":item["name"] if (mine or show_names) else "********",
-                    "sessions":item["sessions"],
-                    "energy_kwh":item["energy_kwh"],
-                    "value":item["value"],
-                    "qualified":item.get("qualified",True),
-                    "qualification_sessions":item.get("qualification_sessions"),
-                    "min_sessions":item.get("min_sessions"),
-                    "min_session_kwh":item.get("min_session_kwh"),
-                    "avg_stand_seconds":item.get("avg_stand_seconds"),
-                    "total_stand_seconds":item.get("total_stand_seconds"),
-                    "unplug_ratio":item.get("unplug_ratio"),
-                    "avg_energy_kwh":item.get("avg_energy_kwh"),
-                    "quick_unplug_sessions":item.get("quick_unplug_sessions"),
-                    "is_me":mine,
-                })
-            e=dict(event); e["leaderboard"]=safe; e["names_visible"]=show_names; result.append(e)
-        return result
-
-
-def _leaderboard_bounds(period, now=None):
-    berlin=ZoneInfo("Europe/Berlin")
-    current=(now or datetime.now(timezone.utc)).astimezone(berlin)
-    if period=="month":
-        start=current.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
-        end=(start.replace(year=start.year+1,month=1) if start.month==12 else start.replace(month=start.month+1))
-        label=start.strftime("%m/%Y")
-    elif period=="year":
-        start=current.replace(month=1,day=1,hour=0,minute=0,second=0,microsecond=0)
-        end=start.replace(year=start.year+1)
-        label=str(start.year)
-    elif period=="all":
-        return None,None,"Gesamt"
-    else:
-        raise ValueError("Ungültiger Ranglisten-Zeitraum")
-    return start.astimezone(timezone.utc).isoformat(),end.astimezone(timezone.utc).isoformat(),label
-
-
-def leaderboard_metric_catalog():
-    keys=set(LEADERBOARD_ALWAYS_ENABLED)
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT DISTINCT metric FROM achievements
-            WHERE active=1 AND COALESCE(leaderboard_enabled,0)=1 AND COALESCE(system_secret,0)=0""").fetchall()
-    for r in rows:
-        key=_leaderboard_metric_key(r["metric"])
-        if key:
-            keys.add(key)
-    result=[]
-    for key in keys:
-        meta=LEADERBOARD_METRIC_META.get(key)
-        if not meta:
-            continue
-        result.append({"key":key,**meta})
-    result.sort(key=lambda x:(int(x.get("order") or 999),x["label"].casefold()))
-    return result
-
-
-def _leaderboard_tx_rows_conn(conn,user_id,start=None,end=None):
-    date_sql=""
-    params=[int(user_id),int(user_id),int(user_id)]
-    if start is not None:
-        date_sql=" AND t.started_at>=? AND t.started_at<?"
-        params.extend([start,end])
-    return conn.execute("""SELECT t.* FROM transactions t
-        WHERE (t.user_id=? OR (
-          t.user_id IS NULL AND (
-            t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?)
-            OR t.id_tag=(SELECT rfid FROM users WHERE id=?)
-          )
-        ))"""+date_sql+" ORDER BY t.started_at",params).fetchall()
-
-
-def _leaderboard_metric_value_conn(conn,user_id,metric,start=None,end=None):
-    if metric in {"xp","achievement_count"}:
-        date_sql=""; params=[int(user_id)]
-        if start is not None:
-            date_sql=" AND x.awarded_at>=? AND x.awarded_at<?"
-            params.extend([start,end])
-        row=conn.execute("""SELECT COALESCE(SUM(CASE WHEN a.active=1 THEN COALESCE(a.xp,0) ELSE 0 END),0) AS xp,
-                                  COUNT(CASE WHEN a.active=1 THEN a.id END) AS achievements
-            FROM achievement_awards x JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=?"""+date_sql,params).fetchone()
-        return float(row["xp"] or 0) if metric=="xp" else float(row["achievements"] or 0)
-
-    rows=_leaderboard_tx_rows_conn(conn,user_id,start,end)
-    if metric=="energy_kwh":
-        return sum(float(r["energy_kwh"] or 0) for r in rows)
-    if metric=="sessions":
-        return float(len(rows))
-    if metric=="charging_hours_total":
-        total=0.0
-        for r in rows:
-            charging,_,_=_analytics_row_timing_conn(conn,r)
-            total+=charging/3600.0
-        return total
-    if metric=="max_session_energy":
-        return max([float(r["energy_kwh"] or 0) for r in rows] or [0.0])
-    if metric=="max_session_power":
-        return max([float(r["max_power_kw"] or 0) for r in rows] or [0.0])
-    if metric=="distinct_charge_points":
-        return float(len({str(r["charge_point_id"]) for r in rows if r["charge_point_id"] not in (None,"")}))
-    if metric=="distinct_vehicles":
-        return float(len({int(r["vehicle_id"]) for r in rows if r["vehicle_id"] not in (None,"")}))
-    if metric=="days_active":
-        return float(len({dt.date().isoformat() for r in rows if (dt:=_tx_local_start(r))}))
-    if metric=="months_active":
-        return float(len({(dt.year,dt.month) for r in rows if (dt:=_tx_local_start(r))}))
-    if metric=="weekend_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and dt.weekday()>=5))
-    if metric=="early_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and 5<=dt.hour<8))
-    if metric=="evening_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and 17<=dt.hour<22))
-    if metric=="night_sessions":
-        return float(sum(1 for r in rows if (dt:=_tx_local_start(r)) and (dt.hour>=22 or dt.hour<5)))
-    if metric in {"long_sessions","quick_sessions"}:
-        count=0
-        for r in rows:
-            charging,stand,connection=_analytics_row_timing_conn(conn,r)
-            seconds=max(float(connection or 0),float(charging or 0)+float(stand or 0))
-            energy=float(r["energy_kwh"] or 0)
-            if metric=="long_sessions" and seconds>=4*3600:
-                count+=1
-            if metric=="quick_sessions" and energy>0 and 0<seconds<=45*60:
-                count+=1
-        return float(count)
-    if metric=="prompt_unplug_sessions":
-        count=0
-        for r in rows:
-            if "post_session_occupied_seconds" not in r.keys() or r["post_session_occupied_seconds"] is None:
-                continue
-            try: seconds=float(r["post_session_occupied_seconds"])
-            except (TypeError,ValueError): continue
-            if float(r["energy_kwh"] or 0)>0 and 0<=seconds<=PROMPT_UNPLUG_SECONDS:
-                count+=1
-        return float(count)
-    if metric in {"max_month_energy","max_month_sessions"}:
-        months={}
-        for r in rows:
-            dt=_tx_local_start(r)
-            if not dt:
-                continue
-            key=(dt.year,dt.month)
-            bucket=months.setdefault(key,{"energy":0.0,"sessions":0})
-            bucket["energy"]+=float(r["energy_kwh"] or 0)
-            bucket["sessions"]+=1
-        if not months:
-            return 0.0
-        key="energy" if metric=="max_month_energy" else "sessions"
-        return float(max(x[key] for x in months.values()))
-    if metric=="week_streak":
-        return float(_max_consecutive_iso_weeks(rows))
-    return 0.0
-
-
-def general_leaderboard(period="month", metric="energy_kwh", now=None):
-    available={x["key"] for x in leaderboard_metric_catalog()}
-    if metric not in available:
-        raise ValueError("Ungültige oder deaktivierte Ranking-Metrik")
-    start,end,label=_leaderboard_bounds(period,now)
-    if metric in {"xp","achievement_count"}:
-        reconcile_automatic_achievements()
-    with _lock,_connect() as conn:
-        users=conn.execute("""SELECT id,name FROM users
-            WHERE status='Aktiv' AND COALESCE(gamification_enabled,1)=1
-            ORDER BY name COLLATE NOCASE""").fetchall()
-        items=[]
-        for user in users:
-            value=float(_leaderboard_metric_value_conn(conn,int(user["id"]),metric,start,end) or 0)
-            items.append({
-                "user_id":int(user["id"]),"name":user["name"],"value":round(value,3),
-            })
-        items.sort(key=lambda x:(-x["value"],x["name"].casefold()))
-        rank=0; last=None
-        for i,item in enumerate(items,1):
-            if last is None or item["value"]!=last:
-                rank=i; last=item["value"]
-            item["rank"]=rank
-        meta=LEADERBOARD_METRIC_META[metric]
-        return {
-            "period":period,"period_label":label,"metric":metric,
-            "metric_label":meta["label"],"metric_icon":meta["icon"],"metric_description":meta.get("description",""),"unit":meta["unit"],
-            "decimals":meta["decimals"],"leaderboard":items,
-        }
-
-
-
-PORTAL_LEADERBOARD_PERIODS=[
-    {"key":"month","label":"Dieser Monat"},
-    {"key":"year","label":"Dieses Jahr"},
-    {"key":"all","label":"Gesamt"},
-]
-
-
-def portal_general_leaderboards(user_id, period="all", metric="xp"):
-    """Return one privacy-safe permanent leaderboard plus the selectable catalogue."""
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user or not bool(user["gamification_enabled"]):
-            return {
-                "board":None,
-                "metrics":leaderboard_metric_catalog(),
-                "periods":PORTAL_LEADERBOARD_PERIODS,
-                "selected_metric":None,
-                "selected_period":"all",
-                "names_visible":setting_bool("portal_leaderboard_show_names",False),
-            }
-
-    catalog=leaderboard_metric_catalog()
-    available={x["key"] for x in catalog}
-    selected_metric=str(metric or "xp")
-    if selected_metric not in available:
-        selected_metric="xp" if "xp" in available else ("energy_kwh" if "energy_kwh" in available else (catalog[0]["key"] if catalog else None))
-
-    selected_period=str(period or "all")
-    if selected_period not in {"month","year","all"}:
-        selected_period="all"
-
-    show_names=setting_bool("portal_leaderboard_show_names",False)
-    board=general_leaderboard(selected_period,selected_metric) if selected_metric else None
-    if board:
-        safe=[]
-        for item in board["leaderboard"]:
-            mine=int(item["user_id"])==int(user_id)
-            safe.append({
-                **item,
-                "name":item["name"] if (mine or show_names) else "********",
-                "is_me":mine,
-            })
-        board["leaderboard"]=safe
-        board["title"]=f"{board.get('metric_icon') or '🏁'} {board.get('metric_label') or selected_metric}"
-        board["my_entry"]=next((x for x in safe if x["is_me"]),None)
-
-    return {
-        "board":board,
-        "metrics":catalog,
-        "periods":PORTAL_LEADERBOARD_PERIODS,
-        "selected_metric":selected_metric,
-        "selected_period":selected_period,
-        "names_visible":show_names,
-    }
-
-
-
-def _bonus_wallet_conn(conn,user_id,now=None):
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    now_iso=now_dt.isoformat()
-    policy=_bonus_policy_settings_conn(conn)
-    rows=conn.execute("""SELECT g.*,
-        CASE WHEN g.active=0 THEN 'inactive' WHEN g.expires_at<=? THEN 'expired' WHEN g.remaining_kwh<=0.0000001 THEN 'used' ELSE 'available' END AS state
-        FROM bonus_grants g WHERE g.user_id=? ORDER BY g.expires_at,g.granted_at,g.id""",(now_iso,user_id)).fetchall()
-    items=[]
-    transferable=0.0; next_transfer_at=None
-    for row in rows:
-        item=dict(row)
-        granted=_parse_iso_utc(item.get("granted_at")) or now_dt
-        eligible_at=granted+timedelta(days=policy["transfer_after_days"])
-        item["transfer_eligible_at"]=eligible_at.isoformat()
-        expiry_dt=_parse_iso_utc(item.get("expires_at")) or eligible_at
-        item["transfer_unlocks_before_expiry"]=bool(eligible_at<expiry_dt)
-        item["transferable"]=bool(policy["transfer_enabled"] and item["state"]=="available" and eligible_at<=now_dt and item["transfer_unlocks_before_expiry"])
-        if item["transferable"]:
-            transferable+=float(item.get("remaining_kwh") or 0)
-        elif policy["transfer_enabled"] and item["state"]=="available" and item["transfer_unlocks_before_expiry"]:
-            if next_transfer_at is None or eligible_at.isoformat()<next_transfer_at: next_transfer_at=eligible_at.isoformat()
-        items.append(item)
-    available=sum(float(x["remaining_kwh"] or 0) for x in items if x["state"]=="available")
-    next_expiry=next((x["expires_at"] for x in items if x["state"]=="available"),None)
-    return {"available_kwh":round(available,3),"transferable_kwh":round(transferable,3),"next_transfer_at":next_transfer_at,"expiring_next":next_expiry,"grants":items,"policy":policy}
-
-
-def bonus_wallet(user_id,now=None):
-    with _lock,_connect() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE id=?",(user_id,)).fetchone(): return None
-        return _bonus_wallet_conn(conn,user_id,now)
-
-
-def grant_bonus_kwh(user_id,amount_kwh,expires_at,source="admin",note=None,voucher_id=None):
-    amount=float(amount_kwh or 0)
-    if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-    expiry=_parse_iso_utc(expires_at)
-    if not expiry or expiry<=datetime.now(timezone.utc): raise ValueError("Ablaufdatum muss in der Zukunft liegen")
-    with _lock,_connect() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE id=?",(user_id,)).fetchone(): raise ValueError("Benutzer nicht gefunden")
-        cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,?,?,?,1)",(user_id,amount,amount,utc_now(),expiry.isoformat(),source,note or None,voucher_id))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def revoke_bonus_grant(grant_id):
-    with _lock,_connect() as conn:
-        used=conn.execute("SELECT COALESCE(SUM(amount_kwh),0) FROM bonus_usage WHERE grant_id=?",(grant_id,)).fetchone()[0]
-        if float(used or 0)>1e-9: raise ValueError("Bereits verwendetes Bonusguthaben kann nicht widerrufen werden")
-        cur=conn.execute("UPDATE bonus_grants SET active=0,remaining_kwh=0 WHERE id=? AND active=1",(grant_id,)); conn.commit(); return cur.rowcount>0
-
-
-def _allocate_bonus_for_transaction_conn(conn,tx_id,user_id,session_energy,used_at=None):
-    # Idempotent: a completed transaction is allocated at most once.
-    if conn.execute("SELECT 1 FROM bonus_usage WHERE transaction_id=? LIMIT 1",(tx_id,)).fetchone(): return 0.0
-    tx=conn.execute("SELECT started_at FROM transactions WHERE id=?",(tx_id,)).fetchone()
-    if not tx: return 0.0
-    started=_parse_iso_utc(tx["started_at"])
-    if not started: return 0.0
-    start_utc,end_utc,_=_month_bounds_utc(started)
-    user=conn.execute("SELECT monthly_kwh_limit FROM users WHERE id=?",(user_id,)).fetchone()
-    if not user or user["monthly_kwh_limit"] is None: return 0.0
-    limit=max(0.0,float(user["monthly_kwh_limit"]))
-    prior=conn.execute("""SELECT COALESCE(SUM(energy_kwh),0) FROM transactions
-        WHERE id<>? AND (user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?))))
-          AND started_at>=? AND started_at<? AND (ended_at IS NOT NULL OR status<>'Active')""",(tx_id,user_id,user_id,user_id,start_utc,end_utc)).fetchone()[0]
-    base_remaining=max(0.0,limit-float(prior or 0))
-    need=max(0.0,float(session_energy or 0)-base_remaining)
-    if need<=1e-9: return 0.0
-    when=_parse_iso_utc(used_at) or datetime.now(timezone.utc)
-    # Eligibility is frozen at session start: a package that was valid when the
-    # user started charging may finish that session even if it expires meanwhile.
-    rows=conn.execute("""SELECT * FROM bonus_grants WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001 AND granted_at<=? AND expires_at>? ORDER BY expires_at,granted_at,id""",(user_id,started.isoformat(),started.isoformat())).fetchall()
-    allocated=0.0
-    for grant in rows:
-        if need<=1e-9: break
-        take=min(need,float(grant["remaining_kwh"] or 0))
-        if take<=1e-9: continue
-        conn.execute("INSERT OR IGNORE INTO bonus_usage(grant_id,user_id,transaction_id,amount_kwh,used_at) VALUES(?,?,?,?,?)",(grant["id"],user_id,tx_id,take,when.isoformat()))
-        conn.execute("UPDATE bonus_grants SET remaining_kwh=MAX(0,remaining_kwh-?) WHERE id=?",(take,grant["id"]))
-        allocated+=take; need-=take
-    return round(allocated,6)
-
-
-def list_bonus_grants(limit=250):
-    with _lock,_connect() as conn:
-        now=utc_now()
-        return [dict(r) for r in conn.execute("""SELECT g.*,u.name AS user_name,
-            CASE WHEN g.active=0 THEN 'inactive' WHEN g.expires_at<=? THEN 'expired' WHEN g.remaining_kwh<=0.0000001 THEN 'used' ELSE 'available' END AS state
-            FROM bonus_grants g JOIN users u ON u.id=g.user_id ORDER BY g.id DESC LIMIT ?""",(now,limit)).fetchall()]
-
-
-def create_bonus_voucher(code,amount_kwh,redeem_until=None,bonus_valid_days=None,max_redemptions=1,note=None,active=True):
-    code=str(code or "").strip().upper()
-    if len(code)<6: raise ValueError("Gutscheincode muss mindestens 6 Zeichen haben")
-    amount=float(amount_kwh or 0)
-    if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-    days=max(1,int(bonus_valid_days or bonus_policy_settings()["default_valid_days"])); max_redemptions=max(1,int(max_redemptions or 1))
-    if redeem_until and not _parse_iso_utc(redeem_until): raise ValueError("Ungültiges Einlöse-Ende")
-    with _lock,_connect() as conn:
-        try:
-            cur=conn.execute("INSERT INTO bonus_vouchers(code,amount_kwh,redeem_until,bonus_valid_days,max_redemptions,active,note,created_at) VALUES(?,?,?,?,?,?,?,?)",(code,amount,redeem_until,days,max_redemptions,1 if active else 0,note or None,utc_now()))
-        except sqlite3.IntegrityError: raise ValueError("Dieser Gutscheincode existiert bereits")
-        conn.commit(); return int(cur.lastrowid)
-
-
-def list_bonus_vouchers():
-    with _lock,_connect() as conn:
-        return [dict(r) for r in conn.execute("""SELECT v.*,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v ORDER BY v.id DESC""").fetchall()]
-
-
-def set_bonus_voucher_active(voucher_id,active):
-    with _lock,_connect() as conn:
-        cur=conn.execute("UPDATE bonus_vouchers SET active=? WHERE id=?",(1 if active else 0,voucher_id)); conn.commit(); return cur.rowcount>0
-
-def update_bonus_voucher(voucher_id, code=None, amount_kwh=None, redeem_until=None, bonus_valid_days=None, max_redemptions=None, note=None, active=True):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT v.*,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v WHERE v.id=?""",(int(voucher_id),)).fetchone()
-        if not row: return False
-        if int(row["redemptions"] or 0)>0:
-            raise ValueError("Dieser Gutschein wurde bereits eingelöst und kann nicht mehr inhaltlich bearbeitet werden. Er kann nur deaktiviert werden.")
-        clean_code=str(code or row["code"] or "").strip().upper()
-        if len(clean_code)<6: raise ValueError("Gutscheincode muss mindestens 6 Zeichen haben")
-        amount=float(row["amount_kwh"] if amount_kwh is None else amount_kwh)
-        if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-        days=max(1,int(row["bonus_valid_days"] if bonus_valid_days is None else bonus_valid_days))
-        maximum=max(1,int(row["max_redemptions"] if max_redemptions is None else max_redemptions))
-        if redeem_until and not _parse_iso_utc(redeem_until): raise ValueError("Ungültiges Einlöse-Ende")
-        try:
-            conn.execute("""UPDATE bonus_vouchers SET code=?,amount_kwh=?,redeem_until=?,bonus_valid_days=?,max_redemptions=?,active=?,note=?
-                WHERE id=?""",(clean_code,amount,redeem_until,days,maximum,1 if active else 0,note or None,int(voucher_id)))
-            conn.commit(); return True
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("Dieser Gutscheincode existiert bereits") from exc
-
-
-def delete_bonus_voucher(voucher_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT v.id,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v WHERE v.id=?""",(int(voucher_id),)).fetchone()
-        if not row: return False
-        if int(row["redemptions"] or 0)>0:
-            raise ValueError("Dieser Gutschein wurde bereits eingelöst und kann aus Nachvollziehbarkeitsgründen nicht gelöscht werden. Bitte deaktivieren.")
-        conn.execute("DELETE FROM bonus_vouchers WHERE id=?",(int(voucher_id),))
-        conn.commit(); return True
-
-
-
-def redeem_bonus_voucher(user_id,code):
-    code=str(code or "").strip().upper(); now=datetime.now(timezone.utc); now_iso=now.isoformat()
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT id FROM users WHERE id=? AND status='Aktiv'",(user_id,)).fetchone()
-        if not user: raise ValueError("Benutzer nicht gefunden")
-        v=conn.execute("SELECT * FROM bonus_vouchers WHERE code=? COLLATE NOCASE",(code,)).fetchone()
-        if not v or not bool(v["active"]): raise ValueError("Gutschein ist ungültig oder nicht aktiv")
-        if v["redeem_until"] and (_parse_iso_utc(v["redeem_until"]) or now)<=now: raise ValueError("Gutschein ist abgelaufen")
-        if conn.execute("SELECT 1 FROM bonus_voucher_redemptions WHERE voucher_id=? AND user_id=?",(v["id"],user_id)).fetchone(): raise ValueError("Dieser Gutschein wurde bereits eingelöst")
-        count=conn.execute("SELECT COUNT(*) FROM bonus_voucher_redemptions WHERE voucher_id=?",(v["id"],)).fetchone()[0]
-        if int(count)>=int(v["max_redemptions"]): raise ValueError("Gutschein ist vollständig eingelöst")
-        expires=(now+timedelta(days=max(1,int(v["bonus_valid_days"] or _bonus_policy_settings_conn(conn)["default_valid_days"])))).isoformat()
-        cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,'voucher',?,?,1)",(user_id,float(v["amount_kwh"]),float(v["amount_kwh"]),now_iso,expires,v["note"],v["id"]))
-        grant_id=int(cur.lastrowid)
-        conn.execute("INSERT INTO bonus_voucher_redemptions(voucher_id,user_id,grant_id,redeemed_at) VALUES(?,?,?,?)",(v["id"],user_id,grant_id,now_iso))
-        conn.commit(); return {"grant_id":grant_id,"amount_kwh":float(v["amount_kwh"]),"expires_at":expires}
-
-
-def bonus_transfer_recipients(user_id):
-    with _lock,_connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT id,name FROM users WHERE status='Aktiv' AND id<>? ORDER BY name COLLATE NOCASE",(user_id,)).fetchall()]
-
-
-def bonus_transfer_history(user_id,limit=20):
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT bt.*,fu.name AS from_name,tu.name AS to_name
-            FROM bonus_transfers bt JOIN users fu ON fu.id=bt.from_user_id JOIN users tu ON tu.id=bt.to_user_id
-            WHERE bt.from_user_id=? OR bt.to_user_id=? ORDER BY bt.id DESC LIMIT ?""",(user_id,user_id,max(1,min(int(limit or 20),100)))).fetchall()
-        return [dict(r) for r in rows]
-
-
-def transfer_bonus_kwh(from_user_id,to_user_id,amount_kwh,now=None):
-    policy=bonus_policy_settings()
-    if not policy["transfer_enabled"]: raise ValueError("Die Weitergabe von Bonus-kWh ist derzeit deaktiviert")
-    if int(from_user_id)==int(to_user_id): raise ValueError("Bonus-kWh können nicht an sich selbst übertragen werden")
-    amount=round(float(amount_kwh or 0),6)
-    if amount<=0: raise ValueError("Bitte eine Bonusmenge größer als 0 kWh angeben")
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    now_iso=now_dt.isoformat(); cutoff=(now_dt-timedelta(days=policy["transfer_after_days"])).isoformat()
-    with _lock,_connect() as conn:
-        sender=conn.execute("SELECT id,name FROM users WHERE id=? AND status='Aktiv'",(from_user_id,)).fetchone()
-        recipient=conn.execute("SELECT id,name FROM users WHERE id=? AND status='Aktiv'",(to_user_id,)).fetchone()
-        if not sender: raise ValueError("Absender nicht gefunden oder nicht aktiv")
-        if not recipient: raise ValueError("Empfänger nicht gefunden oder nicht aktiv")
-        rows=conn.execute("""SELECT * FROM bonus_grants WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001
-            AND expires_at>? AND granted_at<=? ORDER BY expires_at,granted_at,id""",(from_user_id,now_iso,cutoff)).fetchall()
-        eligible=round(sum(float(r["remaining_kwh"] or 0) for r in rows),6)
-        if eligible+1e-9<amount: raise ValueError(f"Aktuell sind maximal {eligible:.1f} Bonus-kWh übertragbar")
-        remaining=amount; parts=[]
-        try:
-            for source in rows:
-                if remaining<=1e-9: break
-                take=min(remaining,float(source["remaining_kwh"] or 0))
-                if take<=1e-9: continue
-                note=f"Übertragen von {sender['name']}"
-                cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,'transfer',?,NULL,1)",(to_user_id,take,take,now_iso,source["expires_at"],note))
-                target_id=int(cur.lastrowid)
-                conn.execute("UPDATE bonus_grants SET remaining_kwh=MAX(0,remaining_kwh-?) WHERE id=?",(take,source["id"]))
-                conn.execute("INSERT INTO bonus_transfers(from_user_id,to_user_id,source_grant_id,target_grant_id,amount_kwh,transferred_at,expires_at) VALUES(?,?,?,?,?,?,?)",(from_user_id,to_user_id,source["id"],target_id,take,now_iso,source["expires_at"]))
-                parts.append({"source_grant_id":source["id"],"target_grant_id":target_id,"amount_kwh":round(take,6),"expires_at":source["expires_at"]})
-                remaining-=take
-            conn.commit()
-        except Exception:
-            conn.rollback(); raise
-        return {"amount_kwh":round(amount,3),"to_user_id":int(to_user_id),"to_name":recipient["name"],"parts":parts}
-
-
-def _portal_driver_profile(user_id, tx_rows, analytics, gamification, achievements):
-    berlin=ZoneInfo("Europe/Berlin")
-    parsed=[]
-    for row in tx_rows:
-        started=_parse_iso_utc(row["started_at"])
-        if not started:
-            continue
-        parsed.append((row,started.astimezone(berlin)))
-
-    favorite_cp=None
-    cp_stats={}
-    for row,started in parsed:
-        cp=str(row["charge_point_id"] or "").strip()
-        if not cp:
-            continue
-        bucket=cp_stats.setdefault(cp,{"sessions":0,"energy_kwh":0.0})
-        bucket["sessions"]+=1
-        bucket["energy_kwh"]+=float(row["energy_kwh"] or 0)
-    if cp_stats:
-        favorite_id,favorite_data=max(cp_stats.items(),key=lambda x:(x[1]["sessions"],x[1]["energy_kwh"],x[0]))
-        with _lock,_connect() as conn:
-            cp_row=conn.execute("SELECT id,location FROM charge_points WHERE id=?",(favorite_id,)).fetchone()
-        favorite_cp={
-            "id":favorite_id,
-            "label":(cp_row["location"] if cp_row and cp_row["location"] else favorite_id),
-            "sessions":int(favorite_data["sessions"]),
-            "energy_kwh":round(float(favorite_data["energy_kwh"]),2),
-        }
-
-    dayparts={
-        "morning":{"label":"Frühlader","icon":"🌅","sessions":0},
-        "day":{"label":"Tagsüber","icon":"☀️","sessions":0},
-        "evening":{"label":"Feierabend-Lader","icon":"🌇","sessions":0},
-        "night":{"label":"Nachtlader","icon":"🌙","sessions":0},
-    }
-    weekdays=[{"label":x,"sessions":0} for x in ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag","Sonntag"]]
-    active_days=set()
-    for _,started in parsed:
-        active_days.add(started.date().isoformat())
-        weekdays[started.weekday()]["sessions"]+=1
-        hour=started.hour
-        if 5<=hour<9:
-            dayparts["morning"]["sessions"]+=1
-        elif 9<=hour<17:
-            dayparts["day"]["sessions"]+=1
-        elif 17<=hour<22:
-            dayparts["evening"]["sessions"]+=1
-        else:
-            dayparts["night"]["sessions"]+=1
-    preferred_daypart=max(dayparts.values(),key=lambda x:x["sessions"]) if parsed else None
-    preferred_weekday=max(weekdays,key=lambda x:x["sessions"]) if parsed else None
-
-    record_energy=None
-    record_power=None
-    if tx_rows:
-        energy_row=max(tx_rows,key=lambda r:float(r["energy_kwh"] or 0))
-        power_row=max(tx_rows,key=lambda r:float(r["max_power_kw"] or 0))
-        if float(energy_row["energy_kwh"] or 0)>0:
-            record_energy={"value":round(float(energy_row["energy_kwh"] or 0),2),"started_at":energy_row["started_at"]}
-        if float(power_row["max_power_kw"] or 0)>0:
-            record_power={"value":round(float(power_row["max_power_kw"] or 0),2),"started_at":power_row["started_at"]}
-
-    current=(analytics or {}).get("current_month") or {}
-    previous=(analytics or {}).get("previous_month") or {}
-    def delta(current_value,previous_value):
-        current_value=float(current_value or 0)
-        previous_value=float(previous_value or 0)
-        if previous_value<=0:
-            return None if current_value>0 else 0.0
-        return round((current_value-previous_value)/previous_value*100.0,1)
-    month_compare={
-        "current_energy_kwh":round(float(current.get("energy_kwh") or 0),2),
-        "previous_energy_kwh":round(float(previous.get("energy_kwh") or 0),2),
-        "energy_delta_pct":delta(current.get("energy_kwh"),previous.get("energy_kwh")),
-        "current_sessions":int(current.get("sessions") or 0),
-        "previous_sessions":int(previous.get("sessions") or 0),
-        "sessions_delta_pct":delta(current.get("sessions"),previous.get("sessions")),
-    }
-
-    month_buckets={}
-    for row,started in parsed:
-        key=started.strftime("%Y-%m")
-        bucket=month_buckets.setdefault(key,{"month":key,"label":f"{started.month:02d}/{started.year}","sessions":0,"energy_kwh":0.0})
-        bucket["sessions"]+=1
-        bucket["energy_kwh"]+=float(row["energy_kwh"] or 0)
-    best_month=max(month_buckets.values(),key=lambda x:(float(x["energy_kwh"]),int(x["sessions"]))) if month_buckets else None
-    if best_month:
-        best_month={**best_month,"energy_kwh":round(float(best_month["energy_kwh"]),2)}
-
-    earned=[x for x in (achievements or []) if x.get("earned")]
-    recent=sorted(earned,key=lambda x:str(x.get("awarded_at") or ""),reverse=True)[:5]
-    rarity_order={"common":1,"uncommon":2,"rare":3,"epic":4,"legendary":5,"secret":6}
-    rarity_labels={"common":"Gewöhnlich","uncommon":"Ungewöhnlich","rare":"Selten","epic":"Episch","legendary":"Legendär","secret":"Geheim"}
-    rarest=max(earned,key=lambda x:(rarity_order.get(str(x.get("rarity") or "common"),0),int(x.get("xp") or 0))) if earned else None
-    for item in recent:
-        item["rarity_label"]=rarity_labels.get(str(item.get("rarity") or "common"),"Gewöhnlich")
-    if rarest:
-        rarest=dict(rarest)
-        rarest["rarity_label"]=rarity_labels.get(str(rarest.get("rarity") or "common"),"Gewöhnlich")
-
-    xp_rank=None
-    participants=0
-    if gamification:
-        overview=gamification_overview()
-        participants=len(overview)
-        xp_rank=next((int(x["rank"]) for x in overview if int(x["user_id"])==int(user_id)),None)
-
-    primary_vehicle=primary_vehicle_for_user(user_id)
-    first_started=min((dt for _,dt in parsed),default=None)
-
-    return {
-        "xp_rank":xp_rank,
-        "participants":participants,
-        "favorite_charge_point":favorite_cp,
-        "preferred_daypart":preferred_daypart if preferred_daypart and preferred_daypart["sessions"] else None,
-        "preferred_weekday":preferred_weekday if preferred_weekday and preferred_weekday["sessions"] else None,
-        "record_energy":record_energy,
-        "record_power":record_power,
-        "active_days":len(active_days),
-        "charging_since":first_started.date().isoformat() if first_started else None,
-        "month_compare":month_compare,
-        "best_month":best_month,
-        "recent_achievements":recent,
-        "rarest_achievement":rarest,
-        "primary_vehicle":primary_vehicle,
-        "all_time_energy_kwh":round(float(((analytics or {}).get("all_time") or {}).get("energy_kwh") or 0),2),
-        "all_time_sessions":int(((analytics or {}).get("all_time") or {}).get("sessions") or 0),
-    }
-
-
-def portal_dashboard(user_id, period=None, include_inactive=False, ranking_metric=None, ranking_period=None):
-    evaluate_user_achievements(user_id)
-    start,end,month=_month_bounds_utc()
-    with _lock,_connect() as conn:
-        status_clause="" if include_inactive else " AND status='Aktiv'"
-        row=conn.execute("SELECT id,name,role,department,status,monthly_kwh_limit,monthly_limit_mode,portal_last_login_at,gamification_enabled,image_path FROM users WHERE id=?"+status_clause,(user_id,)).fetchone()
-        if not row: return None
-        user=dict(row)
-        tx_rows=conn.execute("""SELECT t.* FROM transactions t
-            WHERE t.user_id=? OR (t.user_id IS NULL AND (t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR t.id_tag=(SELECT rfid FROM users WHERE id=?)))
-            ORDER BY t.started_at""",(user_id,user_id,user_id)).fetchall()
-        period_ctx=_portal_period_context(tx_rows,period)
-        period_summary,selected_rows=_portal_period_summary_conn(conn,tx_rows,period_ctx)
-        period_budget=None
-        if period_ctx.get("selected_key")!="all":
-            period_used=max(0.0,float(period_summary.get("energy_kwh") or 0))
-            period_limit=user.get("monthly_kwh_limit")
-            period_mode=user.get("monthly_limit_mode") or "warn"
-            period_state=_budget_status(period_limit,period_used,period_mode)
-            period_budget={
-                "month":period_ctx.get("selected_key"),
-                "label":period_ctx.get("selected_label"),
-                "limit_kwh":None if period_limit is None else float(period_limit),
-                "used_kwh":round(period_used,3),
-                "mode":period_mode,
-                **period_state,
-            }
-        selected_ids={int(r["id"]) for r in selected_rows}
-        recent=[]
-        for r in reversed(tx_rows):
-            if int(r["id"]) not in selected_ids: continue
-            recent.append({k:r[k] for k in ("id","started_at","ended_at","energy_kwh","status","charge_point_id","cost_cents","tariff_name")})
-            if len(recent)>=12: break
-    budget=user_monthly_budget(user_id)
-    analytics=user_analytics(user_id)
-    achievements=achievements_for_user(user_id,include_locked=True)
-    events=active_event_leaderboards_for_portal(user_id)
-    ranking=portal_general_leaderboards(user_id,period=ranking_period or "all",metric=ranking_metric or "xp")
-    general_rankings=[ranking["board"]] if ranking.get("board") else []
-    gamification=user_gamification_profile(user_id) if bool(user.get("gamification_enabled",1)) else None
-    gamification_reveals=(portal_gamification_reveals(user_id) if gamification and not include_inactive else {"pending":False,"achievements":[],"level_up":None,"ack_award_id":0,"ack_level":int((gamification or {}).get("level") or 1)})
-    profile=_portal_driver_profile(user_id,tx_rows,analytics,gamification,achievements)
-    bonus=bonus_wallet(user_id) or {"available_kwh":0.0,"transferable_kwh":0.0,"expiring_next":None,"grants":[],"policy":bonus_policy_settings()}
-    bonus["recipients"]=bonus_transfer_recipients(user_id) if bonus.get("policy",{}).get("transfer_enabled") else []
-    bonus["transfers"]=bonus_transfer_history(user_id,12)
-    rfid_cards=portal_rfid_cards(user_id)
-    return {
-        "user":user,"budget":budget,"period_budget":period_budget,"analytics":analytics,"period":period_ctx,"period_stats":period_summary,
-        "achievements":achievements,"events":events,"general_rankings":general_rankings,"ranking":ranking,"gamification":gamification,"gamification_reveals":gamification_reveals,"profile":profile,"bonus":bonus,
-        "rfid_cards":rfid_cards,"recent_transactions":recent,"month":month,"leaderboard_names_visible":setting_bool("portal_leaderboard_show_names",False)
-    }
-
-
-
-
-# V0.9.7.21 - Registration & Onboarding rules
-_REGISTRATION_BUILTIN_FIELDS = [
-    {"id":"name","type":"text","label":"Name","enabled":True,"required":True,"system":True,"order":10,"help":"Vor- und Nachname"},
-    {"id":"phone","type":"tel","label":"Telefonnummer","enabled":True,"required":False,"system":False,"order":30,"help":"Optional für Rückfragen"},
-    {"id":"street","type":"text","label":"Straße und Hausnummer","enabled":True,"required":False,"system":False,"order":40,"help":"optional"},
-    {"id":"postal_code","type":"text","label":"PLZ","enabled":True,"required":False,"system":False,"order":50,"help":"optional"},
-    {"id":"city","type":"text","label":"Ort","enabled":True,"required":False,"system":False,"order":60,"help":"optional"},
-    {"id":"vehicle_make_model","type":"text","label":"Hersteller / Modell","enabled":True,"required":False,"system":False,"order":70,"help":"Optional, z. B. VW ID.4"},
-    {"id":"vehicle_plate","type":"text","label":"Kennzeichen","enabled":True,"required":False,"system":False,"order":80,"help":"optional, z. B. B-AB 123"},
-]
 
 def _registration_default_fields():
     return json.loads(json.dumps(_REGISTRATION_BUILTIN_FIELDS,ensure_ascii=False))
@@ -6957,8 +5125,8 @@ def approve_access_request(request_id, system_user_id, monthly_kwh_limit=None, m
         limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
         normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
         vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
-        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,NULL,?)""",(req['name'],vehicle_text,limit_value,mode,0,req['email'],req['phone'],source))
+        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,email,phone,weekly_hours,budget_source)
+            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,NULL,?)""",(req['name'],vehicle_text,limit_value,mode,req['email'],req['phone'],source))
         user_id=int(cur.lastrowid)
         vehicle_id=None; vehicle_created=False
         if normalized_plate:
@@ -7008,131 +5176,6 @@ def user_has_active_rfid(user_id):
     return active_rfid_count(user_id)>0
 
 
-def seed_default_achievements():
-    """Create the editable built-in achievement library exactly once per seed key."""
-    leaderboard_seed_keys={
-        "energy-100","sessions-10","early-5","evening-10","night-5","weekend-10",
-        "active-days-30","months-3","week-streak-4","cp-2","vehicles-2","single-30",
-        "peak-11","max-month-energy-500","max-month-sessions-40","charging-hours-100",
-        "long-10","quick-20","unplug-fast-1","unplug-fast-10","unplug-fast-50",
-    }
-    defaults=[
-        # Einstieg
-        {"key":"first-kwh","name":"Erste Kilowattstunde","description":"Die erste Kilowattstunde wurde geladen.","icon":"⚡","metric":"energy_total","threshold":1,"category":"Einstieg","rarity":"common","xp":25},
-        {"key":"first-session","name":"Angesteckt!","description":"Den ersten Ladevorgang gestartet.","icon":"🔌","metric":"sessions_total","threshold":1,"category":"Einstieg","rarity":"common","xp":25},
-
-        # Energie · mehrstufig
-        {"key":"energy-100","name":"Kilowattjäger","description":"100 kWh Gesamtenergie erreicht.","icon":"🏆","metric":"energy_total","threshold":100,"category":"Energie","rarity":"common","xp":75,"tier_group":"energy-total","tier_name":"Bronze","tier_rank":1},
-        {"key":"energy-500","name":"Stromsammler","description":"500 kWh Gesamtenergie erreicht.","icon":"⚡","metric":"energy_total","threshold":500,"category":"Energie","rarity":"uncommon","xp":150,"tier_group":"energy-total","tier_name":"Silber","tier_rank":2},
-        {"key":"energy-1000","name":"Megawatt-Club","description":"1.000 kWh Gesamtenergie erreicht.","icon":"💎","metric":"energy_total","threshold":1000,"category":"Energie","rarity":"rare","xp":300,"tier_group":"energy-total","tier_name":"Gold","tier_rank":3},
-        {"key":"energy-5000","name":"High Voltage","description":"5.000 kWh Gesamtenergie erreicht.","icon":"⚡","metric":"energy_total","threshold":5000,"category":"Energie","rarity":"epic","xp":650,"tier_group":"energy-total","tier_name":"Platin","tier_rank":4},
-        {"key":"energy-10000","name":"Lord of the kWh","description":"10.000 kWh Gesamtenergie erreicht.","icon":"👑","metric":"energy_total","threshold":10000,"category":"Energie","rarity":"legendary","xp":1200,"tier_group":"energy-total","tier_name":"Diamant","tier_rank":5},
-
-        # Sessions · mehrstufig
-        {"key":"sessions-10","name":"Stammgast","description":"10 Ladevorgänge erreicht.","icon":"🔌","metric":"sessions_total","threshold":10,"category":"Sessions","rarity":"common","xp":60,"tier_group":"sessions-total","tier_name":"Bronze","tier_rank":1},
-        {"key":"sessions-25","name":"Gewohnheitstier","description":"25 Ladevorgänge erreicht.","icon":"🔁","metric":"sessions_total","threshold":25,"category":"Sessions","rarity":"uncommon","xp":100,"tier_group":"sessions-total","tier_name":"Silber","tier_rank":2},
-        {"key":"sessions-50","name":"Dauerstecker","description":"50 Ladevorgänge erreicht.","icon":"🔁","metric":"sessions_total","threshold":50,"category":"Sessions","rarity":"rare","xp":200,"tier_group":"sessions-total","tier_name":"Gold","tier_rank":3},
-        {"key":"sessions-100","name":"Ladeprofi","description":"100 Ladevorgänge erreicht.","icon":"🏅","metric":"sessions_total","threshold":100,"category":"Sessions","rarity":"epic","xp":400,"tier_group":"sessions-total","tier_name":"Platin","tier_rank":4},
-        {"key":"sessions-250","name":"Voltage Veteran","description":"250 Ladevorgänge erreicht.","icon":"🧙","metric":"sessions_total","threshold":250,"category":"Sessions","rarity":"legendary","xp":800,"tier_group":"sessions-total","tier_name":"Diamant","tier_rank":5},
-        {"key":"sessions-500","name":"Ladelegende","description":"500 Ladevorgänge erreicht.","icon":"👑","metric":"sessions_total","threshold":500,"category":"Sessions","rarity":"legendary","xp":1400,"tier_group":"sessions-total","tier_name":"Mythisch","tier_rank":6},
-
-        # Monat / Jahr
-        {"key":"month-energy-50","name":"Monatsstromer","description":"50 kWh in einem laufenden Kalendermonat erreicht.","icon":"📅","metric":"energy_month","threshold":50,"category":"Monat & Jahr","rarity":"common","xp":50},
-        {"key":"month-energy-150","name":"Monatsmaschine","description":"150 kWh in einem laufenden Kalendermonat erreicht.","icon":"📈","metric":"energy_month","threshold":150,"category":"Monat & Jahr","rarity":"uncommon","xp":100},
-        {"key":"month-energy-300","name":"Monatsmonster","description":"300 kWh in einem laufenden Kalendermonat erreicht.","icon":"🔥","metric":"energy_month","threshold":300,"category":"Monat & Jahr","rarity":"rare","xp":200},
-        {"key":"month-sessions-10","name":"Zehnerkarte","description":"10 Ladevorgänge im laufenden Monat.","icon":"🎟️","metric":"sessions_month","threshold":10,"category":"Monat & Jahr","rarity":"common","xp":70},
-        {"key":"month-sessions-25","name":"Monatsabo","description":"25 Ladevorgänge im laufenden Monat.","icon":"🗓️","metric":"sessions_month","threshold":25,"category":"Monat & Jahr","rarity":"rare","xp":180},
-        {"key":"year-energy-1000","name":"Jahreskilowatt","description":"1.000 kWh im laufenden Kalenderjahr.","icon":"🎆","metric":"energy_year","threshold":1000,"category":"Monat & Jahr","rarity":"rare","xp":250},
-        {"key":"year-sessions-100","name":"Hundert im Jahr","description":"100 Ladevorgänge im laufenden Kalenderjahr.","icon":"💯","metric":"sessions_year","threshold":100,"category":"Monat & Jahr","rarity":"epic","xp":450},
-
-        # Zeit & Gewohnheiten
-        {"key":"early-5","name":"Early Bird","description":"5 Ladevorgänge zwischen 05:00 und 07:59 Uhr.","icon":"🌅","metric":"early_sessions","threshold":5,"category":"Ladezeiten","rarity":"common","xp":75},
-        {"key":"early-25","name":"Sonnenaufgangs-Profi","description":"25 frühe Ladevorgänge.","icon":"☀️","metric":"early_sessions","threshold":25,"category":"Ladezeiten","rarity":"rare","xp":220},
-        {"key":"evening-10","name":"Feierabend-Lader","description":"10 Ladevorgänge zwischen 17:00 und 21:59 Uhr.","icon":"🌇","metric":"evening_sessions","threshold":10,"category":"Ladezeiten","rarity":"common","xp":80},
-        {"key":"evening-50","name":"After-Work-Ampere","description":"50 Ladevorgänge am Abend.","icon":"🌆","metric":"evening_sessions","threshold":50,"category":"Ladezeiten","rarity":"rare","xp":250},
-        {"key":"night-5","name":"Night Owl","description":"5 Ladevorgänge zwischen 22:00 und 04:59 Uhr.","icon":"🌙","metric":"night_sessions","threshold":5,"category":"Ladezeiten","rarity":"uncommon","xp":120},
-        {"key":"night-25","name":"Mitternachtsstromer","description":"25 nächtliche Ladevorgänge.","icon":"🦉","metric":"night_sessions","threshold":25,"category":"Ladezeiten","rarity":"epic","xp":350},
-        {"key":"weekend-10","name":"Wochenend-Lader","description":"10 Ladevorgänge an Samstagen oder Sonntagen.","icon":"🏖️","metric":"weekend_sessions","threshold":10,"category":"Ladezeiten","rarity":"common","xp":80},
-        {"key":"weekend-50","name":"Weekend Warrior","description":"50 Wochenend-Ladevorgänge.","icon":"🛡️","metric":"weekend_sessions","threshold":50,"category":"Ladezeiten","rarity":"rare","xp":260},
-
-        # Treue / Serien
-        {"key":"active-days-30","name":"30 Tage unter Strom","description":"An 30 unterschiedlichen Tagen geladen.","icon":"📆","metric":"days_active","threshold":30,"category":"Treue & Serien","rarity":"uncommon","xp":150,"tier_group":"active-days","tier_name":"Bronze","tier_rank":1},
-        {"key":"active-days-100","name":"Hundert Tage Hochspannung","description":"An 100 unterschiedlichen Tagen geladen.","icon":"⚡","metric":"days_active","threshold":100,"category":"Treue & Serien","rarity":"rare","xp":350,"tier_group":"active-days","tier_name":"Silber","tier_rank":2},
-        {"key":"active-days-365","name":"365 Days of Charge","description":"An 365 unterschiedlichen Tagen geladen.","icon":"🗓️","metric":"days_active","threshold":365,"category":"Treue & Serien","rarity":"legendary","xp":1200,"tier_group":"active-days","tier_name":"Gold","tier_rank":3},
-        {"key":"months-3","name":"Dreimonats-Abo","description":"In 3 unterschiedlichen Kalendermonaten geladen.","icon":"📅","metric":"months_active","threshold":3,"category":"Treue & Serien","rarity":"common","xp":80},
-        {"key":"months-12","name":"Ganzjahresfahrer","description":"In 12 unterschiedlichen Kalendermonaten geladen.","icon":"🗓️","metric":"months_active","threshold":12,"category":"Treue & Serien","rarity":"epic","xp":450},
-        {"key":"week-streak-4","name":"Vier-Wochen-Streak","description":"In 4 aufeinanderfolgenden ISO-Wochen geladen.","icon":"🔥","metric":"week_streak","threshold":4,"category":"Treue & Serien","rarity":"uncommon","xp":150,"tier_group":"week-streak","tier_name":"Bronze","tier_rank":1},
-        {"key":"week-streak-12","name":"Streak Machine","description":"In 12 aufeinanderfolgenden ISO-Wochen geladen.","icon":"🔥","metric":"week_streak","threshold":12,"category":"Treue & Serien","rarity":"rare","xp":350,"tier_group":"week-streak","tier_name":"Silber","tier_rank":2},
-        {"key":"week-streak-26","name":"Halbes Jahr unter Strom","description":"In 26 aufeinanderfolgenden ISO-Wochen geladen.","icon":"⚡","metric":"week_streak","threshold":26,"category":"Treue & Serien","rarity":"epic","xp":700,"tier_group":"week-streak","tier_name":"Gold","tier_rank":3},
-        {"key":"week-streak-52","name":"52-Wochen-Legende","description":"In 52 aufeinanderfolgenden ISO-Wochen geladen.","icon":"👑","metric":"week_streak","threshold":52,"category":"Treue & Serien","rarity":"legendary","xp":1600,"tier_group":"week-streak","tier_name":"Platin","tier_rank":4},
-
-        # Entdecker
-        {"key":"cp-2","name":"Stecker-Hopper","description":"An 2 unterschiedlichen Ladepunkten geladen.","icon":"🧭","metric":"distinct_charge_points","threshold":2,"category":"Entdecker","rarity":"common","xp":70},
-        {"key":"cp-5","name":"Ladepunkt-Sammler","description":"An 5 unterschiedlichen Ladepunkten geladen.","icon":"🗺️","metric":"distinct_charge_points","threshold":5,"category":"Entdecker","rarity":"rare","xp":220},
-        {"key":"vehicles-2","name":"Flottenhopper","description":"Mit 2 unterschiedlichen Fahrzeugen geladen.","icon":"🚗","metric":"distinct_vehicles","threshold":2,"category":"Entdecker","rarity":"uncommon","xp":110},
-        {"key":"vehicles-5","name":"Garage voller Volt","description":"Mit 5 unterschiedlichen Fahrzeugen geladen.","icon":"🚙","metric":"distinct_vehicles","threshold":5,"category":"Entdecker","rarity":"epic","xp":400},
-
-        # Rekorde / Statistik
-        {"key":"single-30","name":"Big Gulp","description":"Mindestens 30 kWh in einer einzelnen Session geladen.","icon":"🥤","metric":"max_session_energy","threshold":30,"category":"Rekorde","rarity":"common","xp":90},
-        {"key":"single-50","name":"50-kWh-Keule","description":"Mindestens 50 kWh in einer einzelnen Session geladen.","icon":"🔋","metric":"max_session_energy","threshold":50,"category":"Rekorde","rarity":"rare","xp":250},
-        {"key":"single-75","name":"Akku-Monster","description":"Mindestens 75 kWh in einer einzelnen Session geladen.","icon":"🦖","metric":"max_session_energy","threshold":75,"category":"Rekorde","rarity":"epic","xp":500},
-        {"key":"peak-11","name":"Elf Freunde müsst ihr sein","description":"Mindestens 11 kW maximale Sessionleistung erreicht.","icon":"⚡","metric":"max_session_power","threshold":11,"category":"Rekorde","rarity":"common","xp":70},
-        {"key":"peak-22","name":"Doppelte Dosis","description":"Mindestens 22 kW maximale Sessionleistung erreicht.","icon":"⚡","metric":"max_session_power","threshold":22,"category":"Rekorde","rarity":"rare","xp":200},
-        {"key":"max-month-energy-500","name":"Monatsgigant","description":"In einem Kalendermonat mindestens 500 kWh geladen.","icon":"📊","metric":"max_month_energy","threshold":500,"category":"Rekorde","rarity":"epic","xp":550},
-        {"key":"max-month-sessions-40","name":"Session-Sammler","description":"In einem Kalendermonat mindestens 40 Sessions erreicht.","icon":"🧮","metric":"max_month_sessions","threshold":40,"category":"Rekorde","rarity":"epic","xp":500},
-        {"key":"charging-hours-100","name":"100 Stunden Ampere","description":"100 Stunden kumulierte Ladezeit erreicht.","icon":"⏱️","metric":"charging_hours_total","threshold":100,"category":"Rekorde","rarity":"rare","xp":250},
-        {"key":"long-10","name":"Langzeitparker","description":"10 Sessions mit mindestens vier Stunden Verbindung.","icon":"🅿️","metric":"long_sessions","threshold":10,"category":"Ladeverhalten","rarity":"uncommon","xp":150},
-        {"key":"quick-20","name":"Power Nap","description":"20 Sessions mit maximal 45 Minuten Verbindung.","icon":"😴","metric":"quick_sessions","threshold":20,"category":"Ladeverhalten","rarity":"rare","xp":240},
-        {"key":"unplug-fast-1","name":"Stecker-Sprinter","description":"Nach einer Session den Connector innerhalb von 10 Minuten wieder freigegeben.","icon":"🏃","metric":"prompt_unplug_sessions","threshold":1,"category":"Ladeverhalten","rarity":"common","xp":50,"tier_group":"prompt-unplug","tier_name":"Bronze","tier_rank":1,"leaderboard_enabled":True},
-        {"key":"unplug-fast-10","name":"Stecker-Sprinter Pro","description":"10 Sessions mit Freigabe des Connectors innerhalb von 10 Minuten.","icon":"🏃","metric":"prompt_unplug_sessions","threshold":10,"category":"Ladeverhalten","rarity":"uncommon","xp":150,"tier_group":"prompt-unplug","tier_name":"Silber","tier_rank":2,"leaderboard_enabled":True},
-        {"key":"unplug-fast-50","name":"Stecker-Sprinter Elite","description":"50 Sessions mit Freigabe des Connectors innerhalb von 10 Minuten.","icon":"🏁","metric":"prompt_unplug_sessions","threshold":50,"category":"Ladeverhalten","rarity":"rare","xp":350,"tier_group":"prompt-unplug","tier_name":"Gold","tier_rank":3,"leaderboard_enabled":True},
-
-        # Manuelle Community-/Jury-Badges
-        {"key":"manual-community-hero","name":"Community Hero","description":"Für besondere Hilfsbereitschaft rund um die Ladeinfrastruktur.","icon":"🤝","metric":"manual","threshold":None,"category":"Community","rarity":"epic","xp":400},
-        {"key":"manual-kwh-king","name":"Kilowatt-König","description":"Manuelle Auszeichnung für eine besondere Ladeleistung.","icon":"👑","metric":"manual","threshold":None,"category":"Community","rarity":"epic","xp":400},
-        {"key":"manual-comeback","name":"Comeback des Monats","description":"Manuelle Auszeichnung für das stärkste Lade-Comeback.","icon":"🚀","metric":"manual","threshold":None,"category":"Community","rarity":"rare","xp":250},
-
-        # Echte Geheimnisse: vor Freischaltung nirgends im Fahrerprofil sichtbar.
-        {"key":"secret-42","name":"Die Antwort auf alles","description":"Eine Session mit ziemlich genau 42,0 kWh beendet.","icon":"🌌","metric":"exact_42_sessions","threshold":1,"category":"Geheim","rarity":"secret","xp":420,"hidden":True,"secret":True},
-        {"key":"secret-midnight","name":"Geisterstunde","description":"Mitternacht. Stecker rein. Niemand stellt Fragen.","icon":"👻","metric":"midnight_sessions","threshold":1,"category":"Geheim","rarity":"secret","xp":250,"hidden":True,"secret":True},
-        {"key":"secret-1337","name":"LEET Charge","description":"1.337 kWh Gesamtenergie erreicht. 1337 bestätigt.","icon":"🕹️","metric":"energy_total","threshold":1337,"category":"Geheim","rarity":"secret","xp":337,"hidden":True,"secret":True},
-        {"key":"secret-goose","name":"Die elektrifizierte Gans","description":"Ein kleiner Gruß aus der Werkstatt.","icon":"🪿","metric":"energy_total","threshold":42,"category":"Geheim","rarity":"secret","xp":142,"hidden":True,"secret":True},
-    ]
-    legacy_names={
-        "first-kwh":"Erste Kilowattstunde",
-        "sessions-10":"Stammgast",
-        "energy-100":"Kilowattjäger",
-        "sessions-50":"Dauerstecker",
-        "energy-1000":"Megawatt-Club",
-        "month-energy-50":"Monatsstromer",
-        "secret-goose":"Die elektrifizierte Gans",
-    }
-    with _lock,_connect() as conn:
-        for item in defaults:
-            key=item["key"]
-            if conn.execute("SELECT 1 FROM achievements WHERE seed_key=?",(key,)).fetchone():
-                continue
-            legacy=conn.execute("SELECT id FROM achievements WHERE seed_key IS NULL AND name=?",(legacy_names.get(key,item["name"]),)).fetchone()
-            if legacy:
-                conn.execute("""UPDATE achievements SET seed_key=?,category=?,rarity=?,xp=?,tier_group=?,tier_name=?,tier_rank=?,
-                    system_secret=CASE WHEN ? THEN 1 ELSE system_secret END,
-                    leaderboard_enabled=CASE WHEN ? THEN 1 ELSE leaderboard_enabled END
-                    WHERE id=?""",(key,item.get("category","Allgemein"),item.get("rarity","common"),int(item.get("xp",50)),
-                                  item.get("tier_group"),item.get("tier_name"),int(item.get("tier_rank",0)),
-                                  1 if item.get("secret") else 0,1 if key in leaderboard_seed_keys else 0,int(legacy["id"])))
-                continue
-            conn.execute("""INSERT INTO achievements(
-                name,description,icon,metric,threshold,hidden,system_secret,category,rarity,xp,tier_group,tier_name,tier_rank,seed_key,leaderboard_enabled,active,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)""",(
-                item["name"],item.get("description"),item.get("icon","🏅"),item.get("metric","manual"),item.get("threshold"),
-                1 if item.get("hidden") else 0,1 if item.get("secret") else 0,item.get("category","Allgemein"),
-                item.get("rarity","common"),int(item.get("xp",50)),item.get("tier_group"),item.get("tier_name"),
-                int(item.get("tier_rank",0)),key,1 if key in leaderboard_seed_keys and not item.get("secret") else 0,utc_now(),
-            ))
-        conn.commit()
-
-
-# V0.9.1 - lade.cloud history import helpers.
 def import_history_stats(source="lade.cloud"):
     with _lock,_connect() as conn:
         row=conn.execute("SELECT COUNT(*) AS sessions,COALESCE(SUM(energy_kwh),0) AS energy,MIN(started_at) AS first_at,MAX(started_at) AS last_at FROM transactions WHERE import_source=?",(source,)).fetchone()
@@ -7195,8 +5238,6 @@ def import_ladecloud_rows(rows, user_mapping, charge_point_mapping):
                 (str(charge_point_mapping[source_cp]),int(item.get("connector_id") or 1),None,tag,int(user["id"]),card_cache[tag],item["started_at"],item["ended_at"],float(item.get("energy_kwh") or 0),float(item.get("duration_seconds") or 0),price,cost,"lade.cloud" if price is not None else None,"lade.cloud",item["import_key"],utc_now(),item.get("source_user_name"),item.get("evse_id"),"connection_only"))
             imported += 1; imported_energy += float(item.get("energy_kwh") or 0); touched_users.add(int(user["id"]))
         conn.commit()
-    for user_id in touched_users:
-        evaluate_user_achievements(user_id)
     return {"imported":imported,"duplicates":duplicates,"energy_kwh":round(imported_energy,3),"rfid_created":rfid_created,"users_updated":len(touched_users)}
 
 
