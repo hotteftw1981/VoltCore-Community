@@ -2087,6 +2087,127 @@ class DeviceOnboardPayload(BaseModel):
     notes: str | None = None
 
 
+def _telemetry_age_seconds(value, now=None):
+    if not value:
+        return None
+    try:
+        dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if dt.tzinfo is None:
+            dt=dt.replace(tzinfo=timezone.utc)
+        return max(0, int(((now or datetime.now(timezone.utc))-dt.astimezone(timezone.utc)).total_seconds()))
+    except (TypeError,ValueError):
+        return None
+
+
+def _telemetry_freshness(age_seconds):
+    if age_seconds is None:
+        return "none"
+    if age_seconds <= 90:
+        return "live"
+    if age_seconds <= 300:
+        return "delayed"
+    return "stale"
+
+
+def _telemetry_snapshot():
+    now=datetime.now(timezone.utc)
+    cps=db.list_charge_points()
+    active=db.active_transactions(100)
+    active_by_connector={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in active}
+    from .ocpp_server import connection_snapshot
+    connection_rows=connection_snapshot().get("connections") or []
+    connection_by_id={str(x.get("id")):x for x in connection_rows}
+    stations=[]
+    total_power=0.0
+    has_power=False
+    online_count=0
+    charging_count=0
+    fresh_count=0
+    fault_count=0
+    warning_count=0
+    for cp in cps:
+        cp_id=str(cp.get("id"))
+        connected=is_connected(cp_id)
+        if connected:
+            online_count+=1
+        live=db.live_telemetry_for_charge_point(cp_id)
+        connectors=[]
+        for raw in live.get("connectors") or []:
+            item=dict(raw)
+            cid=int(item.get("connector_id") or 0)
+            tx=active_by_connector.get((cp_id,cid))
+            age=_telemetry_age_seconds(item.get("last_meter_at"),now)
+            freshness=_telemetry_freshness(age)
+            if connected and freshness=="live":
+                fresh_count+=1
+            status=str(item.get("status") or "Unknown")
+            active_state=status in {"Charging","SuspendedEV","SuspendedEVSE","Preparing","Finishing"}
+            raw_power=item.get("last_power_kw")
+            live_power=float(raw_power) if raw_power is not None and connected and freshness in {"live","delayed"} and active_state else None
+            if live_power is not None:
+                total_power+=live_power
+                has_power=True
+            if connected and status in {"Charging","SuspendedEV","SuspendedEVSE"}:
+                charging_count+=1
+            connectors.append({
+                "connector_id":cid,"connector_type":item.get("connector_type"),"status":status,
+                "max_power_kw":item.get("max_power_kw"),"power_kw":live_power,"last_power_kw":raw_power,
+                "power_source":item.get("power_source"),"last_power_source":item.get("last_power_source"),"energy_kwh":item.get("energy_kwh"),"meter_register_kwh":item.get("energy_kwh"),
+                "voltage_v":item.get("voltage_v"),"voltage_l1":item.get("voltage_l1"),"voltage_l2":item.get("voltage_l2"),"voltage_l3":item.get("voltage_l3"),
+                "current_import_a":item.get("current_import_a"),"current_import_l1":item.get("current_import_l1"),"current_import_l2":item.get("current_import_l2"),"current_import_l3":item.get("current_import_l3"),
+                "power_offered_kw":item.get("power_offered_kw"),"frequency_hz":item.get("frequency_hz"),
+                "temperature_c":item.get("temperature_c"),"soc_percent":item.get("soc_percent"),"last_soc_percent":item.get("last_soc_percent"),"soc_age_seconds":item.get("soc_age_seconds"),
+                "last_meter_at":item.get("last_meter_at"),"meter_age_seconds":age,"freshness":freshness,
+                "session":({
+                    "id":tx.get("id"),"started_at":tx.get("started_at"),"energy_kwh":tx.get("energy_kwh"),
+                    "user_id":tx.get("user_id"),"user_name":tx.get("user_name"),"user_role":tx.get("user_role"),
+                    "user_department":tx.get("user_department"),"user_image_path":tx.get("user_image_path"),
+                    "vehicle_id":tx.get("vehicle_id"),"vehicle_name":tx.get("vehicle_name"),"vehicle_make":tx.get("vehicle_make"),
+                    "vehicle_model":tx.get("vehicle_model"),"vehicle_plate":tx.get("vehicle_plate"),"vehicle_image_path":tx.get("vehicle_image_path"),
+                    "id_tag":tx.get("id_tag"),"max_power_kw":tx.get("max_power_kw"),
+                } if tx else None),
+            })
+        cp_last=live.get("last_meter_at")
+        cp_age=_telemetry_age_seconds(cp_last,now)
+        offline_age=_telemetry_age_seconds(cp.get("last_message_at") or cp.get("last_seen"),now) if not connected else None
+        connection=connection_by_id.get(cp_id) or {}
+        diagnostic=connection.get("diagnostic") or {
+            "level":"critical" if not connected else ("critical" if (cp.get("status") or "")=="Faulted" else "healthy"),
+            "label":"Kritisch" if not connected or (cp.get("status") or "")=="Faulted" else "Gesund",
+            "score":0 if not connected else (35 if (cp.get("status") or "")=="Faulted" else 100),
+            "issues":[{"code":"offline","severity":"critical","title":"OCPP-Verbindung getrennt","detail":"Der Ladepunkt ist nicht verbunden."}] if not connected else [],
+        }
+        if diagnostic.get("level")=="critical":
+            fault_count+=1
+        elif diagnostic.get("level")=="warning":
+            warning_count+=1
+        stations.append({
+            "id":cp_id,"location":cp.get("location"),"vendor":cp.get("vendor"),"model":cp.get("model"),
+            "firmware":cp.get("firmware"),"serial_number":cp.get("serial_number"),
+            "status":cp.get("status") or "Unknown","connected":connected,"last_seen":cp.get("last_seen"),
+            "last_message_at":cp.get("last_message_at"),"last_message_type":cp.get("last_message_type"),
+            "max_power_kw":cp.get("max_power_kw"),"last_meter_at":cp_last,"meter_age_seconds":cp_age,
+            "offline_age_seconds":offline_age,
+            "freshness":_telemetry_freshness(cp_age),"connectors":connectors,
+            "diagnostic":diagnostic,
+            "heartbeat_age_seconds":diagnostic.get("heartbeat_age_seconds"),
+            "subprotocol":connection.get("subprotocol") or "ocpp1.6",
+        })
+    available_count=sum(1 for station in stations if station.get("connected") and str(station.get("status") or "")=="Available")
+    return {
+        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,
+        "summary":{"stations":len(stations),"online":online_count,"offline":max(0,len(stations)-online_count),
+                   "available":available_count,"active_sessions":len(active),
+                   "charging_connectors":charging_count,"total_power_kw":round(total_power,2) if has_power else None,
+                   "fresh_connectors":fresh_count,"critical":fault_count,"warnings":warning_count},
+    }
+
+
+@app.get("/api/telemetry")
+async def api_telemetry():
+    return _telemetry_snapshot()
+
+
 @app.get("/api/ocpp-monitor")
 async def api_ocpp_monitor():
     from .ocpp_server import connection_snapshot
