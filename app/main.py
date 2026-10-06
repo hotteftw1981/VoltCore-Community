@@ -3891,10 +3891,6 @@ async def api_update_cost_center(cost_center_id:int,payload:CostCenterPayload):
     if not ok: raise HTTPException(404,"Kostenstelle nicht gefunden")
     return {"ok":True,"item":db.get_cost_center(cost_center_id)}
 
-@app.get("/api/search")
-async def api_global_search(q: str=""):
-    return db.global_search(q,6)
-
 class SmartChargingSettingsPayload(BaseModel):
     enabled: bool = False
     site_limit_kw: float = 132
