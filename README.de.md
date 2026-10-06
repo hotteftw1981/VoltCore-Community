@@ -2,13 +2,75 @@
 
 [English](README.md) | [Deutsch](README.de.md)
 
-Privates Entwicklungs-Repository für die zukünftige **VoltCore Community** Edition.
+> [!WARNING]
+> ## ⚡ COMMUNITY-ESKALATION
+> **VoltCore Community ist KOSTENLOS. Wirklich kostenlos.**
+>
+> Kein Testzeitraum. Kein „nur drei Benutzer“. Kein „ein Ladepunkt kostenlos, danach bitte zahlen“. Kein absichtlich kaputtgeschnittener Demo-Modus.
+>
+> Die Community Edition soll ein wirklich brauchbares, selbst gehostetes OCPP-System sein, das man auch ernsthaft einsetzen kann.
 
-> Status: in Entwicklung. Noch nicht für den öffentlichen Einsatz vorgesehen.
+## Kostenlos. Selbst gehostet. Wirklich nutzbar.
 
-VoltCore Community wird eine solide, selbst gehostete OCPP-1.6J-Basis bereitstellen: Ladepunkte, Connectoren, RFID, Benutzer, Fahrzeuge, Ladevorgänge, Dashboard, Basis-LiveView, Reports, Backups, Updates, Security, Audit/Systemstatus, Benachrichtigungen, PWA-Unterstützung, Dark Mode und Basis-Branding.
+VoltCore Community ist die **kostenlose Community Edition von VoltCore** für selbst gehostetes OCPP-Lademanagement.
 
-Die Community Edition wird aus der privaten VoltCore-Entwicklungsbasis abgeleitet. Funktionen, die nicht zur Community Edition gehören, werden aus dem Community-Quellcode entfernt und nicht lediglich ausgeblendet.
+Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testumgebungen und neugierige Nerds sollen ihre eigene Ladeinfrastruktur mit einer soliden VoltCore-Basis betreiben können, ohne für die Community Edition bezahlen zu müssen.
+
+**Preis: 0. Kostenlos. Free. Gratis.**
+
+Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren kommerziellen VoltCore-Editionen soll über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen erfolgen — nicht dadurch, dass die Grundlagen künstlich beschnitten werden.
+
+> Status: in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen.
+
+## Geplanter Community-Umfang
+
+Die erste Community Edition soll enthalten:
+
+- OCPP 1.6J
+- Ladepunkte erkennen und onboarden
+- Connector-Status
+- Live-Status der Ladepunkte
+- Start / Stop von Ladevorgängen
+- grundlegende Remote-Befehle
+- RFID-Verwaltung
+- Benutzerverwaltung
+- einfache Fahrzeugverwaltung
+- Ladevorgänge / Historie
+- einfache Zuordnung Benutzer / Fahrzeug / RFID
+- Dashboard
+- Basis-LiveView
+- einfache Reports
+- CSV-Export
+- Backup / Restore
+- Update-Menü direkt in VoltCore
+- Dark Mode
+- Basis-Branding wie Organisationsname und Logo
+- Security-Basis
+- Rollen: Administrator / Benutzer / Nur Lesen
+- Systemstatus
+- Logs / Audit-Basis
+- einfache Benachrichtigungen
+- PWA-Basis
+
+Der festgelegte erste Funktionsumfang ist zusätzlich in `docs/COMMUNITY_SCOPE.md` dokumentiert.
+
+## Updates über GitHub
+
+VoltCore Community soll das bekannte **Update-Menü direkt in der Anwendung** behalten.
+
+Stabile Community-Releases werden als GitHub Releases in diesem Repository veröffentlicht. Laufende Installationen können GitHub auf neuere stabile Versionen prüfen und Administratoren direkt in VoltCore auf verfügbare Updates hinweisen.
+
+Geplant sind:
+
+- automatische Update-Prüfung nach dem Backend-Start
+- regelmäßige Prüfungen im Hintergrund
+- manueller Button **Jetzt nach Updates suchen**
+- Release Notes vor der Installation
+- Prüfung, ob das Release wirklich für VoltCore Community bestimmt ist
+- Berücksichtigung von Datenbank-Migrationen
+- Backup- und Rollback-Sicherheit
+
+Öffentliche Community-Releases sollen sich prüfen lassen, ohne dass jede Installation zwingend einen eigenen GitHub-Zugriffstoken speichern muss.
 
 ## Sprachen
 
@@ -19,13 +81,59 @@ Zum Start:
 - Deutsch
 - Englisch
 
-Die Oberfläche verwendet nach Möglichkeit Übersetzungsschlüssel und Sprachdateien statt fest eingebauter UI-Texte. Die Browsersprache kann automatisch erkannt werden, Englisch dient als Fallback und eine manuelle Sprachauswahl kann die automatische Erkennung überschreiben.
+Die Browsersprache kann automatisch erkannt werden. Eine manuelle Sprachauswahl hat Vorrang. Englisch dient als Fallback-Sprache.
 
-## Entwicklung
+Die Übersetzungen liegen in `app/locales/`. Neue UI-Texte sollen nach Möglichkeit über Übersetzungsschlüssel eingebunden und nicht fest im Quellcode verdrahtet werden.
 
-- `main`: zukünftige stabile Community-Releases
-- `develop`: aktueller Integrationsbranch der Community Edition
-- Updatequelle: GitHub Releases dieses Repositories
-- Repository bleibt privat, bis der erste veröffentlichungsreife Community-Stand erreicht ist
+## Entwicklungsmodell
 
-Der festgelegte erste Funktionsumfang steht in `docs/COMMUNITY_SCOPE.md`.
+VoltCore Community wird aus der privaten VoltCore-Entwicklungsbasis abgeleitet.
+
+Funktionen, die nicht zu Community gehören, werden aus dem Community-Quellcode entfernt und nicht lediglich ausgeblendet. Das ist wichtig, damit im später öffentlichen Community-Repository nicht versehentlich Code landet, der nicht zur Community Edition gehört.
+
+Branches:
+
+- `main` — zukünftige stabile Community-Releases
+- `develop` — Integrationsbranch der Community Edition
+- kurzlebige Feature-Branches — einzelne Änderungen vor der Integration
+
+Das Repository bleibt privat, während der erste Community-Build aufgebaut und geprüft wird.
+
+## Was „kostenlos“ hier bedeutet
+
+VoltCore Community ist als **kostenlose VoltCore-Edition** geplant.
+
+Die endgültige öffentliche Softwarelizenz ist noch nicht festgelegt. Diese Entscheidung treffen wir, bevor das Repository öffentlich wird. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage.
+
+Das ist bewusst getrennt:
+
+- **Community Edition: kostenlos**
+- **endgültige öffentliche Lizenz: noch festzulegen**
+- **Repository: bleibt privat, bis Community veröffentlichungsreif ist**
+
+## Dokumentation
+
+Aktuell vorhanden:
+
+- Community-Umfang: `docs/COMMUNITY_SCOPE.md`
+- Mehrsprachigkeit / i18n: `docs/I18N.md`
+
+Ausführliche Installations-, Konfigurations-, Update-, Backup-, OCPP-, Security- und Troubleshooting-Dokumentation folgt mit dem weiteren Community-Ausbau.
+
+## Grundidee
+
+VoltCore Community soll:
+
+- brauchbar statt künstlich eingeschränkt sein
+- verständlich statt geheimnisvoll sein
+- updatefähig statt wegwerfbar sein
+- selbst hostbar statt cloudabhängig sein
+- standardmäßig sicher sein
+- angenehm zu bedienen sein
+- und natürlich nerdig genug bleiben, damit es noch nach VoltCore aussieht ⚡
+
+---
+
+**VoltCore Community — OCPP-Lademanagement. Kostenlos. Selbst gehostet. Für die Community.**
+
+Und ja: Diese README darf später noch deutlich weiter eskalieren. 😄
