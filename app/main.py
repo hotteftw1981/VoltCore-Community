@@ -261,7 +261,7 @@ def _portal_pin_hash(pin: str) -> str:
         raise ValueError("Der Portal-PIN muss genau 6 Ziffern haben.")
     salt=secrets.token_bytes(16)
     digest=hashlib.pbkdf2_hmac("sha256",pin.encode("utf-8"),salt,PORTAL_PIN_ITERATIONS)
-    return f"pbkdf2_sha256$\{PORTAL_PIN_ITERATIONS}$\{salt.hex()}$\{digest.hex()}"
+    return "pbkdf2_sha256$"+str(PORTAL_PIN_ITERATIONS)+"$"+salt.hex()+"$"+digest.hex()
 
 
 def _portal_pin_ok(pin: str, encoded: str) -> bool:
