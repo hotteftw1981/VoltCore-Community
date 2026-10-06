@@ -35,20 +35,19 @@ VoltCore Community guides a new installation through a neutral first-run setup i
 
 Current first-login wizard:
 
-1. organization / installation name and basic branding;
-2. administrator basics and preferred language;
-3. optional SMTP / email setup;
-4. invite first users by email;
-5. basic tariff / price configuration;
-6. basic charging defaults;
-7. explicit choice whether free charging credit / charging budgets should be enabled.
+1. installation / organization name and basic branding;
+2. optional SMTP / email setup;
+3. optional invitation of another backend user;
+4. optional basic tariff / price configuration;
+5. explicit opt-in for a monthly free charging allowance.
 
 Community defaults:
 
 - weekly working hours are **not** part of the Community user profile;
-- free charging credit / monthly charging budgets are **disabled by default**;
-- no DRK- or employer-specific assumptions;
-- optional features must be deliberately enabled during first-run setup or later in settings.
+- the monthly free charging allowance is **disabled by default**;
+- optional per-user monthly limits are usage/access limits and do **not** imply free energy;
+- without an explicitly enabled free allowance, tariff costs apply to all charged energy;
+- no DRK- or employer-specific assumptions.
 
 ## Update model
 
