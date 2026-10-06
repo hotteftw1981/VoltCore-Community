@@ -1186,7 +1186,8 @@ def init_db():
 
         # V0.9.7.6: Smart Charging is opt-in on upgrade.
         now_setting=utc_now()
-        for key,value in (("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
+        for key,value in (("smart_charging_enabled","0"),("smart_charging_site_limit_kw","132"),("smart_charging_reserve_kw","0"),("smart_charging_rebalance_seconds","15"),("smart_charging_min_change_kw","0.5"),
+                          ("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
                           ("rfid_local_list_version","1"),
                           ("registration_enabled","0"),("registration_reference_hours","39"),("registration_reference_kwh","0"),
                           ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
@@ -1209,23 +1210,10 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_ip_ts ON web_login_attempts(ip_hash,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_user_ts ON web_login_attempts(username_key,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ocpp_auth_attempts_key_ts ON ocpp_auth_attempts(client_key,ts DESC)")
-        conn.execute("""CREATE TABLE IF NOT EXISTS community_invites (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            accepted_at TEXT,
-            user_id INTEGER
-        )""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_community_invites_email_status ON community_invites(email,status)")
-        for key,value in (
-            ("community_onboarding_completed","0"),
-            ("community_free_allowance_enabled","0"),
-            ("community_free_allowance_kwh","0")
-        ):
-            conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
+        for cp in cp_rows:
+            count=max(1,int(cp[1] or 1))
+            for connector_id in range(1,count+1):
+                conn.execute("INSERT OR IGNORE INTO smart_charging_connectors(charge_point_id,connector_id,max_kw) VALUES(?,?,?)",(cp[0],connector_id,float(cp[2] or 22)))
 
         # Import already-used free-text cost centers into the new master-data table.
         # Historical transaction snapshots remain untouched; this only gives existing
@@ -1238,63 +1226,16 @@ def init_db():
         for code in sorted(known_cost_centers,key=str.casefold):
             conn.execute("INSERT OR IGNORE INTO cost_centers(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)",(code,code,now_cc,now_cc))
 
+        if conn.execute("SELECT COUNT(*) FROM load_rules").fetchone()[0] == 0:
+            conn.executemany(
+                "INSERT INTO load_rules(name,condition_text,action_text,priority) VALUES(?,?,?,?)",
+                [
+                    ("Gesamtlast begrenzen", "Wenn Standortlast > 120 kW", "Leistung dynamisch verteilen", "Hoch"),
+                    ("Einsatzfahrzeuge priorisieren", "Wenn Einsatzfahrzeug lädt", "Mindestleistung reservieren", "Höchste"),
+                    ("Nachtladung", "22:00 - 06:00 Uhr", "Freie Leistung bevorzugt nutzen", "Normal"),
+                ],
+            )
         conn.commit()
-
-
-def create_community_invite(email, token_hash, expires_at):
-    email=str(email or "").strip().lower()
-    token_hash=str(token_hash or "").strip()
-    if not email or "@" not in email:
-        raise ValueError("Ungültige E-Mail-Adresse")
-    if not token_hash:
-        raise ValueError("Einladungstoken fehlt")
-    _iso_dt(expires_at)
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE community_invites SET status='replaced' WHERE lower(email)=? AND status='pending'",(email,))
-        cur=conn.execute(
-            "INSERT INTO community_invites(email,token_hash,status,created_at,expires_at) VALUES(?,?,'pending',?,?)",
-            (email,token_hash,now,expires_at),
-        )
-        conn.commit()
-        return cur.lastrowid
-
-
-def community_invite(token_hash):
-    token_hash=str(token_hash or "").strip()
-    if not token_hash:
-        return None
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT * FROM community_invites WHERE token_hash=?",(token_hash,)).fetchone()
-    if not row:
-        return None
-    item=dict(row)
-    if item.get("status")!="pending":
-        return None
-    try:
-        if _iso_dt(item.get("expires_at")) <= datetime.now(timezone.utc):
-            return None
-    except Exception:
-        return None
-    return item
-
-
-def mark_community_invite_accepted(invite_id, user_id):
-    with _lock,_connect() as conn:
-        cur=conn.execute(
-            "UPDATE community_invites SET status='accepted',accepted_at=?,user_id=? WHERE id=? AND status='pending'",
-            (utc_now(),int(user_id),int(invite_id)),
-        )
-        conn.commit()
-        return cur.rowcount>0
-
-
-def community_invite_counts():
-    with _lock,_connect() as conn:
-        rows=conn.execute("SELECT status,COUNT(*) AS n FROM community_invites GROUP BY status").fetchall()
-    result={str(r["status"]):int(r["n"] or 0) for r in rows}
-    return {"pending":result.get("pending",0),"accepted":result.get("accepted",0)}
-
 
 
 def upsert_charge_point(cp_id, **fields):
@@ -6480,7 +6421,7 @@ def setting_bool(key, default=False):
     return str(value or "").strip().lower() in {"1","true","yes","on"}
 
 
-LIVEVIEW_PRESETS=("standard",)
+LIVEVIEW_PRESETS=("simple","standard","pro","dark","light","people")
 LIVEVIEW_SORTS=("auto","name","active")
 LIVEVIEW_COLUMNS=("auto","2","3","4")
 
