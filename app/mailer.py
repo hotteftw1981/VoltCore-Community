@@ -37,28 +37,17 @@ DEFAULTS = {
     "mail_from_name": "",
     "mail_admin_recipients": "",
     "mail_public_base_url": "",
-    "mail_event_rfid_requests": "1",
-    "mail_event_pin_reset_admin": "1",
     "mail_event_backup_failures": "1",
     "mail_event_security_warnings": "0",
-    "mail_event_access_requests": "1",
     "mail_last_test_at": "",
     "mail_last_test_error": "",
 }
 
 TEMPLATE_LABELS = {
-    "pin_reset": "PIN vergessen",
-    "pin_changed": "PIN erstellt / zurückgesetzt",
-    "pin_reset_admin": "PIN-Reset angefordert (Admin)",
-    "rfid_request": "RFID-Self-Service",
     "system": "Systemmeldung",
+    "user_invite": "Benutzereinladung",
     "backup_failed": "Backup fehlgeschlagen",
     "security_warning": "Security-Warnung",
-    "access_verify": "Zugangsantrag · E-Mail bestätigen",
-    "access_received": "Zugangsantrag · Eingangsbestätigung",
-    "access_admin": "Zugangsantrag · Neue Anfrage (Admin)",
-    "access_approved": "Zugangsantrag · Genehmigt",
-    "access_rejected": "Zugangsantrag · Abgelehnt",
 }
 
 
@@ -100,11 +89,8 @@ def settings(include_secret_state=True):
         "last_test_at": db.get_setting("mail_last_test_at", "") or "",
         "last_test_error": db.get_setting("mail_last_test_error", "") or "",
         "events": {
-            "rfid_requests": _bool(db.get_setting("mail_event_rfid_requests", "1")),
-            "pin_reset_admin": _bool(db.get_setting("mail_event_pin_reset_admin", "1")),
             "backup_failures": _bool(db.get_setting("mail_event_backup_failures", "1")),
             "security_warnings": _bool(db.get_setting("mail_event_security_warnings", "0")),
-            "access_requests": _bool(db.get_setting("mail_event_access_requests", "1")),
         },
         "templates": [{"key":k,"label":v} for k,v in TEMPLATE_LABELS.items()],
     }
@@ -138,11 +124,8 @@ def save_settings(payload: dict):
         "mail_from_name":str(payload.get("from_name") or "").strip()[:120],
         "mail_admin_recipients":", ".join(recipients),
         "mail_public_base_url":base,
-        "mail_event_rfid_requests":"1" if payload.get("event_rfid_requests", True) else "0",
-        "mail_event_pin_reset_admin":"1" if payload.get("event_pin_reset_admin", True) else "0",
         "mail_event_backup_failures":"1" if payload.get("event_backup_failures", True) else "0",
         "mail_event_security_warnings":"1" if payload.get("event_security_warnings", False) else "0",
-        "mail_event_access_requests":"1" if payload.get("event_access_requests", True) else "0",
     }
     for key,value in values.items():
         db.set_setting(key,value)
@@ -177,48 +160,44 @@ def _absolute(base_url, path):
 def _mail_data(template_key, context):
     c=dict(context or {})
     name=str(c.get("name") or "").strip()
-    if template_key=="pin_reset":
+    if template_key=="user_invite":
         return {
-            "subject":"PIN für das Ladeguthaben zurücksetzen",
-            "eyebrow":"Ladeguthaben · Sicherheit",
-            "headline":"PIN zurücksetzen",
-            "body":f"{('Hallo '+name+',') if name else 'Hallo,'} für Ihren persönlichen Ladeguthaben-Zugang wurde eine PIN-Änderung angefordert.",
-            "cta_label":"Neue PIN festlegen","cta_url":c.get("reset_url"),
-            "detail":"Der Link ist einmalig verwendbar und 30 Minuten gültig.",
-            "notice":"Wenn Sie diese PIN-Änderung nicht angefordert haben, ignorieren Sie diese E-Mail. Ihre bisherige PIN bleibt unverändert.",
+            "subject":"Einladung zu VoltCore Community",
+            "eyebrow":"VoltCore Community",
+            "headline":"Sie wurden eingeladen",
+            "body":f"{('Hallo '+name+',') if name else 'Hallo,'} Sie wurden zur Nutzung dieser VoltCore-Community-Installation eingeladen.",
+            "detail":str(c.get("detail") or "Öffnen Sie den Link, um Ihren Zugang einzurichten."),
+            "cta_label":"Einladung annehmen",
+            "cta_url":c.get("invite_url"),
+            "notice":"Falls Sie diese Einladung nicht erwartet haben, können Sie diese Nachricht ignorieren.",
             "tone":"info",
         }
-    if template_key=="pin_changed":
-        return {
-            "subject":"Ihre PIN für das Ladeguthaben",
-            "eyebrow":"Ladeguthaben",
-            "headline":"Ihre neue PIN ist eingerichtet",
-            "body":f"{('Hallo '+name+',') if name else 'Hallo,'} Ihr persönlicher Zugang zum Ladeguthaben wurde eingerichtet bzw. aktualisiert.",
-            "code":str(c.get("pin") or "123456"),
-            "detail":"Bewahren Sie diese PIN sicher auf und geben Sie sie nicht an andere Personen weiter.",
-            "notice":"Wenn Sie diese Änderung nicht erwartet haben, wenden Sie sich bitte an die Administration.",
-            "tone":"success",
-        }
-    if template_key=="pin_reset_admin":
-        return {"subject":"PIN-Reset im Ladeguthaben angefordert","eyebrow":"Administration","headline":"PIN-Reset angefordert","body":f"Für {name or 'einen Ladebenutzer'} wurde über die öffentliche Ladeguthaben-Seite ein PIN-Reset angefordert.","detail":str(c.get("detail") or "Die bestehende PIN bleibt unverändert, bis der Benutzer den Reset-Link verwendet."),"cta_label":"Benutzerverwaltung öffnen","cta_url":c.get("admin_url") or "/users","tone":"info"}
-    if template_key=="rfid_request":
-        reason=str(c.get("reason") or "Ersatzkarte")
-        return {"subject":f"RFID-Self-Service: {reason}","eyebrow":"RFID-Self-Service","headline":reason,"body":f"{name or 'Ein Ladebenutzer'} hat über den Self-Service eine RFID-Anfrage eingereicht.","detail":str(c.get("detail") or "Bitte prüfen Sie die Anfrage in der Benutzerverwaltung."),"cta_label":"RFID-Anfragen öffnen","cta_url":c.get("admin_url") or "/users#rfid-self-service","tone":"warning" if "verlor" in reason.lower() else "info"}
     if template_key=="backup_failed":
-        return {"subject":"Backup fehlgeschlagen","eyebrow":"Systemmeldung","headline":"Backup konnte nicht erstellt werden","body":"Das automatische bzw. manuelle Backup wurde nicht erfolgreich abgeschlossen.","detail":str(c.get("detail") or "Bitte prüfen Sie Backup-Ziel, Zugangsdaten und Systemprotokoll."),"cta_label":"Backups öffnen","cta_url":c.get("admin_url") or "/backups","tone":"critical"}
+        return {
+            "subject":"VoltCore Community: Backup fehlgeschlagen",
+            "eyebrow":"Systemmeldung",
+            "headline":"Backup konnte nicht erstellt werden",
+            "body":"Ein automatisches bzw. manuelles Backup wurde nicht erfolgreich abgeschlossen.",
+            "detail":str(c.get("detail") or "Bitte prüfen Sie Backup-Konfiguration und Systemprotokoll."),
+            "cta_label":"Backups öffnen","cta_url":c.get("admin_url") or "/backups","tone":"critical",
+        }
     if template_key=="security_warning":
-        return {"subject":"Sicherheitswarnung","eyebrow":"Security","headline":"Sicherheitsereignis erkannt","body":str(c.get("body") or "Das Backend hat ein sicherheitsrelevantes Ereignis erkannt."),"detail":str(c.get("detail") or "Bitte prüfen Sie den Sicherheitsbereich und das Aktivitätsprotokoll."),"cta_label":"Sicherheit öffnen","cta_url":c.get("admin_url") or "/security","tone":"critical"}
-    if template_key=="access_verify":
-        return {"subject":"E-Mail-Adresse für Ihren Zugangsantrag bestätigen","eyebrow":"Zugang beantragen","headline":"E-Mail-Adresse bestätigen","body":f"{('Hallo '+name+',') if name else 'Hallo,'} bevor Sie den Antrag für einen Ladezugang ausfüllen, bestätigen Sie bitte Ihre E-Mail-Adresse.","detail":"Der Bestätigungslink ist einmalig verwendbar und 30 Minuten gültig.","cta_label":"E-Mail bestätigen & Antrag öffnen","cta_url":c.get("verify_url"),"notice":"Wenn Sie keinen Zugang beantragt haben, ignorieren Sie diese E-Mail. Es wird kein Benutzerkonto angelegt.","tone":"info"}
-    if template_key=="access_received":
-        return {"subject":"Ihr Zugangsantrag ist eingegangen","eyebrow":"Zugang beantragen","headline":"Antrag erfolgreich übermittelt","body":f"{('Hallo '+name+',') if name else 'Hallo,'} Ihr Antrag für die Nutzung der Ladeinfrastruktur ist bei der Administration eingegangen.","detail":"Sie erhalten eine weitere Nachricht, sobald der Antrag geprüft wurde. Bitte reichen Sie keinen zweiten Antrag ein.","tone":"success"}
-    if template_key=="access_admin":
-        return {"subject":"Neuer Antrag auf Ladezugang","eyebrow":"Administration","headline":"Neuer Zugangsantrag","body":f"{name or 'Eine Person'} hat einen neuen Antrag auf Nutzung der Ladeinfrastruktur eingereicht.","detail":str(c.get("detail") or "E-Mail-Adresse wurde bestätigt und die Nutzungsbedingungen wurden digital unterschrieben."),"cta_label":"Zugangsanträge öffnen","cta_url":c.get("admin_url") or "/access-requests","tone":"info"}
-    if template_key=="access_approved":
-        return {"subject":"Ihr Ladezugang wurde genehmigt","eyebrow":"Zugang genehmigt","headline":"Willkommen im Ladeguthaben","body":f"{('Hallo '+name+',') if name else 'Hallo,'} Ihr Antrag wurde genehmigt. Ihr persönlicher Zugang zum Ladeguthaben ist jetzt aktiv.","code":str(c.get("pin") or "123456"),"detail":"Mit dieser 6-stelligen PIN melden Sie sich im Ladeguthaben an. Dort können Sie anschließend Ihren persönlichen Türchip direkt an einer unterstützten Ladesäule einlernen.","cta_label":"Zum Ladeguthaben","cta_url":c.get("portal_url") or "/public/ladeguthaben","notice":"Bewahren Sie Ihre PIN sicher auf. Falls das automatische Chip-Anlernen an Ihrer Ladesäule nicht unterstützt wird, wenden Sie sich bitte an die Administration.","tone":"success"}
-    if template_key=="access_rejected":
-        return {"subject":"Rückmeldung zu Ihrem Zugangsantrag","eyebrow":"Zugang beantragen","headline":"Ihr Antrag wurde geprüft","body":f"{('Hallo '+name+',') if name else 'Hallo,'} Ihr Antrag auf Nutzung der Ladeinfrastruktur konnte derzeit nicht genehmigt werden.","detail":str(c.get("rejection_reason") or "Für Rückfragen wenden Sie sich bitte an die Administration."),"tone":"warning"}
-    return {"subject":str(c.get("subject") or "Systemmeldung"),"eyebrow":"Systemmeldung","headline":str(c.get("headline") or "Information aus dem Backend"),"body":str(c.get("body") or "Dies ist eine Test- bzw. Systemmeldung."),"detail":str(c.get("detail") or "Der zentrale E-Mail-Versand ist betriebsbereit."),"cta_label":c.get("cta_label"),"cta_url":c.get("cta_url"),"tone":str(c.get("tone") or "info")}
+        return {
+            "subject":"VoltCore Community: Sicherheitswarnung",
+            "eyebrow":"Security",
+            "headline":"Sicherheitsereignis erkannt",
+            "body":str(c.get("body") or "VoltCore Community hat ein sicherheitsrelevantes Ereignis erkannt."),
+            "detail":str(c.get("detail") or "Bitte prüfen Sie den Sicherheitsbereich und das Aktivitätsprotokoll."),
+            "cta_label":"Sicherheit öffnen","cta_url":c.get("admin_url") or "/security","tone":"critical",
+        }
+    return {
+        "subject":str(c.get("subject") or "VoltCore Community · Systemmeldung"),
+        "eyebrow":"VoltCore Community",
+        "headline":str(c.get("headline") or "Systemmeldung"),
+        "body":str(c.get("body") or "Dies ist eine Test- bzw. Systemmeldung."),
+        "detail":str(c.get("detail") or "Der E-Mail-Versand ist betriebsbereit."),
+        "cta_label":c.get("cta_label"),"cta_url":c.get("cta_url"),"tone":str(c.get("tone") or "info"),
+    }
 
 
 def render_template(template_key, context=None, base_url=None):
