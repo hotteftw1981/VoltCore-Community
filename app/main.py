@@ -786,6 +786,13 @@ class RFIDEnrollmentConfirmPayload(BaseModel):
     accepted: bool
 
 
+@app.get("/public/access-request", response_class=HTMLResponse)
+async def public_access_request_start_page(request:Request, sent:str|None=None):
+    cfg=db.registration_settings()
+    step="start" if cfg.get("enabled") else "disabled"
+    return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+
+
 @app.get("/public/ladeguthaben", response_class=HTMLResponse)
 async def public_charging_portal_page(request: Request, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None, pin_reset: str | None = None):
     portal_user=_portal_request_user(request)
