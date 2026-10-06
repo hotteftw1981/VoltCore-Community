@@ -3170,6 +3170,49 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     return {"ok":True,"mode":"purged","removed":removed}
 
 
+class PortalPinPayload(BaseModel):
+    pin: str
+    enabled: bool = True
+
+
+@app.get("/api/portal-admin/users/{user_id}")
+async def portal_admin_user(user_id:int):
+    u=db.get_user(user_id)
+    if not u:
+        raise HTTPException(404,"Benutzer nicht gefunden")
+    return {
+        "id":u["id"],
+        "name":u["name"],
+        "portal_enabled":bool(u.get("portal_enabled")),
+        "portal_pin_set":bool(u.get("portal_pin_set_at")),
+        "portal_pin_set_at":u.get("portal_pin_set_at"),
+        "portal_last_login_at":u.get("portal_last_login_at"),
+        "achievements":db.achievements_for_user(user_id),
+    }
+
+
+@app.post("/api/portal-admin/users/{user_id}/pin")
+async def portal_admin_set_pin(user_id:int,payload:PortalPinPayload):
+    user=db.get_user(user_id)
+    if not user:
+        raise HTTPException(404,"Benutzer nicht gefunden")
+    pin=str(payload.pin or "").strip()
+    if len(pin)!=6 or not pin.isdigit():
+        raise HTTPException(400,"PIN muss genau 6 Ziffern enthalten")
+    for row in db.portal_pin_records(include_disabled=True):
+        if int(row["id"])!=user_id and _portal_pin_ok(pin,row.get("portal_pin_hash") or ""):
+            raise HTTPException(409,"Diese PIN wird bereits verwendet")
+    db.set_user_portal_pin(user_id,_portal_pin_hash(pin),payload.enabled)
+    return {"ok":True,"portal_enabled":payload.enabled}
+
+
+@app.post("/api/portal-admin/users/{user_id}/enabled")
+async def portal_admin_enabled(user_id:int,payload:dict):
+    if not db.set_user_portal_enabled(user_id,bool(payload.get("enabled"))):
+        raise HTTPException(404,"Benutzer nicht gefunden")
+    return {"ok":True}
+
+
 class AchievementPayload(BaseModel):
     name:str
     description:str|None=None
