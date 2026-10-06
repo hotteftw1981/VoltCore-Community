@@ -1096,7 +1096,7 @@ async def registration_request_detail_page(request:Request,request_id:int,result
     item=db.access_request_view(request_id)
     if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
     message={"approved":"Antrag genehmigt und Ladeportal-Zugang erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
-    return render(request,"access_request_detail.html",page="access-requests",item=item,result_message=message)
+    return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
 
 
 @app.get("/system-users", response_class=HTMLResponse)
