@@ -45,6 +45,8 @@ Dort findest du Schritt für Schritt Voraussetzungen, Start, Ports, Datenhaltung
 
 ## ⚡ Community-Umfang
 
+> **Backend-only:** VoltCore Community besitzt ausschließlich die Verwaltungsoberfläche. Es gibt kein persönliches Ladeportal, keinen PIN-Login, keine öffentliche Benutzerregistrierung und keinen RFID-Self-Service für Ladebenutzer.
+
 Die Community Edition enthält unter anderem:
 
 - 🔌 OCPP 1.6J
