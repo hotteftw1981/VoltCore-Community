@@ -6421,7 +6421,7 @@ def setting_bool(key, default=False):
     return str(value or "").strip().lower() in {"1","true","yes","on"}
 
 
-LIVEVIEW_PRESETS=("simple","standard","pro","dark","light","people")
+LIVEVIEW_PRESETS=("standard",)
 LIVEVIEW_SORTS=("auto","name","active")
 LIVEVIEW_COLUMNS=("auto","2","3","4")
 
