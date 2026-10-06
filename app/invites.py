@@ -31,6 +31,7 @@ def ensure_schema() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 email TEXT NOT NULL,
                 display_name TEXT,
+                role TEXT NOT NULL DEFAULT 'user',
                 token_hash TEXT NOT NULL UNIQUE,
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
@@ -45,10 +46,13 @@ def ensure_schema() -> None:
         conn.commit()
 
 
-def create_invite(email: str, display_name: str | None = None, created_by: int | None = None,
+def create_invite(email: str, display_name: str | None = None, role: str = "user", created_by: int | None = None,
                   ttl_hours: int = INVITE_TTL_HOURS) -> dict:
     ensure_schema()
     address=str(email or "").strip().lower()
+    role=str(role or "user").strip().lower()
+    if role not in {"admin","user","viewer"}:
+        role="user"
     if not address or "@" not in address:
         raise ValueError("Eine gültige E-Mail-Adresse ist erforderlich.")
 
@@ -66,11 +70,12 @@ def create_invite(email: str, display_name: str | None = None, created_by: int |
         )
         cur=conn.execute(
             """INSERT INTO community_user_invites
-               (email,display_name,token_hash,created_at,expires_at,created_by)
-               VALUES(?,?,?,?,?,?)""",
+               (email,display_name,role,token_hash,created_at,expires_at,created_by)
+               VALUES(?,?,?,?,?,?,?)""",
             (
                 address,
                 str(display_name or "").strip()[:120] or None,
+                role,
                 token_hash,
                 now.isoformat(),
                 expires.isoformat(),
@@ -84,6 +89,7 @@ def create_invite(email: str, display_name: str | None = None, created_by: int |
         "id": invite_id,
         "email": address,
         "display_name": str(display_name or "").strip()[:120] or None,
+        "role": role,
         "token": token,
         "created_at": now.isoformat(),
         "expires_at": expires.isoformat(),
@@ -96,7 +102,7 @@ def get_invite(token: str) -> dict | None:
     now=_now().isoformat()
     with db._connect() as conn:
         row=conn.execute(
-            """SELECT id,email,display_name,created_at,expires_at,accepted_at,created_by
+            """SELECT id,email,display_name,role,created_at,expires_at,accepted_at,created_by
                FROM community_user_invites
                WHERE token_hash=? AND accepted_at IS NULL AND expires_at>? LIMIT 1""",
             (token_hash, now),
