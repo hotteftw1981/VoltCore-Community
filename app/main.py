@@ -66,8 +66,6 @@ BERLIN_TZ = ZoneInfo("Europe/Berlin")
 APP_STARTED_AT = datetime.now(timezone.utc)
 OPERATIONAL_STARTUP_GRACE_SECONDS = 90
 
-LIVEVIEW_PEOPLE_CACHE = {}
-LIVEVIEW_PEOPLE_CACHE_SECONDS = 30
 
 def _local_dt(value):
     if not value:
@@ -996,11 +994,11 @@ class MailSettingsPayload(BaseModel):
     from_name: str = ""
     admin_recipients: str = ""
     public_base_url: str = ""
-    event_rfid_requests: bool = True
-    event_pin_reset_admin: bool = True
+    event_rfid_requests: bool = False
+    event_pin_reset_admin: bool = False
     event_backup_failures: bool = True
     event_security_warnings: bool = False
-    event_access_requests: bool = True
+    event_access_requests: bool = False
 
 
 class MailTestPayload(BaseModel):
@@ -1028,13 +1026,7 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
     base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
     sample={
         "name":"Max Mustermann",
-        "pin":"482731",
-        "reset_url":base+"/public/ladeguthaben/pin-reset?token=TEST-VORSCHAU",
-        "verify_url":base+"/public/access-request/form?token=TEST-VORSCHAU",
-        "portal_url":base+"/public/ladeguthaben",
         "admin_url":base+"/users",
-        "reason":"RFID-Karte als verloren gemeldet",
-        "rejection_reason":"Dies ist ein Beispiel für einen Ablehnungsgrund im Testversand.",
         "detail":"Dies ist eine Testnachricht aus den E-Mail-Einstellungen. Es wurde keine echte Aktion ausgelöst.",
         "subject":"Test-Systemmeldung",
         "headline":"E-Mail-System erfolgreich getestet",
@@ -1056,28 +1048,6 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
 
 
-class RegistrationSettingsPayload(BaseModel):
-    enabled: bool = True
-    budget_mode: str = "hours"
-    reference_hours: float = 39
-    reference_kwh: float = 150
-    limit_mode: str = "warn"
-    fields: list[dict] = []
-
-@app.get("/api/settings/registration")
-async def api_registration_settings():
-    return db.registration_settings()
-
-@app.put("/api/settings/registration")
-async def api_registration_settings_save(payload:RegistrationSettingsPayload):
-    try:
-        result=db.save_registration_settings(payload.model_dump())
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    if result.get("recalculated_users"):
-        _schedule_local_list_sync("Registrierungs-Budgetregel geändert")
-    return {"ok":True,"settings":result}
-
 @app.get("/api/settings/branding")
 async def api_branding_settings():
     return db.branding_settings()
@@ -1088,13 +1058,6 @@ def _branding_color(value: str) -> str:
     if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
         raise HTTPException(400, "Die Akzentfarbe muss als Hex-Farbe angegeben werden, z. B. #2563eb.")
     return value.lower()
-
-
-def _branding_prefix(value: str) -> str:
-    value=re.sub(r"[^A-Za-z0-9]","",str(value or "").upper())[:12]
-    if len(value)<2:
-        raise HTTPException(400,"Das Gutschein-Präfix muss mindestens 2 Buchstaben/Ziffern enthalten.")
-    return value
 
 
 def _branding_text(value: str, fallback: str, max_length: int=80) -> str:
@@ -1125,14 +1088,12 @@ async def _save_branding_asset(upload: UploadFile | None, kind: str) -> str | No
 async def api_save_branding(
     request: Request,
     product_name: str = Form(...), organization_name: str = Form(...),
-    display_name: str = Form(...), product_subtitle: str = Form(...), voucher_prefix: str = Form(...),
+    display_name: str = Form(...), product_subtitle: str = Form(...),
     primary_color: str = Form(...),
     logo_light: UploadFile | None = File(None), logo_dark: UploadFile | None = File(None),
-    favicon: UploadFile | None = File(None), login_background: UploadFile | None = File(None),
-    app_background: UploadFile | None = File(None), header_background: UploadFile | None = File(None),
+    favicon: UploadFile | None = File(None),
     remove_logo_light: str = Form("0"), remove_logo_dark: str = Form("0"),
-    remove_favicon: str = Form("0"), remove_login_background: str = Form("0"),
-    remove_app_background: str = Form("0"), remove_header_background: str = Form("0"),
+    remove_favicon: str = Form("0"),
 ):
     current=db.branding_settings()
     values={
@@ -1140,13 +1101,11 @@ async def api_save_branding(
         "branding_organization_name":_branding_text(organization_name,current["organization_name"],100),
         "branding_display_name":_branding_text(display_name,current["display_name"],80),
         "branding_product_subtitle":_branding_text(product_subtitle,current["product_subtitle"],100),
-        "branding_voucher_prefix":_branding_prefix(voucher_prefix),
         "branding_primary_color":_branding_color(primary_color),
     }
     asset_fields=(
         ("logo_light",logo_light,remove_logo_light),("logo_dark",logo_dark,remove_logo_dark),
-        ("favicon",favicon,remove_favicon),("login_background",login_background,remove_login_background),
-        ("app_background",app_background,remove_app_background),("header_background",header_background,remove_header_background),
+        ("favicon",favicon,remove_favicon),
     )
     for kind,upload,remove in asset_fields:
         key=f"branding_{kind}_url"
@@ -1682,89 +1641,9 @@ def _liveview_snapshot():
             "heartbeat_age_seconds":diagnostic.get("heartbeat_age_seconds"),
             "subprotocol":connection.get("subprotocol") or "ocpp1.6",
         })
-    station_by_id={str(x.get("id")):x for x in stations}
-    profile_cache={}
-    people_sessions=[]
-    for tx in active:
-        user_id=tx.get("user_id")
-        profile=None
-        if user_id not in (None,""):
-            try:
-                uid=int(user_id)
-                if uid not in profile_cache:
-                    cached=LIVEVIEW_PEOPLE_CACHE.get(uid) or {}
-                    cached_at=cached.get("cached_at")
-                    if isinstance(cached_at,datetime) and (now-cached_at).total_seconds()<LIVEVIEW_PEOPLE_CACHE_SECONDS:
-                        profile_cache[uid]=cached.get("profile") or {}
-                    else:
-                        user=db.get_user(uid) or {}
-                        analytics=db.user_analytics(uid) or {}
-                        budget=db.user_monthly_budget(uid) or {}
-                        earned=db.earned_achievements_for_user(uid,8)
-                        achievement_count=db.earned_achievement_count(uid)
-                        gamification=db.user_gamification_profile(uid)
-                        fallback_vehicle=db.primary_vehicle_for_user(uid) or {}
-                        built={
-                            "user":{
-                                "id":uid,"name":user.get("name"),"role":user.get("role"),"department":user.get("department"),
-                                "image_path":user.get("image_path"),"gamification_enabled":bool(user.get("gamification_enabled",1)),
-                            },
-                            "analytics":{
-                                "current_month":analytics.get("current_month") or {},
-                                "current_year":analytics.get("current_year") or {},
-                                "all_time":analytics.get("all_time") or {},
-                            },
-                            "budget":budget,
-                            "achievement_count":achievement_count,
-                            "gamification":gamification,
-                            "fallback_vehicle":{
-                                "id":fallback_vehicle.get("id"),"name":fallback_vehicle.get("name"),"make":fallback_vehicle.get("make"),
-                                "model":fallback_vehicle.get("model"),"plate":fallback_vehicle.get("plate"),"image_path":fallback_vehicle.get("image_path"),
-                            },
-                            "achievements":[{
-                                "name":a.get("display_name") or a.get("name"),"description":a.get("display_description") or a.get("description"),
-                                "icon":a.get("display_icon") or a.get("icon") or "🏅","awarded_at":a.get("awarded_at"),
-                                "event_badge":bool(a.get("event_badge")),"rarity":a.get("rarity") or "common",
-                                "xp":int(a.get("xp") or 0),"tier_name":a.get("tier_name"),"category":a.get("category") or "Allgemein",
-                            } for a in earned],
-                        }
-                        LIVEVIEW_PEOPLE_CACHE[uid]={"cached_at":now,"profile":built}
-                        profile_cache[uid]=built
-                profile=profile_cache.get(uid)
-            except (TypeError,ValueError):
-                profile=None
-        cp_id=str(tx.get("charge_point_id") or "")
-        connector_id=int(tx.get("connector_id") or 0)
-        station=station_by_id.get(cp_id) or {}
-        connector=next((x for x in (station.get("connectors") or []) if int(x.get("connector_id") or 0)==connector_id),{})
-        fallback_vehicle=(profile or {}).get("fallback_vehicle") or {}
-        session_has_vehicle=bool(tx.get("vehicle_id") or tx.get("vehicle_name"))
-        people_vehicle={
-            "id":tx.get("vehicle_id"),"name":tx.get("vehicle_name"),"make":tx.get("vehicle_make"),"model":tx.get("vehicle_model"),
-            "plate":tx.get("vehicle_plate"),"image_path":tx.get("vehicle_image_path"),
-        } if session_has_vehicle else fallback_vehicle
-        people_sessions.append({
-            "transaction_id":tx.get("id"),"charge_point_id":cp_id,"location":station.get("location") or cp_id,
-            "connector_id":connector_id,"started_at":tx.get("started_at"),"energy_kwh":tx.get("energy_kwh"),
-            "power_kw":connector.get("power_kw"),"last_power_kw":connector.get("last_power_kw"),
-            "soc_percent":connector.get("soc_percent") if connector.get("soc_percent") is not None else connector.get("last_soc_percent"),
-            "status":connector.get("status") or station.get("status") or "Unknown",
-            "telemetry_freshness":connector.get("freshness"),"meter_age_seconds":connector.get("meter_age_seconds"),
-            "user":(profile or {}).get("user") or {
-                "id":user_id,"name":tx.get("user_name") or tx.get("id_tag") or "Unbekannter Ladebenutzer",
-                "role":tx.get("user_role"),"department":tx.get("user_department"),"image_path":tx.get("user_image_path"),
-                "gamification_enabled":False,
-            },
-            "vehicle":people_vehicle,
-            "analytics":(profile or {}).get("analytics") or {},
-            "budget":(profile or {}).get("budget") or {},
-            "achievement_count":int((profile or {}).get("achievement_count") or 0),
-            "gamification":(profile or {}).get("gamification") or {"xp":0,"level":1,"title":"Stecker-Neuling","progress_pct":0,"level_xp":0,"next_level_xp":125},
-            "achievements":(profile or {}).get("achievements") or [],
-        })
     available_count=sum(1 for station in stations if station.get("connected") and str(station.get("status") or "")=="Available")
     return {
-        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,"people_sessions":people_sessions,"settings":db.liveview_settings(),
+        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,"settings":db.liveview_settings(),
         "summary":{"stations":len(stations),"online":online_count,"offline":max(0,len(stations)-online_count),
                    "available":available_count,"active_sessions":len(active),
                    "charging_connectors":charging_count,"total_power_kw":round(total_power,2) if has_power else None,
@@ -2596,7 +2475,6 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
         raise HTTPException(400,str(exc))
     if not updated:
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     _schedule_local_list_sync("Benutzerdaten / Ladelimit geändert")
     user=db.get_user(user_id) or {}
     old_budget=before.get("monthly_kwh_limit")
@@ -2632,7 +2510,6 @@ async def upload_user_image(user_id:int, image:UploadFile=File(...)):
     if not db.get_user(user_id):
         raise HTTPException(404,"Benutzer nicht gefunden")
     image_path=await _store_user_image(user_id,image)
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     return {"ok":True,"image_path":image_path}
 
 
@@ -2643,7 +2520,6 @@ async def delete_user_image(user_id:int):
         raise HTTPException(404,"Benutzer nicht gefunden")
     image_path=user.get("image_path")
     db.set_user_image(user_id,None)
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
@@ -2666,7 +2542,6 @@ async def delete_user(request:Request,user_id: int):
         raise HTTPException(404,"Benutzer nicht gefunden")
     if not db.deactivate_user(user_id):
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     _schedule_local_list_sync("Benutzer deaktiviert")
     auth=getattr(request.state,"auth_user",None) or {}
     db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebenutzer deaktiviert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details="Benutzer und zugeordnete RFID-Karten deaktiviert; Historie bleibt erhalten")
@@ -2687,7 +2562,6 @@ async def delete_user_permanent(request:Request,user_id:int):
                 detail+=" "+" · ".join(check["reasons"])
             raise HTTPException(409,detail)
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
@@ -2720,7 +2594,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
                 detail+=" "+" · ".join(check["purge_reasons"])
             raise HTTPException(409,detail)
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
