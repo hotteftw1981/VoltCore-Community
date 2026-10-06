@@ -135,5 +135,54 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertNotIn('href="/engagement"', base)
         self.assertFalse((ROOT / "app" / "templates" / "engagement.html").exists())
 
+
+    def test_advanced_enterprise_modules_are_removed(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+        reports = (ROOT / "app" / "templates" / "reports.html").read_text(encoding="utf-8")
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        for needle in (
+            "/load-management",
+            "/cost-centers",
+            "/imports",
+            "/api/import/ladecloud",
+            "/api/integrations/fleet/",
+            "/api/smart-charging/",
+            "FLEET_INTEGRATION_TOKEN",
+            "CostCenterPayload",
+            "SmartChargingSettingsPayload",
+        ):
+            self.assertNotIn(needle, main)
+
+        for needle in (
+            "CREATE TABLE IF NOT EXISTS load_rules",
+            "CREATE TABLE IF NOT EXISTS cost_centers",
+            "def list_load_rules(",
+            "def list_cost_centers(",
+            "def import_ladecloud_rows(",
+            "def import_history_stats(",
+            "def fleet_integration_sessions(",
+            "def _validate_cost_center_conn(",
+        ):
+            self.assertNotIn(needle, db)
+
+        self.assertIn('DROP TABLE IF EXISTS load_rules', db)
+        self.assertIn('DROP TABLE IF EXISTS cost_centers', db)
+        self.assertNotIn("Kostenstelle", reports)
+        self.assertNotIn('href="/load-management"', base)
+        self.assertNotIn('href="/cost-centers"', base)
+        self.assertNotIn('href="/imports"', base)
+        self.assertNotIn("openpyxl", requirements)
+
+        for relative in (
+            "app/templates/load_management.html",
+            "app/templates/cost_centers.html",
+            "app/templates/imports.html",
+            "app/ladecloud_import.py",
+        ):
+            self.assertFalse((ROOT / relative).exists())
+
 if __name__ == "__main__":
     unittest.main()
