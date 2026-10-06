@@ -654,9 +654,9 @@ html[data-theme="light"] select,html[data-theme="light"] textarea{box-shadow:ins
 @media(max-width:520px){
   .mobile-topbar{grid-template-columns:44px minmax(0,1fr)}.mobile-version{display:none}.mobile-brand small{display:none}
   main{padding-inline:10px!important}header{grid-template-columns:minmax(0,1fr) auto;gap:8px}header h1{font-size:21px}header p{display:none}
-  .stats.five,.stats.four,.stats.six,.report-kpis,.smart-kpis,.detail-kpis,.ops-stats,.import-stats,.portal-kpis{grid-template-columns:repeat(2,minmax(0,1fr))!important}.stat{padding:12px}.stat b{font-size:19px}
+  .stats.five,.stats.four,.stats.six,.report-kpis,.detail-kpis,.ops-stats{grid-template-columns:repeat(2,minmax(0,1fr))!important}.stat{padding:12px}.stat b{font-size:19px}
   .toolbar-actions,.form-actions,.detail-actions,.report-action-buttons{grid-template-columns:1fr!important}.vehicle-card-actions{grid-template-columns:1fr!important}
-  .metric-grid,.measure-grid,.device-metrics,.detected-grid,.budget-detail-values,.active-user-session-grid,.budget-dashboard-grid,.portal-detail-grid{grid-template-columns:1fr 1fr!important}
+  .metric-grid,.measure-grid,.device-metrics,.detected-grid,.budget-detail-values,.active-user-session-grid,.budget-dashboard-grid{grid-template-columns:1fr 1fr!important}
   .diagnostic-health-grid{grid-template-columns:1fr!important}.diagnostic-filter{grid-template-columns:1fr 1fr!important}
   .panel{padding:13px}.charger{padding:14px}.power{font-size:26px}.details{grid-template-columns:1fr auto}
   .modal{padding:0!important}.modal-card{max-height:94dvh!important;border-radius:20px 20px 0 0!important}
@@ -665,8 +665,8 @@ html[data-theme="light"] select,html[data-theme="light"] textarea{box-shadow:ins
 
 @media(max-width:380px){
   .mobile-brand b{font-size:11px}.mobile-brand-mark{width:28px;height:28px;font-size:22px}
-  .stats.five,.stats.four,.stats.six,.report-kpis,.smart-kpis,.detail-kpis,.ops-stats,.import-stats,.portal-kpis{grid-template-columns:1fr!important}
-  .metric-grid,.measure-grid,.device-metrics,.detected-grid,.budget-detail-values,.active-user-session-grid,.budget-dashboard-grid,.portal-detail-grid{grid-template-columns:1fr!important}
+  .stats.five,.stats.four,.stats.six,.report-kpis,.detail-kpis,.ops-stats{grid-template-columns:1fr!important}
+  .metric-grid,.measure-grid,.device-metrics,.detected-grid,.budget-detail-values,.active-user-session-grid,.budget-dashboard-grid{grid-template-columns:1fr!important}
   .report-periods,.report-tab-buttons,.analytics-periods,.diagnostic-filter{grid-template-columns:1fr!important}
 }
 
