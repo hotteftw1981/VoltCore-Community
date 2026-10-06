@@ -56,6 +56,15 @@ MEDIA_DIR = Path(os.getenv("DATA_DIR", "/data")) / "vehicle_images"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BRANDING_DIR = Path(os.getenv("DATA_DIR", "/data")) / "branding"
 BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+ACCESS_SIGNATURE_DIR = Path(os.getenv("DATA_DIR", "/data")) / "access_request_signatures"
+ACCESS_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
+ACCESS_TERMS_VERSION = "2026-10-06"
+ACCESS_TERMS = [
+    "Der Ladezugang ist persoenlich und darf nur im Rahmen der von der Administration freigegebenen Nutzung verwendet werden.",
+    "RFID-Karten, PINs und Zugangsdaten sind sicher aufzubewahren. Verlust, Diebstahl oder Missbrauch muessen unverzueglich gemeldet werden.",
+    "Der Betreiber kann Ladezugaenge bei Missbrauch, Sicherheitsproblemen oder organisatorischer Notwendigkeit voruebergehend sperren oder dauerhaft entziehen.",
+    "Technische Verfuegbarkeit kann nicht jederzeit garantiert werden. Es gelten zusaetzlich die oertlichen Betriebs- und Sicherheitsregeln der jeweiligen Ladeinfrastruktur.",
+]
 MAX_VEHICLE_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
