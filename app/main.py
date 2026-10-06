@@ -287,7 +287,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/")
+    return path in PUBLIC_PATHS or path.startswith("/invite/") or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -385,7 +385,7 @@ async def web_access_control(request: Request, call_next):
     request.state.auth_user=auth
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
+    admin_only = path in {"/welcome","/settings","/security","/tariffs","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -454,7 +454,7 @@ async def setup_submit(request: Request, username: str = Form(...), display_name
     token=secrets.token_urlsafe(32); expires=datetime.now(timezone.utc)+timedelta(hours=SESSION_HOURS)
     db.create_system_session(_session_hash(token), user_id, expires.isoformat()); db.mark_system_login(user_id)
     db.add_activity(system_user_id=user_id, username=username, display_name=display_name, action="Ersteinrichtung abgeschlossen", category="Zugriff", target="Erster Administrator")
-    response=RedirectResponse(url="/", status_code=303)
+    response=RedirectResponse(url="/welcome", status_code=303)
     response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_HOURS*3600, httponly=True, samesite="lax", secure=_cookie_secure(request), path="/")
     return response
 
@@ -465,6 +465,8 @@ async def login_page(request: Request, next: str = "/", reason: str | None = Non
         return RedirectResponse(url="/setup", status_code=303)
     token=request.cookies.get(SESSION_COOKIE)
     if token and db.system_user_for_session(_session_hash(token)):
+        if db.get_setting("community_onboarding_completed","0")!="1":
+            return RedirectResponse(url="/welcome", status_code=303)
         return RedirectResponse(url="/", status_code=303)
     return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason)
 
@@ -580,6 +582,169 @@ async def logout(request: Request):
     return response
 
 
+
+def _community_onboarding_state():
+    allowance_enabled=str(db.get_setting("community_free_allowance_enabled","0") or "0")=="1"
+    try:
+        allowance_kwh=max(0.0,float(db.get_setting("community_free_allowance_kwh","0") or 0))
+    except (TypeError,ValueError):
+        allowance_kwh=0.0
+    return {
+        "completed":db.get_setting("community_onboarding_completed","0")=="1",
+        "branding":db.branding_settings(),
+        "mail":mailer.settings(),
+        "allowance_enabled":allowance_enabled,
+        "allowance_kwh":allowance_kwh,
+        "invite_counts":db.community_invite_counts(),
+    }
+
+
+@app.get("/welcome", response_class=HTMLResponse)
+async def community_welcome_page(request:Request):
+    state=_community_onboarding_state()
+    if state["completed"]:
+        return RedirectResponse(url="/",status_code=303)
+    return render(request,"community_welcome.html",page="welcome",onboarding=state)
+
+
+@app.post("/welcome", response_class=HTMLResponse)
+async def community_welcome_submit(
+    request:Request,
+    organization_name:str=Form(...),
+    display_name:str=Form(...),
+    primary_color:str=Form("#146af5"),
+    price_eur_kwh:str=Form(""),
+    allowance_enabled:str|None=Form(None),
+    allowance_kwh:str=Form(""),
+    smtp_enabled:str|None=Form(None),
+    smtp_host:str=Form(""),
+    smtp_port:int=Form(587),
+    smtp_security:str=Form("starttls"),
+    smtp_username:str=Form(""),
+    smtp_password:str=Form(""),
+    smtp_from_email:str=Form(""),
+    smtp_from_name:str=Form(""),
+    invite_emails:str=Form(""),
+):
+    org=str(organization_name or "").strip()
+    display=str(display_name or "").strip()
+    color=str(primary_color or "").strip().lower()
+    if not org or not display:
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Organisation und Anzeigename sind erforderlich.")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}",color):
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Bitte eine gültige Akzentfarbe auswählen.")
+
+    emails=[]
+    for value in re.split(r"[,;\\n]+",str(invite_emails or "")):
+        value=value.strip().lower()
+        if value and value not in emails:
+            emails.append(value)
+    if any(not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+",email) for email in emails):
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Mindestens eine Einladungs-E-Mail-Adresse ist ungültig.")
+
+    mail_payload={
+        "enabled":bool(smtp_enabled),
+        "host":smtp_host,"port":smtp_port,"security":smtp_security,
+        "username":smtp_username,"password":smtp_password or None,
+        "from_email":smtp_from_email,"from_name":smtp_from_name or display,
+        "admin_recipients":smtp_from_email if smtp_from_email else "",
+        "public_base_url":str(request.base_url).rstrip("/"),
+        "event_backup_failures":True,"event_security_warnings":False,
+    }
+    if emails and not smtp_enabled:
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Für Benutzer-Einladungen muss SMTP aktiviert sein.")
+
+    try:
+        mailer.save_settings(mail_payload)
+    except (ValueError,RuntimeError) as exc:
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error=str(exc))
+
+    db.set_setting("branding_product_name","VoltCore Community")
+    db.set_setting("branding_organization_name",org[:100])
+    db.set_setting("branding_display_name",display[:80])
+    db.set_setting("branding_product_subtitle","Community Edition · OCPP Charging Management")
+    db.set_setting("branding_primary_color",color)
+
+    allowance=bool(allowance_enabled)
+    try:
+        allowance_value=max(0.0,float(str(allowance_kwh or "0").replace(",",".")))
+    except ValueError:
+        allowance_value=0.0
+    if allowance and allowance_value<=0:
+        return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Für ein aktiviertes Freikontingent bitte einen Wert größer 0 kWh angeben.")
+    db.set_setting("community_free_allowance_enabled","1" if allowance else "0")
+    db.set_setting("community_free_allowance_kwh",str(allowance_value if allowance else 0))
+
+    price_text=str(price_eur_kwh or "").strip().replace(",",".")
+    if price_text:
+        try:
+            price=max(0.0,float(price_text))
+        except ValueError:
+            return render(request,"community_welcome.html",status_code=400,page="welcome",onboarding=_community_onboarding_state(),error="Der Strompreis ist ungültig.")
+        cents=int(round(price*100))
+        active_global=[x for x in db.list_tariffs() if x.get("scope")=="global" and int(x.get("active") or 0)]
+        if not active_global:
+            db.create_tariff("Standardtarif","global",None,cents,datetime.now(timezone.utc).replace(microsecond=0).isoformat(),None,None,None)
+
+    invite_errors=[]
+    for email in emails:
+        raw=secrets.token_urlsafe(32)
+        token_hash=_session_hash(raw)
+        expires=(datetime.now(timezone.utc)+timedelta(days=7)).isoformat()
+        db.create_community_invite(email,token_hash,expires)
+        invite_url=str(request.base_url).rstrip("/")+"/invite/"+raw
+        try:
+            await asyncio.to_thread(mailer.send_template,"user_invite",email,{"invite_url":invite_url},str(request.base_url).rstrip("/"))
+        except Exception as exc:
+            logging.exception("Community invitation mail failed for %s",email)
+            invite_errors.append(email)
+
+    if invite_errors:
+        return render(
+            request,"community_welcome.html",status_code=502,page="welcome",
+            onboarding=_community_onboarding_state(),
+            error="Einladungen konnten nicht an alle Adressen gesendet werden: "+", ".join(invite_errors)+". Bitte SMTP prüfen und erneut versuchen."
+        )
+
+    db.set_setting("community_onboarding_completed","1")
+    auth=getattr(request.state,"auth_user",None) or {}
+    db.add_activity(
+        system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
+        action="Community-Ersteinrichtung abgeschlossen",category="System",target=org,
+        details=f"SMTP={'aktiv' if smtp_enabled else 'aus'} · Standardpreis={'gesetzt' if price_text else 'übersprungen'} · Freikontingent={'aktiv' if allowance else 'aus'} · Einladungen={len(emails)}"
+    )
+    return RedirectResponse(url="/",status_code=303)
+
+
+@app.get("/invite/{token}", response_class=HTMLResponse)
+async def community_invite_page(request:Request,token:str):
+    invite=db.community_invite(_session_hash(token))
+    return render(request,"community_invite.html",page="public",invite=invite,token=token if invite else "",accepted=False)
+
+
+@app.post("/invite/{token}", response_class=HTMLResponse)
+async def community_invite_accept(request:Request,token:str,name:str=Form(...),phone:str=Form("")):
+    invite=db.community_invite(_session_hash(token))
+    if not invite:
+        return render(request,"community_invite.html",status_code=400,page="public",invite=None,token="",accepted=False,error="Diese Einladung ist ungültig, abgelaufen oder wurde bereits verwendet.")
+    clean_name=str(name or "").strip()
+    if not clean_name:
+        return render(request,"community_invite.html",status_code=400,page="public",invite=invite,token=token,accepted=False,error="Bitte einen Namen angeben.")
+    existing=db.get_user_by_email(invite["email"])
+    if existing:
+        user_id=int(existing["id"])
+    else:
+        allowance_enabled=str(db.get_setting("community_free_allowance_enabled","0") or "0")=="1"
+        allowance=float(db.get_setting("community_free_allowance_kwh","0") or 0) if allowance_enabled else None
+        user_id=db.create_user(
+            clean_name,role="Fahrer",email=invite["email"],phone=str(phone or "").strip() or None,
+            status="Aktiv",monthly_kwh_limit=allowance,monthly_limit_mode="warn",
+            gamification_enabled=False,weekly_hours=None,budget_source="manual",
+        )
+    db.mark_community_invite_accepted(invite["id"],user_id)
+    return render(request,"community_invite.html",page="public",invite=invite,token="",accepted=True,user=db.get_user(user_id))
+
+
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
@@ -592,6 +757,9 @@ async def activity_page(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    auth=getattr(request.state,"auth_user",None) or {}
+    if auth.get("role")=="admin" and db.get_setting("community_onboarding_completed","0")!="1":
+        return RedirectResponse(url="/welcome",status_code=303)
     return render(request, "dashboard.html", page="dashboard")
 
 
