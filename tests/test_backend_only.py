@@ -308,5 +308,67 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertNotIn("ghcr.io/hotteftw1981/drk-ocpp-backend", releases)
         self.assertNotIn("ghcr.io/hotteftw1981/voltcore:latest", releases)
 
+
+    def test_runtime_dead_code_and_default_limit_wiring(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        ocpp = (ROOT / "app" / "ocpp_server.py").read_text(encoding="utf-8")
+        users = (ROOT / "app" / "templates" / "users.html").read_text(encoding="utf-8")
+        first_run = (ROOT / "app" / "templates" / "first_run.html").read_text(encoding="utf-8")
+
+        for needle in (
+            "BackgroundTasks",
+            "import base64",
+            "import binascii",
+            "PILImage",
+            "def _normalize_signature_png(",
+            "def _save_access_signature(",
+            "free_credit_enabled",
+        ):
+            self.assertNotIn(needle, main)
+
+        for needle in (
+            "def normalize_vehicle_plate(",
+            "def vehicle_plate_key(",
+            "def is_known_charge_point(",
+            "def update_latest_service_operation(",
+            "def local_list_uids_for_user(",
+            "def get_user_by_email(",
+            "def user_analytics(",
+            "_PORTAL_MONTH_NAMES",
+            "def _portal_period_context(",
+            "def _portal_period_summary_conn(",
+            "def primary_vehicle_for_user(",
+            "def list_users(",
+            "def get_tariff(",
+            "def resolve_tariff(",
+            "def billing_groups_for_user(",
+            "def _setting_int(",
+            "def active_rfid_count(",
+            "def user_has_active_rfid(",
+            "def _report_row_amounts(",
+            "def recent_security_events(",
+        ):
+            self.assertNotIn(needle, db)
+
+        self.assertIn("community_default_monthly_limit_enabled", main)
+        self.assertIn("community_default_monthly_kwh", main)
+        self.assertIn("payload.model_fields_set", main)
+        self.assertIn('"defaults":{"monthly_kwh_limit":default_limit', main)
+        self.assertIn("default_monthly_limit_enabled", first_run)
+        self.assertNotIn("free_credit_enabled", first_run)
+        self.assertIn("userDefaults", users)
+        self.assertIn("userDefaults.monthly_kwh_limit", users)
+
+        # Keep backward compatibility for Community RC databases, then remove
+        # the obsolete setting name from persistent state.
+        self.assertIn("community_free_credit_enabled", db)
+        self.assertIn("DELETE FROM app_settings WHERE key='community_free_credit_enabled'", db)
+
+        # Offline LocalList authorization must be re-evaluated on month change.
+        self.assertIn("def refresh_local_list_for_month(", db)
+        self.assertIn("if db.refresh_local_list_for_month():", ocpp)
+        self.assertIn('sync_pending_local_lists(reason="Monatswechsel Ladebudget")', ocpp)
+
 if __name__ == "__main__":
     unittest.main()
