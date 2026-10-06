@@ -1099,6 +1099,27 @@ async def registration_request_detail_page(request:Request,request_id:int,result
     return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
 
 
+@app.post("/registration-requests/{request_id}/decision")
+async def registration_request_decision(request:Request,request_id:int,action:str=Form(...),note:str=Form(""),monthly_kwh_limit:str=Form(""),monthly_limit_mode:str=Form("warn")):
+    item=db.get_access_request(request_id)
+    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
+    auth=request.state.auth_user or {}
+    if action=="review":
+        db.set_access_request_in_review(request_id)
+        return RedirectResponse(url=f"/registration-requests/{request_id}?result=review",status_code=303)
+    if action=="reject":
+        db.decide_access_request(request_id,"Abgelehnt",auth.get("id"),note)
+        db.deactivate_notification(f"access-request:{request_id}")
+        return RedirectResponse(url=f"/registration-requests/{request_id}?result=rejected",status_code=303)
+    if action!="approve":
+        raise HTTPException(400,"Ungültige Aktion")
+    limit=None if str(monthly_kwh_limit or "").strip()=="" else max(0.0,float(str(monthly_kwh_limit).replace(",",".")))
+    pin=_generate_unique_portal_pin()
+    db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),limit,monthly_limit_mode,note,"manual",return_details=True)
+    db.deactivate_notification(f"access-request:{request_id}")
+    return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
+
+
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
