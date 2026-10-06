@@ -1541,6 +1541,31 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
 
 
+@app.get("/api/settings/portal-leaderboard-names")
+async def portal_leaderboard_names_setting():
+    return {"show_names":db.setting_bool("portal_leaderboard_show_names",False)}
+
+
+@app.put("/api/settings/portal-leaderboard-names")
+async def set_portal_leaderboard_names_setting(payload: dict):
+    value=bool(payload.get("show_names")); db.set_setting("portal_leaderboard_show_names","1" if value else "0")
+    return {"ok":True,"show_names":value}
+
+
+@app.get("/api/settings/bonus-policy")
+async def bonus_policy_setting():
+    return db.bonus_policy_settings()
+
+
+@app.put("/api/settings/bonus-policy")
+async def set_bonus_policy_setting(payload: dict):
+    try:
+        return {"ok":True,**db.set_bonus_policy_settings(payload.get("default_valid_days",90),payload.get("transfer_after_days",30),bool(payload.get("transfer_enabled",True)))}
+    except (TypeError,ValueError) as exc:
+        raise HTTPException(400,str(exc))
+
+
+
 @app.get("/api/settings/branding")
 async def api_branding_settings():
     return db.branding_settings()
