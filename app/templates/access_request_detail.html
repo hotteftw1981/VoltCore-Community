@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Zugangsantrag #{{ item.id }} · {{ branding.product_name }}{% endblock %}
+{% block heading %}Zugangsantrag #{{ item.id }}{% endblock %}
+{% block subtitle %}{{ item.name }} · {{ item.status }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="access-detail-grid">
+    <div><span>E-Mail</span><b>{{ item.email }}</b></div>
+    {% for f in item.form_fields %}<div><span>{{ f.label }}</span><b>{{ item.form_values.get(f.id) or '—' }}</b></div>{% endfor %}
+  </div>
+  <div class="access-detail-section"><h3>Nutzungsbedingungen · {{ item.terms_version }}</h3>{% for t in item.terms %}<p><b>{{ loop.index }}.</b> {{ t }}</p>{% endfor %}</div>
+  {% if item.status not in ['Genehmigt','Abgelehnt'] %}
+  <form method="post" action="/access-requests/{{ item.id }}/decision" class="access-decision-box">
+    <label>Interner Hinweis / Ablehnungsgrund<textarea name="note" rows="3"></textarea></label>
+    <div class="form-grid"><label>Optionales Monatslimit kWh<input name="monthly_kwh_limit" type="number" min="0" step="1" placeholder="leer = unbegrenzt"></label><label>Limit-Verhalten<select name="monthly_limit_mode"><option value="warn">Warnen</option><option value="block">Bei Limit sperren</option></select></label></div>
+    <div class="form-actions"><button class="secondary" name="action" value="review" type="submit">In Prüfung</button><button class="primary" name="action" value="approve" type="submit">Genehmigen</button><button class="stop" name="action" value="reject" type="submit">Ablehnen</button></div>
+  </form>
+  {% endif %}
+  {% if result_message %}<div class="auth-notice success">{{ result_message }}</div>{% endif %}
+  <div class="form-actions"><a class="secondary button" href="/access-requests">← Zurück</a></div>
+</section>
+{% endblock %}
