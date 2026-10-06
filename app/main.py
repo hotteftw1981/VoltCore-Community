@@ -1650,7 +1650,7 @@ async def api_ocpp_device(cp_id: str):
     cp["connectors"] = db.connectors_for_charge_point(cp_id)
     from .ocpp_server import ACTIVE_CONNECTIONS
     cp["connected"] = cp_id in ACTIVE_CONNECTIONS
-    return {"device": cp, "events": db.events_for_charge_point(cp_id, 120), "transactions": db.transactions_for_charge_point(cp_id, 50), "active_transactions": db.active_transactions_for_charge_point(cp_id, 20), "live_telemetry": db.live_telemetry_for_charge_point(cp_id)}
+    return {"device": cp, "events": db.events_for_charge_point(cp_id, 120), "transactions": db.transactions_for_charge_point(cp_id, 50), "active_transactions": db.active_transactions_for_charge_point(cp_id, 20), "live_telemetry": db.live_telemetry_for_charge_point(cp_id), "load_state": db.load_state_for_charge_point(cp_id)}
 
 @app.post("/api/ocpp-devices/{cp_id}/onboard")
 async def onboard_ocpp_device(cp_id: str, payload: DeviceOnboardPayload):
@@ -1741,7 +1741,7 @@ async def api_charge_point(cp_id: str):
     for e in events:
         e["human_label"]=labels.get(e.get("event_type"),e.get("event_type") or "OCPP-Ereignis")
         e["human_status"]="Fehler/Warnung" if any(x in str(e.get("event_type","")).lower() for x in ("fault","error","warning")) else ("Pausiert" if "Suspended" in str(e.get("payload","")) else "Information")
-    return {"charge_point": cp, "events": events, "transactions": transactions, "active_transactions": active, "meter_samples": db.meter_samples_for_charge_point(cp_id), "meter_diagnostics": db.meter_diagnostics_for_charge_point(cp_id, 12), "meter_capabilities": db.meter_capabilities_for_charge_point(cp_id), "diagnostics": db.diagnostic_summary(cp_id), "live_telemetry": live}
+    return {"charge_point": cp, "events": events, "transactions": transactions, "active_transactions": active, "meter_samples": db.meter_samples_for_charge_point(cp_id), "meter_diagnostics": db.meter_diagnostics_for_charge_point(cp_id, 12), "meter_capabilities": db.meter_capabilities_for_charge_point(cp_id), "diagnostics": db.diagnostic_summary(cp_id), "live_telemetry": live, "load_state": db.load_state_for_charge_point(cp_id)}
 
 @app.get("/api/tariffs")
 async def api_tariffs():
