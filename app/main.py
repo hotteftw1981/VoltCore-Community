@@ -1074,11 +1074,8 @@ class MailSettingsPayload(BaseModel):
     from_name: str = ""
     admin_recipients: str = ""
     public_base_url: str = ""
-    event_rfid_requests: bool = False
-    event_pin_reset_admin: bool = False
     event_backup_failures: bool = True
     event_security_warnings: bool = False
-    event_access_requests: bool = False
 
 
 class MailTestPayload(BaseModel):
