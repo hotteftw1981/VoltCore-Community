@@ -1086,6 +1086,11 @@ async def public_portal_reveal_ack(request:Request,payload:dict):
     return db.acknowledge_portal_gamification_reveals(int(portal_user["id"]),payload.get("award_id"),payload.get("level"))
 
 
+@app.get("/registration-requests", response_class=HTMLResponse)
+async def registration_requests_page(request:Request):
+    return render(request,"access_requests.html",page="access-requests",requests=db.list_access_requests())
+
+
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
