@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="{{ branding.primary_color }}">
 <title>Zwei-Faktor-Anmeldung - {{ branding.product_name }}</title>
-<script>(()=>{const t=localStorage.getItem('drk-ocpp-theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();</script>
+<script>(()=>{const t=localStorage.getItem('voltcore-community-theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();</script>
 {% if branding.favicon_url %}<link rel="icon" href="{{ branding.favicon_url }}">{% endif %}
 <link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
 </head>
@@ -21,7 +21,7 @@
 </section></main>
 {% include "_info_modal.html" %}
 <script>
-document.getElementById('authTheme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';localStorage.setItem('drk-ocpp-theme',r.dataset.theme)};
+document.getElementById('authTheme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';localStorage.setItem('voltcore-community-theme',r.dataset.theme)};
 const info=document.getElementById('infoModal'),open=document.getElementById('infoOpen'),close=document.getElementById('infoClose');
 if(open)open.onclick=()=>info.hidden=false;if(close)close.onclick=()=>info.hidden=true;
 </script>
