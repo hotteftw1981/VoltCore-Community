@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="de" data-theme="dark" style="--brand: {{ branding.primary_color }};--brand-contrast: {{ branding.contrast_color }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LiveView / Kiosk 2.0 - {{ branding.product_name }}</title>
+{% if branding.favicon_url %}<link rel="icon" href="{{ branding.favicon_url }}">{% endif %}
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#09111a;--surface:#101a25;--surface2:#152231;--surface3:#1b2a3a;--line:#26384b;
+  --text:#f4f7fa;--muted:#91a2b4;--green:#36d487;--yellow:#ffc75b;--red:#ff646d;--blue:#62aaf8;
+  --accent:var(--brand);--shadow:0 16px 45px rgba(0,0,0,.22);
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{background:var(--bg);color:var(--text);overflow:auto;transition:background .18s,color .18s}
+button,select,.admin-link{font:inherit}
+button,select,.admin-link{border:1px solid var(--line);background:var(--surface2);color:var(--text);border-radius:10px;padding:9px 11px;text-decoration:none}
+button,.admin-link{cursor:pointer}
+button:focus-visible,select:focus-visible,.admin-link:focus-visible,.connector-button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+.kiosk-shell{min-height:100vh;padding:17px 21px 20px;display:flex;flex-direction:column;gap:12px}
+.kiosk-head{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.kiosk-brand{display:flex;align-items:center;gap:12px;min-width:0}
+.kiosk-logo{width:155px;height:45px;display:grid;place-items:start;flex:0 0 auto}
+.kiosk-logo img{max-width:100%;max-height:100%;object-fit:contain}
+.logo-light{display:none}
+.kiosk-title{min-width:0}.kiosk-title h1{font-size:22px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kiosk-title p{font-size:11px;color:var(--muted);margin:3px 0 0}
+.preset-chip{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:3px 7px;border:1px solid var(--line);border-radius:99px;font-size:9px;color:var(--muted);vertical-align:2px}
+.kiosk-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.design-select{display:flex;align-items:center;gap:6px}.design-select span{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.design-select select{padding:8px 28px 8px 9px;font-size:11px}
+.clock{text-align:right;margin-right:4px}.clock b{font-size:19px;display:block}.clock small{font-size:9px;color:var(--muted)}
+.important-strip{display:flex;align-items:center;gap:11px;min-height:48px;padding:9px 13px;border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+.important-icon{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--surface3);font-weight:900;flex:0 0 auto}
+.important-strip b,.important-strip small{display:block}.important-strip b{font-size:12px}.important-strip small{color:var(--muted);font-size:9px;margin-top:2px}
+.important-strip.ok .important-icon{color:var(--green)}.important-strip.active .important-icon{color:var(--blue)}.important-strip.warn{border-color:color-mix(in srgb,var(--yellow) 45%,var(--line))}.important-strip.warn .important-icon{color:var(--yellow)}
+.important-strip.critical{border-color:color-mix(in srgb,var(--red) 50%,var(--line));background:color-mix(in srgb,var(--red) 7%,var(--surface))}.important-strip.critical .important-icon{color:var(--red)}
+.summary{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:8px}
+.summary>div{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:9px 11px;min-width:0}
+.summary span{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.07em}.summary b{display:block;font-size:19px;margin-top:2px}.summary small{display:block;color:var(--muted);font-size:8px;margin-top:1px}
+.station-grid{flex:1;display:grid;gap:11px;align-content:start;min-width:0}
+.station-grid.cols-auto{grid-template-columns:repeat(auto-fit,minmax(345px,1fr))}
+.station-grid.cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.station-grid.cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.station-grid.cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.station{min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow);overflow:hidden}
+.station.is-critical{border-color:color-mix(in srgb,var(--red) 45%,var(--line))}
+.station.is-charging{border-color:color-mix(in srgb,var(--green) 38%,var(--line))}
+.station-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}.station-head h2{font-size:17px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.station-head p{margin:3px 0 0;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.state-pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface2);border-radius:999px;padding:5px 8px;font-size:9px;white-space:nowrap}
+.dot{width:7px;height:7px;border-radius:50%;background:#738496;flex:0 0 auto}.dot.green{background:var(--green);box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 12%,transparent)}.dot.yellow{background:var(--yellow)}.dot.red{background:var(--red)}
+.connector-button{width:100%;border:1px solid var(--line);background:var(--surface2);color:var(--text);border-radius:10px;text-align:left;cursor:pointer}
+.connector-button:hover{border-color:color-mix(in srgb,var(--accent) 34%,var(--line))}
+.empty{grid-column:1/-1;border:1px dashed var(--line);border-radius:12px;padding:28px;color:var(--muted);text-align:center}
+.footer-note{text-align:center;color:var(--muted);font-size:8px;margin-top:auto;padding-top:2px}
+.error-strip{position:fixed;z-index:80;left:50%;top:10px;transform:translateX(-50%);max-width:min(680px,calc(100% - 20px));padding:9px 13px;border-radius:10px;background:#5c2028;border:1px solid #a64650;color:#fff;font-size:10px;box-shadow:0 10px 30px #0006}
+
+/* SIMPLE */
+body[data-preset="simple"]{--bg:#071018;--surface:#0e1923;--surface2:#132331}
+body[data-preset="simple"] .summary{display:none}
+body[data-preset="simple"] .important-strip{min-height:55px}
+body[data-preset="simple"] .station-grid.cols-auto{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}
+.simple-station{padding:18px;display:grid;gap:14px;min-height:260px;align-content:center;text-align:center}
+.simple-station .station-head{text-align:left}
+.simple-status{font-size:42px;line-height:1;font-weight:950;letter-spacing:.02em}
+.simple-status.available{color:var(--green)}.simple-status.fault{color:var(--red)}.simple-status.charging{color:var(--blue)}.simple-status.paused{color:var(--yellow)}
+.simple-power{font-size:31px;font-weight:900}.simple-sub{color:var(--muted);font-size:11px}
+.simple-session{font-size:12px;font-weight:800}.simple-connectors{display:flex;justify-content:center;gap:6px;flex-wrap:wrap}.simple-connectors .connector-button{width:auto;padding:7px 10px;font-size:9px}
+body[data-preset="simple"]{overflow:hidden}
+body[data-preset="simple"] .kiosk-shell{height:100vh;min-height:0;padding:12px 16px 13px;gap:8px}
+body[data-preset="simple"] .station-grid.simple-page-grid{min-height:0;overflow:hidden;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:10px;align-content:stretch}
+body[data-preset="simple"] .simple-station{height:100%;min-height:0;overflow:hidden}
+
+/* STANDARD · V0.9.7.38 */
+body[data-preset="standard"]{overflow:hidden;--surface:#101a25;--surface2:#152435;--surface3:#1c3146}
+body[data-preset="standard"] .kiosk-shell{height:100vh;min-height:0;padding:12px 16px 13px;gap:8px}
+body[data-preset="standard"] .kiosk-head{min-height:44px}
+body[data-preset="standard"] .summary{gap:6px}
+body[data-preset="standard"] .summary>div{padding:7px 9px}
+body[data-preset="standard"] .summary span{font-size:clamp(9px,.62vw,11px)}
+body[data-preset="standard"] .summary b{font-size:clamp(19px,1.3vw,24px)}
+body[data-preset="standard"] .summary small{font-size:clamp(9px,.58vw,10px)}
+body[data-preset="standard"] .station-grid.standard-page-grid{min-height:0;overflow:hidden;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px;align-content:stretch}
+.standard-station{height:100%;min-height:0;overflow:hidden;padding:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);gap:0;border-radius:13px}
+.standard-station .standard-head{padding:12px 13px 10px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px;border-bottom:1px solid var(--line)}
+.standard-station .standard-head h2{font-size:clamp(16px,1.1vw,20px);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.standard-station .standard-head p{margin:3px 0 0;color:var(--muted);font-size:clamp(9px,.6vw,11px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.standard-station .state-pill{font-size:clamp(9px,.62vw,11px);padding:5px 8px}
+.standard-hero{padding:11px 13px;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(120px,.8fr);gap:12px;align-items:center;background:linear-gradient(135deg,color-mix(in srgb,var(--surface2) 82%,transparent),var(--surface))}
+.standard-state small,.standard-power-block small{display:block;color:var(--muted);font-size:clamp(8px,.55vw,10px);text-transform:uppercase;letter-spacing:.05em}
+.standard-state strong{display:block;margin-top:2px;font-size:clamp(22px,1.55vw,29px);line-height:1}.standard-state strong.available{color:var(--green)}.standard-state strong.charging{color:var(--blue)}.standard-state strong.paused{color:var(--yellow)}.standard-state strong.fault{color:var(--red)}
+.standard-state b{display:block;margin-top:5px;font-size:clamp(10px,.7vw,13px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.standard-state span{display:block;margin-top:2px;color:var(--muted);font-size:clamp(9px,.58vw,11px)}
+.standard-power-block{text-align:right}.standard-power-block strong{display:block;margin-top:2px;font-size:clamp(28px,2vw,38px);line-height:1;font-weight:950}.standard-power-block span{display:block;margin-top:5px;color:var(--muted);font-size:clamp(9px,.58vw,11px)}
+.standard-connectors{padding:9px 10px 10px;display:grid;gap:6px;align-content:start;min-height:0;overflow:hidden}
+.standard-connector{display:grid;grid-template-columns:minmax(88px,.9fr) 78px minmax(0,1.4fr);gap:8px;align-items:center;padding:8px 9px;border-radius:9px;background:var(--surface2)}
+.standard-connector b,.standard-connector small{display:block}.standard-connector b{font-size:clamp(10px,.7vw,12px)}.standard-connector small{color:var(--muted);font-size:clamp(8px,.54vw,10px);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.standard-power{text-align:center;font-size:clamp(15px,1vw,18px);font-weight:950}
+@media(max-width:1280px){body[data-preset="standard"] .station-grid.standard-page-grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr))}.standard-state strong{font-size:clamp(18px,1.6vw,24px)}.standard-power-block strong{font-size:clamp(24px,2.2vw,32px)}}
+
+/* PRO */
+body[data-preset="pro"]{--bg:#06101a;--surface:#0b1621;--surface2:#101e2c;--surface3:#162638}
+body[data-preset="pro"] .station-grid.cols-auto{grid-template-columns:repeat(auto-fit,minmax(430px,1fr))}
+.pro-station{padding:12px;display:grid;gap:9px}
+.pro-diagnostic{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}.pro-diagnostic span{font-size:9px;color:var(--muted)}.pro-diagnostic b{font-size:10px}.pro-diagnostic.critical b{color:var(--red)}.pro-diagnostic.warning b{color:var(--yellow)}.pro-diagnostic.healthy b{color:var(--green)}
+.pro-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.pro-grid div{background:var(--surface2);border-radius:7px;padding:7px}.pro-grid span{display:block;font-size:7px;color:var(--muted);text-transform:uppercase}.pro-grid b{display:block;font-size:10px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pro-connectors{display:grid;gap:5px}.pro-connector{padding:8px;display:grid;grid-template-columns:minmax(95px,1fr) repeat(4,minmax(58px,.7fr)) minmax(110px,1fr);gap:6px;align-items:center}.pro-connector span{display:block;color:var(--muted);font-size:7px;text-transform:uppercase}.pro-connector b{display:block;font-size:9px;margin-top:2px}.pro-session{min-width:0}.pro-session b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* DARK */
+body[data-preset="dark"]{--bg:#03070b;--surface:#090f15;--surface2:#0e1720;--surface3:#15212d;--line:#1e2c39;--muted:#7f92a4}
+body[data-preset="dark"] .kiosk-shell{background:radial-gradient(circle at 12% 0,color-mix(in srgb,var(--accent) 10%,transparent),transparent 30%)}
+.dark-station{padding:16px;display:grid;gap:12px;background:linear-gradient(155deg,var(--surface),#05090d)}
+.dark-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:14px}.dark-state strong{display:block;font-size:25px}.dark-state small{color:var(--muted);font-size:9px}.dark-power{text-align:right}.dark-power strong{font-size:30px}.dark-power small{display:block;color:var(--muted);font-size:8px}
+.dark-progress{height:5px;border-radius:99px;background:var(--surface3);overflow:hidden}.dark-progress i{display:block;height:100%;background:var(--green)}
+.dark-details{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.dark-details div{padding:7px 8px;border-top:1px solid var(--line)}.dark-details span{display:block;color:var(--muted);font-size:7px}.dark-details b{display:block;font-size:10px;margin-top:2px}
+.dark-connectors{display:flex;gap:6px;flex-wrap:wrap}.dark-connectors .connector-button{width:auto;padding:7px 9px;font-size:8px}
+
+/* LIGHT */
+body[data-preset="light"]{color-scheme:light;--bg:#eef2f5;--surface:#fff;--surface2:#f5f7f9;--surface3:#e9eef2;--line:#d6dfe6;--text:#17222d;--muted:#677786;--green:#138b48;--yellow:#a76c00;--red:#c82635;--blue:#236ea8;--shadow:0 8px 24px rgba(28,44,58,.08)}
+body[data-preset="light"] .logo-dark{display:none}body[data-preset="light"] .logo-light{display:block}
+body[data-preset="light"] .admin-link,body[data-preset="light"] button,body[data-preset="light"] select{background:#fff}
+.light-station{display:grid;grid-template-columns:9px minmax(0,1fr);min-height:210px}.light-rail{background:var(--green)}.light-station.is-critical .light-rail{background:var(--red)}.light-station.is-charging .light-rail{background:var(--blue)}.light-body{padding:14px;display:grid;gap:10px}
+.light-main{display:flex;justify-content:space-between;align-items:center;gap:12px}.light-main strong{font-size:29px}.light-main span{display:block;color:var(--muted);font-size:8px;text-transform:uppercase}.light-main b{font-size:13px}.light-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}.light-metrics div{padding:8px;border:1px solid var(--line);border-radius:8px}.light-metrics span{display:block;color:var(--muted);font-size:7px}.light-metrics b{display:block;font-size:10px;margin-top:2px}.light-connectors{display:flex;gap:6px;flex-wrap:wrap}.light-connectors .connector-button{width:auto;padding:7px 9px;font-size:8px}
+
+/* V0.9.7.50 - alle Kiosk-Presets ohne Scrollen */
+body[data-preset="dark"],body[data-preset="light"]{overflow:hidden}
+body[data-preset="dark"] .kiosk-shell,body[data-preset="light"] .kiosk-shell{height:100vh;min-height:0;padding:11px 15px 12px;gap:7px}
+body[data-preset="dark"] .station-grid.dark-page-grid,body[data-preset="light"] .station-grid.light-page-grid{min-height:0;overflow:hidden;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:8px;align-content:stretch}
+body[data-preset="dark"] .dark-station,body[data-preset="light"] .light-station{height:100%;min-height:0;overflow:hidden}
+body[data-preset="dark"] .dark-station{align-content:start}
+body[data-preset="light"] .light-body{min-height:0;align-content:start}
+
+/* V0.9.7.38 - PRO dashboard layout, scrollfrei */
+body[data-preset="pro"]{overflow:hidden}
+body[data-preset="pro"] .kiosk-shell{height:100vh;min-height:0;padding:9px 13px 10px;gap:6px}
+body[data-preset="pro"] .kiosk-head{min-height:40px}
+body[data-preset="pro"] .kiosk-logo{height:38px;width:132px}
+body[data-preset="pro"] .kiosk-title h1{font-size:clamp(18px,1.25vw,22px)}
+body[data-preset="pro"] .kiosk-title p{font-size:clamp(10px,.72vw,12px)}
+body[data-preset="pro"] .clock b{font-size:clamp(17px,1.15vw,20px)}
+body[data-preset="pro"] .important-strip{min-height:38px;padding:6px 9px;border-radius:8px}
+body[data-preset="pro"] .important-icon{width:24px;height:24px}
+body[data-preset="pro"] .important-strip b{font-size:clamp(12px,.85vw,15px)}
+body[data-preset="pro"] .important-strip small{font-size:clamp(9px,.62vw,11px)}
+body[data-preset="pro"] .summary{gap:5px}
+body[data-preset="pro"] .summary>div{padding:5px 7px;border-radius:8px}
+body[data-preset="pro"] .summary span{font-size:clamp(8px,.55vw,10px)}
+body[data-preset="pro"] .summary b{font-size:clamp(16px,1.15vw,20px);margin-top:1px}
+body[data-preset="pro"] .summary small{font-size:clamp(8px,.52vw,10px)}
+body[data-preset="pro"] .station-grid.pro-page-grid{min-height:0;overflow:hidden;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:7px;align-content:stretch}
+body[data-preset="pro"] .station{height:100%;min-height:0;overflow:hidden;border-radius:11px}
+body[data-preset="pro"] .pro-station{padding:0;gap:0;display:grid;grid-template-rows:auto auto auto minmax(0,1fr)}
+body[data-preset="pro"] .pro-head{padding:8px 9px 7px;border-bottom:1px solid var(--line)}
+body[data-preset="pro"] .pro-head h2{font-size:clamp(15px,1vw,18px);margin:0}
+body[data-preset="pro"] .pro-head p{font-size:clamp(8px,.55vw,10px);margin:2px 0 0;color:var(--muted)}
+body[data-preset="pro"] .state-pill{padding:4px 7px;font-size:clamp(8px,.55vw,10px)}
+.pro-hero{display:grid;grid-template-columns:150px minmax(0,1fr);gap:9px;padding:8px 9px;background:linear-gradient(135deg,color-mix(in srgb,var(--surface2) 88%,transparent),var(--surface))}
+.pro-live{display:flex;flex-direction:column;justify-content:center;min-width:0}.pro-live span{color:var(--muted);font-size:clamp(8px,.55vw,10px);text-transform:uppercase}.pro-live strong{font-size:clamp(25px,1.8vw,34px);line-height:1;margin-top:2px}.pro-live small{font-size:clamp(8px,.52vw,10px);color:var(--muted);margin-top:5px}
+.pro-session-hero{min-width:0;display:grid;align-content:center;gap:3px}.pro-session-hero span{font-size:clamp(8px,.53vw,9px);color:var(--muted);text-transform:uppercase}.pro-session-hero strong{font-size:clamp(13px,.9vw,16px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pro-session-hero small{font-size:clamp(8px,.52vw,10px);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pro-dashboard{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;padding:0 9px 7px}.pro-dashboard div{background:var(--surface2);border-radius:6px;padding:5px 6px}.pro-dashboard span{display:block;color:var(--muted);font-size:clamp(7px,.48vw,8px);text-transform:uppercase}.pro-dashboard b{display:block;font-size:clamp(9px,.64vw,11px);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pro-connectors{padding:0 9px 9px;display:grid;gap:4px;min-height:0;overflow:hidden;align-content:start}.pro-connector{padding:5px 6px;display:grid;grid-template-columns:minmax(82px,1fr) repeat(4,minmax(50px,.65fr)) minmax(100px,1.2fr);gap:5px;align-items:center;border-radius:7px}.pro-connector span{display:block;color:var(--muted);font-size:clamp(7px,.46vw,8px);text-transform:uppercase}.pro-connector b{display:block;font-size:clamp(9px,.6vw,10px);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pro-session{min-width:0}
+body[data-preset="pro"] .footer-note{font-size:8px;padding:0}
+
+/* V0.9.7.44 · STANDARD + PRO sichtbar neu aufgebaut */
+body[data-preset="standard"] .station-grid.standard-page-grid{grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:10px}
+body[data-preset="standard"] .standard-station{grid-template-rows:auto minmax(108px,.8fr) minmax(0,1.2fr);border-radius:15px}
+.standard-head{padding:13px 14px 11px!important}.standard-head-badges{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.standard-head h2{font-size:clamp(18px,1.25vw,23px)!important}.standard-head p{font-size:clamp(10px,.68vw,12px)!important}
+.standard-diag{display:inline-flex;align-items:center;padding:5px 7px;border:1px solid var(--line);border-radius:999px;font-size:clamp(8px,.52vw,10px);white-space:nowrap}.standard-diag.warning{color:var(--yellow);border-color:color-mix(in srgb,var(--yellow) 35%,var(--line))}.standard-diag.critical{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,var(--line))}
+.standard-main{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(150px,.8fr);gap:16px;align-items:center;padding:16px 15px;background:linear-gradient(135deg,var(--surface2),color-mix(in srgb,var(--accent) 4%,var(--surface)))}
+.standard-state>span,.standard-power-block>span{display:block;color:var(--muted);font-size:clamp(9px,.62vw,11px);text-transform:uppercase;letter-spacing:.08em}.standard-state>strong{display:block;margin-top:3px;font-size:clamp(28px,2vw,38px);line-height:1;font-weight:950}.standard-state>strong.available{color:var(--green)}.standard-state>strong.charging{color:var(--blue)}.standard-state>strong.paused{color:var(--yellow)}.standard-state>strong.fault{color:var(--red)}.standard-state>b{display:block;margin-top:8px;font-size:clamp(12px,.82vw,15px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.standard-state>small{display:block;margin-top:3px;color:var(--muted);font-size:clamp(10px,.68vw,12px)}
+.standard-power-block{text-align:right}.standard-power-block>strong{display:block;margin-top:4px;font-size:clamp(31px,2.35vw,45px);line-height:1;font-weight:950}.standard-power-block>small{display:block;margin-top:7px;color:var(--muted);font-size:clamp(9px,.62vw,11px)}
+.standard-connectors{padding:10px 11px 12px;gap:7px;align-content:start}.standard-connector{display:grid!important;grid-template-columns:88px minmax(0,1fr) 105px!important;gap:10px!important;align-items:center!important;padding:10px 11px!important;min-height:58px;background:var(--surface2)!important}.standard-connector-id{display:flex;align-items:center;gap:7px}.standard-connector-id strong{display:grid;place-items:center;width:33px;height:33px;border-radius:9px;background:var(--surface3);font-size:13px}.standard-connector-id span{font-size:10px;color:var(--muted)}.standard-connector-main{min-width:0}.standard-connector-main b,.standard-connector-main small,.standard-connector-power b,.standard-connector-power small{display:block}.standard-connector-main b{font-size:clamp(11px,.75vw,13px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.standard-connector-main small{margin-top:3px;color:var(--muted);font-size:clamp(9px,.6vw,11px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.standard-connector-power{text-align:right}.standard-connector-power b{font-size:clamp(15px,1vw,19px)}.standard-connector-power small{margin-top:2px;color:var(--muted);font-size:9px}
+body[data-preset="standard"] .station.has-diagnostic-alert:not(.is-critical){border-color:color-mix(in srgb,var(--yellow) 28%,var(--line))}
+@media(max-width:1280px){body[data-preset="standard"] .station-grid.standard-page-grid{grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(3,minmax(0,1fr))}.standard-main{padding:11px 12px}.standard-state>strong{font-size:26px}.standard-power-block>strong{font-size:30px}.standard-connector{min-height:48px;padding:7px 8px!important}}
+
+body[data-preset="pro"] .station-grid.pro-page-grid{gap:9px}
+body[data-preset="pro"] .pro-station{grid-template-rows:auto auto auto auto minmax(0,1fr);border-radius:14px}
+body[data-preset="pro"] .pro-head{padding:10px 11px 9px}.pro-head h2{font-size:clamp(17px,1.15vw,21px)!important}.pro-head p{font-size:clamp(9px,.62vw,11px)!important}
+.pro-main{display:grid;grid-template-columns:145px 145px minmax(0,1fr);gap:8px;padding:9px 10px}.pro-operating,.pro-live,.pro-session-hero{min-width:0;border:1px solid var(--line);border-radius:9px;background:var(--surface2);padding:8px 9px;display:flex;flex-direction:column;justify-content:center}.pro-operating>span,.pro-live>span,.pro-session-hero>span{font-size:clamp(8px,.54vw,10px);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.pro-operating>strong{font-size:clamp(20px,1.4vw,27px);line-height:1;margin-top:3px}.pro-operating.available>strong{color:var(--green)}.pro-operating.charging>strong{color:var(--blue)}.pro-operating.paused>strong{color:var(--yellow)}.pro-operating.fault>strong{color:var(--red)}.pro-operating>small,.pro-live>small,.pro-session-hero>small{margin-top:5px;color:var(--muted);font-size:clamp(8px,.54vw,10px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pro-live>strong{font-size:clamp(23px,1.65vw,32px);line-height:1;margin-top:3px}.pro-session-hero>strong{font-size:clamp(12px,.82vw,15px);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pro-health{margin:0 10px 7px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface2)}.pro-health div{min-width:0}.pro-health span,.pro-health b{display:block}.pro-health span{font-size:8px;color:var(--muted);text-transform:uppercase}.pro-health b{margin-top:2px;font-size:clamp(10px,.68vw,12px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pro-health>small{font-size:9px;color:var(--muted);white-space:nowrap}.pro-health.warning{border-color:color-mix(in srgb,var(--yellow) 32%,var(--line))}.pro-health.warning b{color:var(--yellow)}.pro-health.critical{border-color:color-mix(in srgb,var(--red) 32%,var(--line))}.pro-health.critical b{color:var(--red)}
+.pro-dashboard{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important;padding:0 10px 8px!important}.pro-dashboard div{padding:7px 8px!important;border:1px solid color-mix(in srgb,var(--line) 75%,transparent)}.pro-dashboard span{font-size:clamp(8px,.52vw,9px)!important}.pro-dashboard b{font-size:clamp(10px,.7vw,12px)!important;margin-top:3px!important}
+.pro-connectors{padding:0 10px 10px!important;gap:6px!important}.pro-connector{display:grid!important;grid-template-columns:105px 82px 74px 70px 62px minmax(110px,1fr)!important;gap:7px!important;align-items:center!important;padding:7px 8px!important;min-height:49px;background:var(--surface2)!important}.pro-connector-title{display:flex;align-items:center;gap:7px}.pro-connector-title strong{display:grid;place-items:center;width:31px;height:31px;border-radius:8px;background:var(--surface3);font-size:12px}.pro-connector-title span{font-size:9px!important;text-transform:none!important}.pro-connector span{font-size:clamp(8px,.5vw,9px)!important}.pro-connector b{font-size:clamp(10px,.66vw,12px)!important;margin-top:2px!important}.pro-session{min-width:0}
+body[data-preset="pro"] .station.has-diagnostic-alert:not(.is-critical){border-color:var(--line)}
+@media(max-width:1200px){.pro-main{grid-template-columns:120px 120px minmax(0,1fr)}.pro-connector{grid-template-columns:88px 70px 64px 58px minmax(95px,1fr)!important}.pro-connector>div:nth-child(5){display:none}}
+
+/* PEOPLE / SESSION */
+body[data-preset="people"]{overflow:hidden;--bg:#071019;--surface:#0d1824;--surface2:#132232;--surface3:#1a2d40}
+body[data-preset="people"] .kiosk-shell{height:100vh;min-height:0;padding:10px 14px;gap:7px;background:radial-gradient(circle at 10% 0,color-mix(in srgb,var(--accent) 10%,transparent),transparent 30%),var(--bg)}
+body[data-preset="people"] .kiosk-head{min-height:42px}
+body[data-preset="people"] .important-strip{min-height:39px;padding:6px 10px}
+body[data-preset="people"] .summary{gap:5px}
+body[data-preset="people"] .summary>div{padding:6px 8px}
+body[data-preset="people"] .summary span{font-size:clamp(8px,.55vw,10px)}
+body[data-preset="people"] .summary b{font-size:clamp(16px,1.15vw,20px)}
+body[data-preset="people"] .summary small{font-size:clamp(8px,.52vw,10px)}
+body[data-preset="people"] .station-grid.people-grid{min-height:0;overflow:hidden;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:minmax(0,1fr);gap:8px;align-content:stretch}
+.people-card{height:100%;min-height:0;overflow:hidden;background:linear-gradient(150deg,var(--surface),#09111a);border:1px solid var(--line);border-radius:14px;padding:11px;display:grid;grid-template-rows:auto auto auto auto minmax(0,1fr) auto auto;gap:7px;box-shadow:var(--shadow)}.people-card:only-child{grid-column:1/-1;width:min(980px,100%);justify-self:center}
+.people-head{display:grid;grid-template-columns:76px minmax(0,1fr) 150px;gap:10px;align-items:center;min-width:0}
+.people-avatar{width:76px;height:76px;border-radius:50%;overflow:hidden;background:var(--surface3);display:grid;place-items:center;font-size:27px;font-weight:950;border:2px solid color-mix(in srgb,var(--accent) 38%,var(--line))}
+.people-avatar img{width:100%;height:100%;object-fit:cover}
+.people-user{min-width:0}.people-user h2{margin:0;font-size:clamp(20px,1.45vw,26px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.people-user p{margin:3px 0 0;color:var(--muted);font-size:clamp(10px,.7vw,12px)}.people-role{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.people-role span{border:1px solid var(--line);border-radius:99px;padding:4px 7px;font-size:clamp(8px,.55vw,10px);color:var(--muted)}
+.people-vehicle-photo{height:76px;border-radius:10px;overflow:hidden;background:var(--surface2);display:grid;place-items:center;border:1px solid var(--line);position:relative}
+.people-vehicle-photo img{width:100%;height:100%;object-fit:cover}.people-car-fallback{font-size:28px}.people-vehicle-photo small{position:absolute;left:6px;right:6px;bottom:5px;padding:3px 5px;border-radius:5px;background:rgba(0,0,0,.56);color:#fff;font-size:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.people-live{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.people-live div{background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:7px}.people-live span{display:block;color:var(--muted);font-size:clamp(8px,.55vw,10px);text-transform:uppercase}.people-live b{display:block;font-size:clamp(16px,1.1vw,20px);margin-top:2px}.people-live div:first-child b{color:var(--green);font-size:clamp(20px,1.45vw,26px)}
+.people-level{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;align-items:center;background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 12%,var(--surface2)),var(--surface2));border:1px solid var(--line);border-radius:9px;padding:7px 9px}.people-level strong{font-size:clamp(12px,.85vw,15px)}.people-level small{color:var(--muted);font-size:clamp(8px,.55vw,10px)}.people-level-bar{height:7px;border-radius:99px;background:var(--surface3);overflow:hidden}.people-level-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--green));border-radius:inherit}
+.people-nerd-title{display:flex;justify-content:space-between;align-items:center;gap:8px}.people-nerd-title b{font-size:clamp(11px,.76vw,13px)}.people-nerd-title small{color:var(--muted);font-size:clamp(8px,.55vw,10px)}
+.people-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;min-height:0}.people-stat{background:var(--surface2);border-radius:7px;padding:6px;min-width:0}.people-stat span{display:block;color:var(--muted);font-size:clamp(7px,.5vw,9px);text-transform:uppercase}.people-stat b{display:block;font-size:clamp(10px,.7vw,12px);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.people-achievements{display:flex;align-items:center;gap:5px;min-height:31px;overflow:hidden}.people-achievements>span{font-size:8px;color:var(--muted);text-transform:uppercase;margin-right:2px}.people-award{display:inline-flex;align-items:center;gap:4px;max-width:145px;border:1px solid color-mix(in srgb,var(--yellow) 28%,var(--line));background:color-mix(in srgb,var(--yellow) 7%,var(--surface2));border-radius:99px;padding:4px 7px;font-size:clamp(8px,.55vw,10px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.people-award i{font-style:normal;font-size:12px}.people-award[data-rarity="legendary"],.people-award[data-rarity="secret"]{box-shadow:0 0 0 1px color-mix(in srgb,var(--yellow) 28%,transparent),0 0 18px color-mix(in srgb,var(--yellow) 12%,transparent)}
+.people-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}.people-location{min-width:0}.people-location b,.people-location small{display:block}.people-location b{font-size:8px}.people-location small{font-size:6px;color:var(--muted);margin-top:2px}.people-telemetry{width:auto;padding:6px 9px;font-size:7px}
+.people-empty{grid-column:1/-1;height:100%;display:grid;place-items:center;text-align:center;border:1px dashed var(--line);border-radius:14px;background:var(--surface)}.people-empty strong{display:block;font-size:64px}.people-empty b{display:block;margin-top:12px;font-size:clamp(24px,2vw,34px)}.people-empty small{display:block;color:var(--muted);font-size:clamp(12px,.9vw,16px);margin-top:7px}
+body[data-preset="people"] .footer-note{font-size:6px;padding:0}
+
+/* TELEMETRY MODAL */
+.modal[hidden]{display:none}.modal{position:fixed;inset:0;background:rgba(2,6,11,.78);z-index:90;display:grid;place-items:center;padding:22px}
+.telemetry-card{width:min(1050px,96vw);max-height:92vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:17px;padding:17px;box-shadow:0 25px 70px rgba(0,0,0,.42)}
+.modal-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start}.modal-head h2{margin:0;font-size:19px}.modal-head p{margin:3px 0 0;color:var(--muted);font-size:9px}.close{width:32px;height:32px;padding:0;border-radius:50%}
+.metric-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin:13px 0}.metric-grid div{background:var(--surface2);border-radius:8px;padding:8px}.metric-grid span{display:block;color:var(--muted);font-size:8px}.metric-grid b{display:block;margin-top:2px;font-size:12px}
+.chart-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.chart-head h3{margin:0;font-size:13px}.periods{display:flex;gap:5px}.periods button{font-size:9px;padding:7px 9px}.periods button.active{border-color:var(--accent)}
+.chart-wrap{height:235px;background:var(--surface2);border:1px solid var(--line);border-radius:10px;margin-top:8px;padding:9px}.chart-wrap svg{width:100%;height:100%;overflow:visible}.chart-grid{stroke:var(--line);stroke-width:1}.chart-line{fill:none;stroke:var(--blue);stroke-width:3;vector-effect:non-scaling-stroke}.chart-area{fill:color-mix(in srgb,var(--blue) 12%,transparent)}.chart-empty{height:100%;display:grid;place-items:center;color:var(--muted);font-size:10px}.chart-labels{display:flex;justify-content:space-between;color:var(--muted);font-size:8px;margin-top:4px}
+
+body.kiosk-fullscreen .kiosk-actions .admin-link,body.kiosk-fullscreen .design-select{display:none}
+body.kiosk-fullscreen .kiosk-shell{padding:14px 18px}
+@media(max-width:1100px){.summary{grid-template-columns:repeat(3,1fr)}.station-grid.cols-4{grid-template-columns:repeat(2,minmax(0,1fr))}.pro-connector{grid-template-columns:minmax(90px,1fr) repeat(2,minmax(60px,.7fr));}.pro-connector>div:nth-child(4),.pro-connector>div:nth-child(5){display:none}}
+@media(max-width:820px){.station-grid.cols-2,.station-grid.cols-3,.station-grid.cols-4,.station-grid.cols-auto{grid-template-columns:1fr}.kiosk-head{align-items:flex-start;flex-direction:column}.kiosk-actions{width:100%;justify-content:flex-start}.summary{grid-template-columns:repeat(2,1fr)}.standard-connector{grid-template-columns:1fr 80px}.standard-connector>div:last-child{grid-column:1/-1}.pro-grid,.dark-details{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.kiosk-shell{padding:9px;gap:8px}.kiosk-logo{width:115px;height:38px}.kiosk-title h1{font-size:17px}.kiosk-title p{font-size:9px}.clock{display:none}.design-select{width:100%}.design-select select{flex:1}.summary{grid-template-columns:1fr 1fr}.summary>div{padding:8px}.important-strip{align-items:flex-start}.simple-status{font-size:34px}.simple-station{min-height:220px}.light-main{align-items:flex-start;flex-direction:column}.light-metrics{grid-template-columns:1fr 1fr}.metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.modal{padding:0;align-items:end}.telemetry-card{width:100%;max-height:94vh;border-radius:17px 17px 0 0}.chart-head{align-items:flex-start;flex-direction:column}.periods{width:100%;display:grid;grid-template-columns:repeat(3,1fr)}.error-strip{left:8px;right:8px;top:8px;transform:none;max-width:none}}
+</style>
+</head>
+<body data-preset="{{ liveview_preview or liveview_settings.preset }}">
+<div id="errorStrip" class="error-strip" hidden>Live-Verbindung unterbrochen.</div>
+<div class="kiosk-shell">
+  <header class="kiosk-head">
+    <div class="kiosk-brand">
+      {% if branding.logo_dark_url or branding.logo_light_url %}
+      <div class="kiosk-logo">
+        {% if branding.logo_dark_url %}<img class="logo-dark" src="{{ branding.logo_dark_url }}" alt="">{% endif %}
+        {% if branding.logo_light_url %}<img class="logo-light" src="{{ branding.logo_light_url }}" alt="">{% elif branding.logo_dark_url %}<img class="logo-light" src="{{ branding.logo_dark_url }}" alt="">{% endif %}
+      </div>
+      {% endif %}
+      <div class="kiosk-title"><h1>{{ branding.display_name }} · LiveView <span class="preset-chip" id="presetChip">Kiosk 2.0</span></h1><p>OCPP 1.6J · Live-Status, Sessions &amp; Telemetrie</p></div>
+    </div>
+    <div class="kiosk-actions">
+      <div class="clock" id="clockWrap"><b id="clock">--:--:--</b><small id="date">—</small></div>
+      <label class="design-select"><span>Design</span><select id="designSelect"><option value="simple">Simple</option><option value="standard">Standard</option><option value="pro">Pro</option><option value="people">People</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+      <a class="admin-link" href="/">← Verwaltung</a>
+      <button id="fullscreen" type="button">⛶ Vollbild</button>
+    </div>
+  </header>
+
+  <section id="importantStrip" class="important-strip ok">
+    <span class="important-icon" id="importantIcon">✓</span>
+    <div><b id="importantTitle">LiveView wird geladen …</b><small id="importantDetail">Warte auf aktuelle OCPP-Daten.</small></div>
+  </section>
+
+  <section class="summary" id="summary">
+    <div><span>Ladepunkte</span><b id="stationCount">0</b><small id="onlineText">0 online</small></div>
+    <div><span>Frei</span><b id="availableCount">0</b><small>aktuell verfügbar</small></div>
+    <div><span>Aktive Sessions</span><b id="sessionCount">0</b><small>OCPP-Transaktionen</small></div>
+    <div><span>Gesamtleistung</span><b id="totalPower">—</b><small>aktuell frisch</small></div>
+    <div><span>Warnungen</span><b id="warningCount">0</b><small>Diagnose</small></div>
+    <div><span>Störungen</span><b id="criticalCount">0</b><small id="updatedAt">—</small></div>
+  </section>
+
+  <main id="stations" class="station-grid cols-{{ liveview_settings.columns }}"><div class="empty">Live-Daten werden geladen …</div></main>
+  <div class="footer-note">V{{ app_version }} · LiveView / Kiosk 2.0 · Veraltete Messwerte werden nicht als aktuelle Gesamtleistung gezählt.</div>
+</div>
+
+<div class="modal" id="telemetryModal" hidden>
+  <div class="telemetry-card">
+    <div class="modal-head"><div><h2 id="modalTitle">Live-Telemetrie</h2><p id="modalSubtitle">—</p></div><button class="close" id="modalClose" type="button" aria-label="Schließen">×</button></div>
+    <div id="metricGrid" class="metric-grid"></div>
+    <div class="chart-head"><h3>Leistungsverlauf</h3><div class="periods"><button data-hours="1" type="button">1 h</button><button data-hours="6" class="active" type="button">6 h</button><button data-hours="24" type="button">24 h</button></div></div>
+    <div id="chart" class="chart-wrap"><div class="chart-empty">Noch keine Messwerte.</div></div>
+    <div class="chart-labels"><span id="chartStart">—</span><span id="chartInfo">Power.Active.Import</span><span id="chartEnd">—</span></div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let previewPreset={{ (liveview_preview or '')|tojson }};
+const initialSettings={{ liveview_settings|tojson }};
+const presetNames={simple:'Simple',standard:'Standard',pro:'Pro',people:'People',dark:'Dark',light:'Light'};
+const statusLabel=s=>({Available:'Frei',Preparing:'Vorbereitung',Charging:'Lädt',SuspendedEV:'Pausiert · Fahrzeug',SuspendedEVSE:'Pausiert · Station',Finishing:'Beendet',Reserved:'Reserviert',Unavailable:'Nicht verfügbar',Faulted:'Fehler',Offline:'Offline',Unknown:'Unbekannt'}[s]||s||'Unbekannt');
+const fmt=v=>{if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(d)};
+const num=(v,d=1,s='')=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(d)+s;
+const formatEnergyKwh=(value,kwhDigits=1,mwhDigits=3)=>{if(value==null||value===''||!Number.isFinite(Number(value)))return '—';const kwh=Number(value);if(Math.abs(kwh)>=1000)return new Intl.NumberFormat('de-DE',{minimumFractionDigits:mwhDigits,maximumFractionDigits:mwhDigits}).format(kwh/1000)+' MWh';return new Intl.NumberFormat('de-DE',{minimumFractionDigits:kwhDigits,maximumFractionDigits:kwhDigits}).format(kwh)+' kWh'};
+const span=s=>{if(s==null)return null;s=Number(s);if(s<60)return Math.round(s)+' s';if(s<3600)return Math.floor(s/60)+' min';return (s/3600).toFixed(1)+' h'};
+const age=s=>s==null?'keine Messung':'vor '+span(s);
+const clockDuration=start=>{if(!start)return '—';const sec=Math.max(0,Math.floor((Date.now()-new Date(start).getTime())/1000)),h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+':'+String(m).padStart(2,'0')+' h'};
+const telemetryAgeLabel=(cp,c)=>{if(!cp.connected){const d=span(cp.offline_age_seconds);return d?'Offline seit '+d:'Offline'}if(c.meter_age_seconds==null)return 'Keine Messdaten';const d=span(c.meter_age_seconds);if(c.freshness==='stale')return 'Keine Live-Daten seit '+d;if(c.freshness==='delayed')return 'Letzte Daten vor '+d;return 'Live · vor '+d};
+const dotClass=(status,connected)=>!connected?'red':status==='Faulted'?'red':['Charging','SuspendedEV','SuspendedEVSE'].includes(status)?'green':['Preparing','Finishing','Reserved'].includes(status)?'yellow':'green';
+const activeStatus=s=>['Charging','SuspendedEV','SuspendedEVSE','Preparing','Finishing'].includes(String(s||''));
+let snapshot=null,selected=null,historyHours=6,currentSettings={...initialSettings},currentPreset=previewPreset||initialSettings.preset||'standard',lastSuccessAt=0,loadTimer=null;
+
+function tick(){
+  const d=new Date();
+  $('clock').textContent=new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(d);
+  $('date').textContent=new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',weekday:'long',day:'2-digit',month:'2-digit',year:'numeric'}).format(d);
+  document.querySelectorAll('[data-started]').forEach(x=>x.textContent=clockDuration(x.dataset.started));
+  if(lastSuccessAt&&Date.now()-lastSuccessAt>Math.max(10000,Number(currentSettings.refresh_seconds||2)*4000)){
+    $('errorStrip').textContent='Live-Verbindung unterbrochen · letzter erfolgreicher Abruf '+new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(lastSuccessAt));
+    $('errorStrip').hidden=false;
+  }
+}
+tick();setInterval(tick,1000);
+
+function totalStationPower(cp){return (cp.connectors||[]).reduce((sum,c)=>sum+(c.power_kw==null?0:Number(c.power_kw)||0),0)}
+function stationSession(cp){for(const c of cp.connectors||[])if(c.session)return c.session;return null}
+function primaryConnector(cp){const list=cp.connectors||[];return list.find(c=>activeStatus(c.status))||list[0]||null}
+function stationClass(cp){const critical=!cp.connected||cp.status==='Faulted';const charging=(cp.connectors||[]).some(c=>['Charging','SuspendedEV','SuspendedEVSE'].includes(c.status));const diag=['critical','warning'].includes(cp.diagnostic?.level)?' has-diagnostic-alert':'';return (critical?' is-critical':'')+(charging?' is-charging':'')+diag}
+function stationStateClass(cp){if(!cp.connected||cp.status==='Faulted')return 'fault';if((cp.connectors||[]).some(c=>c.status==='Charging'))return 'charging';if((cp.connectors||[]).some(c=>['SuspendedEV','SuspendedEVSE','Preparing','Finishing','Reserved'].includes(c.status)))return 'paused';return 'available'}
+function stationStatus(cp){if(!cp.connected)return 'OFFLINE';if(cp.status==='Faulted')return 'STÖRUNG';if((cp.connectors||[]).some(c=>c.status==='Charging'))return 'LÄDT';if((cp.connectors||[]).some(c=>['SuspendedEV','SuspendedEVSE'].includes(c.status)))return 'PAUSIERT';if(cp.status==='Available'||(cp.connectors||[]).some(c=>c.status==='Available'))return 'FREI';return statusLabel(cp.status).toUpperCase()}
+function sessionWho(tx){
+  if(!tx)return 'Keine aktive Session';
+  const bits=[];
+  if(currentSettings.show_vehicle&&tx.vehicle_name)bits.push(tx.vehicle_name);
+  if(currentSettings.show_user&&tx.user_name)bits.push(tx.user_name);
+  return bits.join(' · ')||tx.id_tag||'Aktive Session';
+}
+function technicalLine(cp){const bits=[];if(currentSettings.show_technical_id)bits.push(cp.id);if(cp.vendor||cp.model)bits.push([cp.vendor,cp.model].filter(Boolean).join(' '));return bits.join(' · ')||'OCPP 1.6J'}
+function connectorButton(cp,c,label,extraClass=''){
+  return '<button type="button" class="connector-button '+esc(extraClass)+'" data-cp="'+esc(cp.id)+'" data-connector="'+Number(c.connector_id||0)+'">'+label+'</button>';
+}
+
+function stationSimple(cp){
+  const power=totalStationPower(cp),pc=primaryConnector(cp),tx=stationSession(cp),status=stationStatus(cp),state=stationStateClass(cp);
+  const conn=(cp.connectors||[]).map(c=>connectorButton(cp,c,'Connector '+c.connector_id+' · '+statusLabel(c.status))).join('');
+  const session=tx?'<div class="simple-session">'+esc(sessionWho(tx))+(currentSettings.show_energy&&tx.energy_kwh!=null?' · '+formatEnergyKwh(tx.energy_kwh,1,3):'')+' · <span data-started="'+esc(tx.started_at)+'">'+clockDuration(tx.started_at)+'</span></div>':'<div class="simple-sub">'+(cp.connected?'Bereit für Ladevorgang':'Keine OCPP-Verbindung')+'</div>';
+  return '<article class="station simple-station'+stationClass(cp)+'"><div class="station-head"><div><h2>'+esc(cp.location||cp.id)+'</h2><p>'+esc(technicalLine(cp))+'</p></div><span class="state-pill"><i class="dot '+dotClass(cp.status,cp.connected)+'"></i>'+esc(cp.connected?'OCPP online':'Offline')+'</span></div><div class="simple-status '+state+'">'+esc(status)+'</div><div class="simple-power">'+(power>0?power.toFixed(1)+' kW':(pc&&pc.last_power_kw!=null&&activeStatus(pc.status)?Number(pc.last_power_kw).toFixed(1)+' kW':'—'))+'</div>'+session+'<div class="simple-connectors">'+conn+'</div></article>';
+}
+function stationStandard(cp){
+  const power=totalStationPower(cp),tx=stationSession(cp),state=stationStateClass(cp),meter=cp.connected?age(cp.meter_age_seconds):(cp.offline_age_seconds==null?'Offline':'seit '+span(cp.offline_age_seconds));
+  const diag=cp.diagnostic||{},diagAlert=['critical','warning'].includes(diag.level);
+  const connectors=(cp.connectors||[]).map(c=>{
+    const active=!!c.session,who=active?sessionWho(c.session):(c.status==='Available'?'Bereit':statusLabel(c.status));
+    const detail=active?((currentSettings.show_energy?num(c.session.energy_kwh,1,' kWh')+' · ':'')+'<span data-started="'+esc(c.session.started_at)+'">'+clockDuration(c.session.started_at)+'</span>'):telemetryAgeLabel(cp,c);
+    const connectorState=active?'Lädt':statusLabel(c.status);
+    return connectorButton(cp,c,
+      '<div class="standard-connector-id"><strong>C'+Number(c.connector_id||0)+'</strong><span>'+esc(connectorState)+'</span></div>'+
+      '<div class="standard-connector-main"><b>'+esc(who)+'</b><small>'+(c.connector_type?esc(c.connector_type)+' · ':'')+detail+'</small></div>'+
+      '<div class="standard-connector-power"><b>'+num(c.power_kw??c.last_power_kw,1,' kW')+'</b><small>Leistung</small></div>',
+      'standard-connector');
+  }).join('');
+  const sessionDetail=tx?((currentSettings.show_energy?formatEnergyKwh(tx.energy_kwh,1,3)+' · ':'')+'<span data-started="'+esc(tx.started_at)+'">'+clockDuration(tx.started_at)+'</span>'):(cp.connected?'Bereit für den nächsten Ladevorgang':'Keine OCPP-Verbindung');
+  const diagBadge=diagAlert?'<span class="standard-diag '+esc(diag.level)+'">Diagnose · '+esc(diag.label||diag.level)+'</span>':'';
+  return '<article class="station standard-station'+stationClass(cp)+'">'+
+    '<div class="standard-head"><div><h2>'+esc(cp.location||cp.id)+'</h2><p>'+esc(technicalLine(cp))+'</p></div><div class="standard-head-badges"><span class="state-pill"><i class="dot '+dotClass(cp.status,cp.connected)+'"></i>'+esc(cp.connected?'OCPP online':'Offline')+'</span>'+diagBadge+'</div></div>'+
+    '<div class="standard-main"><div class="standard-state"><span>Status</span><strong class="'+state+'">'+esc(stationStatus(cp))+'</strong><b>'+esc(tx?sessionWho(tx):'Keine aktive Session')+'</b><small>'+sessionDetail+'</small></div>'+
+    '<div class="standard-power-block"><span>Live-Leistung</span><strong>'+(power>0?power.toFixed(1)+' kW':'—')+'</strong><small>Letzte Daten · '+esc(meter)+'</small></div></div>'+
+    '<div class="standard-connectors">'+(connectors||'<div class="empty">Keine Connector-Daten.</div>')+'</div></article>';
+}
+function stationPro(cp){
+  const power=totalStationPower(cp),dg=cp.diagnostic||{},tx=stationSession(cp),pc=primaryConnector(cp);
+  const issue=(dg.issues||[])[0],diagLevel=dg.level||'healthy';
+  const diagText=issue?(issue.title||issue.message||issue.detail):(diagLevel==='critical'?'Technische Diagnose prüfen':diagLevel==='warning'?'Hinweis vorhanden':(dg.label||'System unauffällig'));
+  const livePower=power>0?power:(pc?.last_power_kw==null?0:Number(pc.last_power_kw)||0);
+  const sessionSub=tx?((currentSettings.show_energy?formatEnergyKwh(tx.energy_kwh,1,3)+' · ':'')+'<span data-started="'+esc(tx.started_at)+'">'+clockDuration(tx.started_at)+'</span>'):'Keine aktive Session';
+  const con=(cp.connectors||[]).map(c=>{
+    const active=!!c.session;
+    return connectorButton(cp,c,
+      '<div class="pro-connector-title"><strong>C'+Number(c.connector_id||0)+'</strong><span>'+esc(statusLabel(c.status))+'</span></div>'+
+      '<div><span>Leistung</span><b>'+num(c.power_kw??c.last_power_kw,1,' kW')+'</b></div>'+
+      '<div><span>Spannung</span><b>'+num(c.voltage_v??c.voltage_l1,0,' V')+'</b></div>'+
+      '<div><span>Strom</span><b>'+num(c.current_import_a??c.current_import_l1,1,' A')+'</b></div>'+
+      '<div><span>SoC</span><b>'+(currentSettings.show_soc?num(c.soc_percent??c.last_soc_percent,0,' %'):'—')+'</b></div>'+
+      '<div class="pro-session"><span>'+(active?'Session':'Telemetrie')+'</span><b>'+esc(active?sessionWho(c.session):telemetryAgeLabel(cp,c))+'</b></div>',
+      'pro-connector');
+  }).join('');
+  return '<article class="station pro-station'+stationClass(cp)+'">'+
+    '<div class="pro-head station-head"><div><h2>'+esc(cp.location||cp.id)+'</h2><p>'+esc(technicalLine(cp))+'</p></div><span class="state-pill"><i class="dot '+dotClass(cp.status,cp.connected)+'"></i>'+esc(stationStatus(cp))+'</span></div>'+
+    '<div class="pro-main"><div class="pro-operating '+stationStateClass(cp)+'"><span>Betriebsstatus</span><strong>'+esc(stationStatus(cp))+'</strong><small>'+esc(cp.connected?'OCPP verbunden':'Keine OCPP-Verbindung')+'</small></div>'+
+    '<div class="pro-live"><span>Live-Leistung</span><strong>'+(livePower>0?livePower.toFixed(1)+' kW':'—')+'</strong><small>'+esc(cp.meter_age_seconds==null?'Keine frischen Messwerte':'Messwerte · '+age(cp.meter_age_seconds))+'</small></div>'+
+    '<div class="pro-session-hero"><span>Aktuelle Session</span><strong>'+esc(tx?sessionWho(tx):'Keine aktive Session')+'</strong><small>'+sessionSub+'</small></div></div>'+
+    '<div class="pro-health '+esc(diagLevel)+'"><div><span>OCPP-Diagnose</span><b>'+esc(diagText)+'</b></div><small>'+esc(dg.label||'—')+' · '+esc(cp.subprotocol||'ocpp1.6')+'</small></div>'+
+    '<div class="pro-dashboard"><div><span>Energie</span><b>'+(tx&&currentSettings.show_energy?num(tx.energy_kwh,2,' kWh'):'—')+'</b></div><div><span>SoC</span><b>'+(currentSettings.show_soc&&pc?num(pc.soc_percent??pc.last_soc_percent,0,' %'):'—')+'</b></div><div><span>Heartbeat</span><b>'+esc(cp.heartbeat_age_seconds==null?'—':age(cp.heartbeat_age_seconds))+'</b></div><div><span>Firmware</span><b>'+esc(cp.firmware||'—')+'</b></div></div>'+
+    '<div class="pro-connectors">'+(con||'<div class="empty">Keine Connector-Daten.</div>')+'</div></article>';
+}
+function stationDark(cp){
+  const power=totalStationPower(cp),pc=primaryConnector(cp),tx=stationSession(cp),max=Number(cp.max_power_kw||0),pct=max>0?Math.max(0,Math.min(100,power/max*100)):0;
+  const con=(cp.connectors||[]).map(c=>connectorButton(cp,c,'Connector '+c.connector_id+' · '+statusLabel(c.status))).join('');
+  return '<article class="station dark-station'+stationClass(cp)+'"><div class="station-head"><div><h2>'+esc(cp.location||cp.id)+'</h2><p>'+esc(technicalLine(cp))+'</p></div><span class="state-pill"><i class="dot '+dotClass(cp.status,cp.connected)+'"></i>'+esc(cp.connected?'Online':'Offline')+'</span></div><div class="dark-hero"><div class="dark-state"><strong>'+esc(stationStatus(cp))+'</strong><small>'+esc(tx?sessionWho(tx):(cp.connected?'Bereit':'OCPP-Verbindung getrennt'))+'</small></div><div class="dark-power"><strong>'+(power>0?power.toFixed(1):'—')+'</strong><small>kW aktuell</small></div></div><div class="dark-progress"><i style="width:'+pct.toFixed(0)+'%"></i></div><div class="dark-details"><div><span>Session</span><b>'+(tx?'<span data-started="'+esc(tx.started_at)+'">'+clockDuration(tx.started_at)+'</span>':'—')+'</b></div><div><span>Energie</span><b>'+(tx&&currentSettings.show_energy?formatEnergyKwh(tx.energy_kwh,1,3):'—')+'</b></div><div><span>SoC</span><b>'+(currentSettings.show_soc&&pc?num(pc.soc_percent??pc.last_soc_percent,0,' %'):'—')+'</b></div><div><span>Telemetrie</span><b>'+esc(pc?telemetryAgeLabel(cp,pc):'—')+'</b></div></div><div class="dark-connectors">'+con+'</div></article>';
+}
+function stationLight(cp){
+  const power=totalStationPower(cp),pc=primaryConnector(cp),tx=stationSession(cp),con=(cp.connectors||[]).map(c=>connectorButton(cp,c,'Connector '+c.connector_id+' · '+statusLabel(c.status))).join('');
+  return '<article class="station light-station'+stationClass(cp)+'"><div class="light-rail"></div><div class="light-body"><div class="station-head"><div><h2>'+esc(cp.location||cp.id)+'</h2><p>'+esc(technicalLine(cp))+'</p></div><span class="state-pill"><i class="dot '+dotClass(cp.status,cp.connected)+'"></i>'+esc(cp.connected?'Online':'Offline')+'</span></div><div class="light-main"><div><span>Status</span><strong>'+esc(stationStatus(cp))+'</strong></div><div><span>Live-Leistung</span><b>'+(power>0?power.toFixed(1)+' kW':'—')+'</b></div></div><div class="light-metrics"><div><span>Session</span><b>'+esc(tx?sessionWho(tx):'Keine aktive Session')+'</b></div><div><span>Energie</span><b>'+(tx&&currentSettings.show_energy?formatEnergyKwh(tx.energy_kwh,1,3):'—')+'</b></div><div><span>Letzte Daten</span><b>'+esc(pc?telemetryAgeLabel(cp,pc):'—')+'</b></div></div><div class="light-connectors">'+con+'</div></div></article>';
+}
+function initials(name){
+  const parts=String(name||'?').trim().split(/\s+/).filter(Boolean);
+  return (parts.slice(0,2).map(x=>x.slice(0,1).toUpperCase()).join('')||'?');
+}
+function peopleCard(p){
+  const u=p.user||{},v=p.vehicle||{},a=p.analytics||{},cm=a.current_month||{},all=a.all_time||{},b=p.budget||{},g=p.gamification||{};
+  const achievements=(p.achievements||[]).slice(0,6),achievementCount=Number(p.achievement_count||0);
+  const avatar=u.image_path?'<img src="'+esc(u.image_path)+'" alt="">':'<span>'+esc(initials(u.name))+'</span>';
+  const vehicleLabel=[v.make,v.model].filter(Boolean).join(' ')||v.name||'Fahrzeug nicht zugeordnet';
+  const vehiclePhoto=v.image_path?'<img src="'+esc(v.image_path)+'" alt="">':'<div class="people-car-fallback">🚗</div>';
+  const vehicleMeta=[v.name&&v.name!==vehicleLabel?v.name:null,v.plate].filter(Boolean).join(' · ')||'Kein Fahrzeugbild hinterlegt';
+  const budgetText=b.limit_kwh==null?'Unbegrenzt':(b.percent==null?'—':Number(b.percent).toFixed(0)+' %');
+  const awards=achievements.length?achievements.map(x=>'<span class="people-award" data-rarity="'+esc(x.rarity||'common')+'" title="'+esc((x.description||x.name||'')+' · '+Number(x.xp||0)+' XP')+'"><i>'+esc(x.icon||'🏅')+'</i>'+esc(x.name||'Auszeichnung')+(x.tier_name?' · '+esc(x.tier_name):'')+'</span>').join(''):'<span class="people-award"><i>○</i>Noch keine Awards</span>';
+  const level=Number(g.level||1),progress=Math.max(0,Math.min(100,Number(g.progress_pct||0))),xp=Number(g.xp||0);
+  const roleBits=[u.role,u.department].filter(Boolean);
+  return '<article class="people-card">'+
+    '<div class="people-head"><div class="people-avatar">'+avatar+'</div><div class="people-user"><h2>'+esc(u.name||'Unbekannter Ladebenutzer')+'</h2><p>'+esc(roleBits.join(' · ')||'Ladebenutzer')+'</p><div class="people-role"><span>⚡ Session #'+esc(p.transaction_id||'—')+'</span><span>🚗 '+esc(vehicleLabel)+'</span></div></div><div class="people-vehicle-photo">'+vehiclePhoto+'<small>'+esc(vehicleMeta)+'</small></div></div>'+
+    '<div class="people-live"><div><span>Jetzt</span><b>'+num(p.power_kw??p.last_power_kw,1,' kW')+'</b></div><div><span>Sessionenergie</span><b>'+formatEnergyKwh(p.energy_kwh,1,3)+'</b></div><div><span>SoC</span><b>'+num(p.soc_percent,0,' %')+'</b></div><div><span>Laufzeit</span><b data-started="'+esc(p.started_at)+'">'+clockDuration(p.started_at)+'</b></div></div>'+
+    '<div class="people-level"><strong>Level '+level+' · '+esc(g.title||'Stecker-Neuling')+'</strong><div class="people-level-bar"><i style="width:'+progress.toFixed(1)+'%"></i></div><small>'+xp.toLocaleString('de-DE')+' XP</small></div>'+
+    '<div class="people-nerd-title"><b>🤓 Lade-Nerd-Stats</b><small>echte OCPP-/Sessiondaten</small></div>'+
+    '<div class="people-stats">'+
+      '<div class="people-stat"><span>Sessions · Monat</span><b>'+Number(cm.sessions||0)+'</b></div>'+
+      '<div class="people-stat"><span>Energie · Monat</span><b>'+formatEnergyKwh(cm.energy_kwh,1,3)+'</b></div>'+
+      '<div class="people-stat"><span>Ø / Session</span><b>'+formatEnergyKwh(cm.avg_energy_kwh,1,3)+'</b></div>'+
+      '<div class="people-stat"><span>Ø Ladeleistung</span><b>'+num(cm.avg_power_kw,1,' kW')+'</b></div>'+
+      '<div class="people-stat"><span>Sessions · Gesamt</span><b>'+Number(all.sessions||0)+'</b></div>'+
+      '<div class="people-stat"><span>Energie · Gesamt</span><b>'+formatEnergyKwh(all.energy_kwh,1,3)+'</b></div>'+
+      '<div class="people-stat"><span>Standquote</span><b>'+num(cm.stand_ratio_pct,0,' %')+'</b></div>'+
+      '<div class="people-stat"><span>Peak</span><b>'+num(cm.peak_power_kw||all.peak_power_kw,1,' kW')+'</b></div>'+
+      '<div class="people-stat"><span>Ladezeit · Monat</span><b>'+esc(span(Number(cm.charging_seconds||0)))+'</b></div>'+
+      '<div class="people-stat"><span>Standzeit · Monat</span><b>'+esc(span(Number(cm.stand_seconds||0)))+'</b></div>'+
+      '<div class="people-stat"><span>Monatsbudget</span><b>'+esc(budgetText)+'</b></div>'+
+      '<div class="people-stat"><span>Achievements</span><b>'+achievementCount+'</b></div>'+
+    '</div>'+
+    '<div class="people-achievements"><span>Auszeichnungen</span>'+awards+'</div>'+
+    '<div class="people-foot"><div class="people-location"><b>'+esc(p.location||p.charge_point_id||'Ladepunkt')+' · Connector '+esc(p.connector_id||'—')+'</b><small>'+esc(statusLabel(p.status))+' · '+(p.meter_age_seconds==null?'keine Live-Messung':'Messwert vor '+span(p.meter_age_seconds))+'</small></div><button type="button" class="connector-button people-telemetry" data-cp="'+esc(p.charge_point_id||'')+'" data-connector="'+Number(p.connector_id||0)+'">Telemetrie öffnen</button></div>'+
+  '</article>';
+}
+function paged(items,size){
+  items=items||[];const pages=Math.max(1,Math.ceil(items.length/size)),page=pages>1?Math.floor(Date.now()/12000)%pages:0;
+  return {items:items.slice(page*size,page*size+size),page:page+1,pages};
+}
+
+function stationHtml(cp){
+  if(currentPreset==='simple')return stationSimple(cp);
+  if(currentPreset==='pro')return stationPro(cp);
+  if(currentPreset==='dark')return stationDark(cp);
+  if(currentPreset==='light')return stationLight(cp);
+  return stationStandard(cp);
+}
+function sortStations(rows){
+  rows=rows.slice();
+  if(currentSettings.sort==='name')return rows.sort((a,b)=>String(a.location||a.id).localeCompare(String(b.location||b.id),'de'));
+  const rankAuto=x=>!x.connected||x.diagnostic?.level==='critical'||x.status==='Faulted'?0:(x.connectors||[]).some(c=>activeStatus(c.status))?1:x.diagnostic?.level==='warning'?2:3;
+  const rankActive=x=>(x.connectors||[]).some(c=>activeStatus(c.status))?0:(!x.connected||x.diagnostic?.level==='critical'?1:2);
+  return rows.sort((a,b)=>{const ra=currentSettings.sort==='active'?rankActive(a):rankAuto(a),rb=currentSettings.sort==='active'?rankActive(b):rankAuto(b);return ra-rb||String(a.location||a.id).localeCompare(String(b.location||b.id),'de')});
+}
+function renderImportant(data){
+  const s=data.summary||{},stations=data.stations||[],strip=$('importantStrip'),icon=$('importantIcon'),title=$('importantTitle'),detail=$('importantDetail');
+  strip.className='important-strip ok';icon.textContent='✓';
+  const critical=stations.find(x=>!x.connected||x.diagnostic?.level==='critical'||x.status==='Faulted');
+  const warning=stations.find(x=>x.diagnostic?.level==='warning');
+  if(Number(s.critical||0)>0&&critical){strip.className='important-strip critical';icon.textContent='!';title.textContent=(critical.location||critical.id)+' · '+stationStatus(critical);const issue=critical.diagnostic?.issues?.[0];detail.textContent=issue?.title||issue?.message||(!critical.connected?'OCPP-Verbindung getrennt':'Technische Störung erkannt');return}
+  if(Number(s.warnings||0)>0&&warning){strip.className='important-strip warn';icon.textContent='⚠';title.textContent=(warning.location||warning.id)+' · Diagnosehinweis';const issue=warning.diagnostic?.issues?.[0];detail.textContent=issue?.title||issue?.message||'Bitte Diagnose prüfen.';return}
+  if(Number(s.active_sessions||0)>0){strip.className='important-strip active';icon.textContent='⚡';title.textContent=s.active_sessions+' aktive'+(Number(s.active_sessions)===1?'r Ladevorgang':' Ladevorgänge');detail.textContent=(s.total_power_kw==null?'Keine aktuelle Leistungsangabe':Number(s.total_power_kw).toFixed(1)+' kW Gesamtleistung')+' · '+(s.available||0)+' Ladepunkte frei';return}
+  title.textContent='Alle Systeme unauffällig';detail.textContent=(s.available||0)+' von '+(s.stations||0)+' Ladepunkten verfügbar · '+(s.online||0)+' OCPP online';
+}
+function render(data){
+  snapshot=data;
+  if(!previewPreset&&data.settings)currentSettings={...currentSettings,...data.settings};
+  currentPreset=previewPreset||currentPreset||currentSettings.preset||'standard';
+  document.body.dataset.preset=currentPreset;
+  $('designSelect').value=currentPreset;
+  $('clockWrap').hidden=!currentSettings.show_clock;
+  const s=data.summary||{};$('stationCount').textContent=s.stations||0;$('onlineText').textContent=(s.online||0)+' online · '+(s.offline||0)+' offline';$('availableCount').textContent=s.available||0;$('sessionCount').textContent=s.active_sessions||0;$('totalPower').textContent=s.total_power_kw==null?'—':Number(s.total_power_kw).toFixed(1)+' kW';$('warningCount').textContent=s.warnings||0;$('criticalCount').textContent=s.critical||0;$('updatedAt').textContent='Stand '+fmt(data.generated_at);
+  renderImportant(data);
+  const grid=$('stations');let pageInfo='';
+  if(currentPreset==='people'){
+    const page=paged(data.people_sessions||[],2);
+    grid.className='station-grid people-grid';
+    grid.innerHTML=page.items.map(peopleCard).join('')||'<div class="people-empty"><div><strong>☕</strong><b>Aktuell lädt niemand</b><small>'+Number(s.available||0)+' Ladepunkte sind derzeit frei.</small></div></div>';
+    if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+  }else{
+    let rows=sortStations(data.stations||[]);
+    if(currentPreset==='pro'){
+      const page=paged(rows,4);rows=page.items;grid.className='station-grid pro-page-grid';
+      if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+    }else if(currentPreset==='standard'){
+      const page=paged(rows,6);rows=page.items;grid.className='station-grid standard-page-grid';
+      if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+    }else if(currentPreset==='simple'){
+      const page=paged(rows,4);rows=page.items;grid.className='station-grid simple-page-grid';
+      if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+    }else if(currentPreset==='dark'){
+      const page=paged(rows,6);rows=page.items;grid.className='station-grid dark-page-grid';
+      if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+    }else if(currentPreset==='light'){
+      const page=paged(rows,6);rows=page.items;grid.className='station-grid light-page-grid';
+      if(page.pages>1)pageInfo=' · Seite '+page.page+'/'+page.pages;
+    }else{
+      grid.className='station-grid cols-'+(currentSettings.columns||'auto');
+    }
+    grid.innerHTML=rows.map(stationHtml).join('')||'<div class="empty">Noch keine übernommenen Ladepunkte vorhanden.</div>';
+  }
+  $('presetChip').textContent=(previewPreset?'Vorschau · ':'')+(presetNames[currentPreset]||currentPreset)+pageInfo;
+  document.querySelectorAll('[data-cp][data-connector]').forEach(el=>el.addEventListener('click',()=>openTelemetry(el.dataset.cp,Number(el.dataset.connector))));
+}
+async function load(){
+  try{
+    const r=await fetch('/api/liveview',{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const data=await r.json();lastSuccessAt=Date.now();$('errorStrip').hidden=true;render(data);scheduleNext();
+  }catch(e){
+    $('errorStrip').textContent='Live-Daten konnten nicht aktualisiert werden'+(lastSuccessAt?' · letzter Stand '+new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(lastSuccessAt)):'');
+    $('errorStrip').hidden=false;scheduleNext();
+  }
+}
+function scheduleNext(){clearTimeout(loadTimer);loadTimer=setTimeout(load,Math.max(1,Number(currentSettings.refresh_seconds||2))*1000)}
+function findConnector(cpId,cid){const cp=(snapshot?.stations||[]).find(x=>x.id===cpId);return [cp,(cp?.connectors||[]).find(x=>Number(x.connector_id)===Number(cid))]}
+function metric(label,value){return '<div><span>'+esc(label)+'</span><b>'+esc(value)+'</b></div>'}
+async function openTelemetry(cpId,cid){
+  const pair=findConnector(cpId,cid),cp=pair[0],c=pair[1];if(!cp||!c)return;selected={cpId,cid};
+  $('modalTitle').textContent=(cp.location||cp.id)+' · Connector '+cid;
+  $('modalSubtitle').textContent=statusLabel(c.status)+' · '+telemetryAgeLabel(cp,c)+' · '+(c.power_source==='calculated'?'Leistung aus Energie/Zeit berechnet':'OCPP MeterValues');
+  $('metricGrid').innerHTML=metric('Leistung',num(c.power_kw??c.last_power_kw,1,' kW'))+metric('Zähler',num(c.energy_kwh,3,' kWh'))+metric('Spannung',num(c.voltage_v??c.voltage_l1,0,' V'))+metric('Strom',num(c.current_import_a??c.current_import_l1,1,' A'))+metric('SoC',num(c.soc_percent??c.last_soc_percent,0,' %'))+metric('Temperatur',num(c.temperature_c,1,' °C'))+metric('L1 / L2 / L3 Spannung',[c.voltage_l1,c.voltage_l2,c.voltage_l3].map(v=>v==null?'—':Number(v).toFixed(0)).join(' / ')+' V')+metric('L1 / L2 / L3 Strom',[c.current_import_l1,c.current_import_l2,c.current_import_l3].map(v=>v==null?'—':Number(v).toFixed(1)).join(' / ')+' A')+metric('Angebotene Leistung',num(c.power_offered_kw,1,' kW'))+metric('Frequenz',num(c.frequency_hz,1,' Hz'))+metric('Datenquelle',c.power_source==='calculated'?'berechnet':c.power_source==='measured'?'gemessen':'—')+metric('Telemetrie',c.freshness==='live'?'Live':c.freshness==='delayed'?'Verzögert':c.freshness==='stale'?'Veraltet':'Keine Daten');
+  $('telemetryModal').hidden=false;await loadHistory();
+}
+async function loadHistory(){if(!selected)return;$('chart').innerHTML='<div class="chart-empty">Messverlauf wird geladen …</div>';try{const r=await fetch('/api/liveview/history/'+encodeURIComponent(selected.cpId)+'?connector_id='+selected.cid+'&hours='+historyHours+'&points=240',{cache:'no-store'});if(!r.ok)throw new Error();drawHistory((await r.json()).points||[])}catch(e){$('chart').innerHTML='<div class="chart-empty">Messverlauf konnte nicht geladen werden.</div>'}}
+function drawHistory(points){
+  const vals=points.filter(p=>p.power_kw!=null&&Number.isFinite(Number(p.power_kw)));
+  if(!vals.length){$('chart').innerHTML='<div class="chart-empty">In diesem Zeitraum wurden keine Leistungswerte empfangen.</div>';$('chartStart').textContent='—';$('chartEnd').textContent='—';return}
+  const max=Math.max(1,...vals.map(x=>Number(x.power_kw))),min=Math.min(0,...vals.map(x=>Number(x.power_kw))),w=1000,h=230,pad=18,range=Math.max(.1,max-min);
+  const xy=vals.map((x,i)=>[pad+(i/(Math.max(1,vals.length-1)))*(w-pad*2),h-pad-((Number(x.power_kw)-min)/range)*(h-pad*2)]);
+  const line=xy.map(x=>x.join(',')).join(' '),area=pad+','+(h-pad)+' '+line+' '+(w-pad)+','+(h-pad);
+  $('chart').innerHTML='<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><line class="chart-grid" x1="'+pad+'" y1="'+pad+'" x2="'+(w-pad)+'" y2="'+pad+'"/><line class="chart-grid" x1="'+pad+'" y1="'+(h/2)+'" x2="'+(w-pad)+'" y2="'+(h/2)+'"/><line class="chart-grid" x1="'+pad+'" y1="'+(h-pad)+'" x2="'+(w-pad)+'" y2="'+(h-pad)+'"/><polygon class="chart-area" points="'+area+'"/><polyline class="chart-line" points="'+line+'"/></svg>';
+  $('chartStart').textContent=fmt(vals[0].at);$('chartEnd').textContent=fmt(vals[vals.length-1].at);$('chartInfo').textContent='0–'+max.toFixed(1)+' kW · '+vals.length+' Punkte';
+}
+$('modalClose').addEventListener('click',()=>{$('telemetryModal').hidden=true;selected=null});
+$('telemetryModal').addEventListener('click',e=>{if(e.target===$('telemetryModal')){$('telemetryModal').hidden=true;selected=null}});
+document.querySelectorAll('[data-hours]').forEach(b=>b.addEventListener('click',()=>{historyHours=Number(b.dataset.hours);document.querySelectorAll('[data-hours]').forEach(x=>x.classList.toggle('active',x===b));loadHistory()}));
+$('fullscreen').addEventListener('click',async()=>{try{if(!document.fullscreenElement)await document.documentElement.requestFullscreen();else await document.exitFullscreen()}catch(_){}});
+document.addEventListener('fullscreenchange',()=>document.body.classList.toggle('kiosk-fullscreen',!!document.fullscreenElement));
+$('designSelect').value=currentPreset;
+$('designSelect').addEventListener('change',()=>{currentPreset=$('designSelect').value;previewPreset=currentPreset;document.body.dataset.preset=currentPreset;const u=new URL(location.href);u.searchParams.set('preview',currentPreset);history.replaceState(null,'',u.pathname+u.search);if(snapshot)render(snapshot)});
+load();
+</script>
+</body>
+</html>
