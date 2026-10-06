@@ -436,18 +436,6 @@ def init_db():
                 decided_by INTEGER,
                 user_id INTEGER
             );
-            CREATE TABLE IF NOT EXISTS rfid_enrollment_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                charge_point_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                candidate_uid TEXT,
-                detected_at TEXT,
-                completed_at TEXT,
-                message TEXT
-            );
             CREATE TABLE IF NOT EXISTS billing_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -604,18 +592,6 @@ def init_db():
                 note TEXT,
                 source TEXT NOT NULL DEFAULT 'admin',
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS rfid_replacement_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT 'replacement',
-                status TEXT NOT NULL DEFAULT 'Offen',
-                note TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                resolved_at TEXT,
-                resolution_note TEXT
             );
             CREATE TABLE IF NOT EXISTS cost_centers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -799,9 +775,6 @@ def init_db():
         }.items():
             if name not in local_list_state_columns:
                 conn.execute(statement)
-        cp_columns = {r[1] for r in conn.execute("PRAGMA table_info(charge_points)").fetchall()}
-        if "rfid_self_enroll_mode" not in cp_columns:
-            conn.execute("ALTER TABLE charge_points ADD COLUMN rfid_self_enroll_mode TEXT NOT NULL DEFAULT 'auto'")
         notification_columns = {r[1] for r in conn.execute("PRAGMA table_info(notifications)").fetchall()}
         if "audience" not in notification_columns:
             conn.execute("ALTER TABLE notifications ADD COLUMN audience TEXT NOT NULL DEFAULT 'all'")
@@ -825,9 +798,9 @@ def init_db():
         conn.execute("DROP TABLE IF EXISTS portal_pin_reset_requests")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_verify_email ON access_request_verifications(email_hash,created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_enrollment_active ON rfid_enrollment_sessions(charge_point_id,status,expires_at)")
+        conn.execute("DROP TABLE IF EXISTS rfid_enrollment_sessions")
+        conn.execute("DROP TABLE IF EXISTS rfid_replacement_requests")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_events_card ON rfid_card_events(card_id,created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_requests_status ON rfid_replacement_requests(status,created_at)")
         conn.execute("UPDATE rfid_cards SET issued_at=COALESCE(issued_at,created_at) WHERE issued_at IS NULL")
         achievement_columns = {r[1] for r in conn.execute("PRAGMA table_info(achievements)").fetchall()}
         leaderboard_enabled_added = "leaderboard_enabled" not in achievement_columns
@@ -3069,16 +3042,13 @@ def delete_user_permanently(user_id):
             if card_ids:
                 marks=",".join("?" for _ in card_ids)
                 conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
-                conn.execute(f"DELETE FROM rfid_replacement_requests WHERE card_id IN ({marks}) OR user_id=?",card_ids+[uid])
                 conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
             else:
-                conn.execute("DELETE FROM rfid_replacement_requests WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
             conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
             if card_uids:
@@ -3130,15 +3100,12 @@ def purge_user_with_history(user_id):
             if card_ids:
                 marks=",".join("?" for _ in card_ids)
                 conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
-                conn.execute(f"DELETE FROM rfid_replacement_requests WHERE card_id IN ({marks}) OR user_id=?",card_ids+[uid])
                 conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
             else:
-                conn.execute("DELETE FROM rfid_replacement_requests WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
             conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
             if card_uids:
@@ -3247,10 +3214,9 @@ def rfid_card_detail(card_id):
             FROM rfid_cards r LEFT JOIN users u ON u.id=r.user_id LEFT JOIN vehicles v ON v.id=r.vehicle_id WHERE r.id=?""",(card_id,)).fetchone()
         if not card:return None
         history=[dict(r) for r in conn.execute("SELECT * FROM rfid_card_events WHERE card_id=? ORDER BY id DESC LIMIT 50",(card_id,)).fetchall()]
-        requests=[dict(r) for r in conn.execute("SELECT * FROM rfid_replacement_requests WHERE card_id=? ORDER BY id DESC",(card_id,)).fetchall()]
         tx=[dict(r) for r in conn.execute("""SELECT id,started_at,ended_at,charge_point_id,connector_id,energy_kwh,status FROM transactions
             WHERE rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=(SELECT uid FROM rfid_cards WHERE id=?)) ORDER BY id DESC LIMIT 20""",(card_id,card_id)).fetchall()]
-        return {"card":dict(card),"history":history,"requests":requests,"transactions":tx}
+        return {"card":dict(card),"history":history,"transactions":tx}
 
 
 def replace_rfid_card(card_id,new_uid,label=None,expires_at=None,notes=None,source="admin"):
@@ -3269,93 +3235,8 @@ def replace_rfid_card(card_id,new_uid,label=None,expires_at=None,notes=None,sour
         _rfid_log_event_conn(conn,card_id,"replaced",old["status"],"Ersetzt",f"Ersetzt durch Karte #{new_id}",source)
         _rfid_log_event_conn(conn,new_id,"created",None,"Aktiv",f"Ersatz für Karte #{card_id}",source)
         _rfid_local_list_bump_conn(conn,[old["uid"],new_uid])
-        open_req_ids=[int(r[0]) for r in conn.execute("SELECT id FROM rfid_replacement_requests WHERE card_id=? AND status IN ('Offen','In Bearbeitung')",(card_id,)).fetchall()]
-        conn.execute("""UPDATE rfid_replacement_requests SET status='Erledigt',updated_at=?,resolved_at=?,resolution_note=COALESCE(resolution_note,'Ersatzkarte ausgegeben')
-            WHERE card_id=? AND status IN ('Offen','In Bearbeitung')""",(now,now,card_id))
-        for rid in open_req_ids:
-            conn.execute("UPDATE notifications SET active=0 WHERE notification_key=?",(f"rfid-request:{rid}",))
         conn.commit();return new_id
 
-
-def create_rfid_replacement_request(user_id,card_id,reason="replacement",note=None,block_card=False):
-    with _lock,_connect() as conn:
-        card=conn.execute("SELECT * FROM rfid_cards WHERE id=? AND user_id=?",(card_id,user_id)).fetchone()
-        if not card: raise ValueError("RFID-Karte nicht gefunden oder nicht diesem Benutzer zugeordnet.")
-        if card["status"] in {"Ersetzt","Deaktiviert"}: raise ValueError("Für diese RFID-Karte kann keine Ersatzanfrage mehr gestellt werden.")
-        if block_card and card["status"] != "Aktiv": raise ValueError("Nur eine aktive RFID-Karte kann als verloren gemeldet werden.")
-        existing=conn.execute("SELECT id FROM rfid_replacement_requests WHERE card_id=? AND status IN ('Offen','In Bearbeitung') ORDER BY id DESC LIMIT 1",(card_id,)).fetchone()
-        if existing: raise ValueError("Für diese RFID-Karte besteht bereits eine offene Anfrage.")
-        now=utc_now()
-        cur=conn.execute("INSERT INTO rfid_replacement_requests(card_id,user_id,reason,status,note,created_at,updated_at) VALUES(?,?,?,'Offen',?,?,?)",
-                         (card_id,user_id,str(reason or "replacement"),note,now,now))
-        req_id=int(cur.lastrowid)
-        if block_card and card["status"] == "Aktiv":
-            conn.execute("UPDATE rfid_cards SET status='Verloren',blocked_at=?,blocked_reason='Vom Ladebenutzer als verloren gemeldet' WHERE id=?",(now,card_id))
-            _rfid_log_event_conn(conn,card_id,"lost",card["status"],"Verloren","Vom Ladebenutzer im Self-Service als verloren gemeldet","self-service")
-            _rfid_local_list_bump_conn(conn,[card["uid"]])
-        _rfid_log_event_conn(conn,card_id,"replacement_requested",card["status"],"Verloren" if block_card and card["status"]=="Aktiv" else card["status"],"Ersatzkarte angefragt","self-service")
-        user=conn.execute("SELECT name FROM users WHERE id=?",(user_id,)).fetchone()
-        title="RFID als verloren gemeldet" if block_card else "Neue RFID-Ersatzanfrage"
-        severity="warning" if block_card else "info"
-        message=f"{(user['name'] if user else 'Ladebenutzer')} · {(card['label'] or 'RFID-Karte')}"
-        _upsert_notification_conn(conn,f"rfid-request:{req_id}","self_service",severity,title,message,"/users#rfid-self-service",True,"admin")
-        conn.commit();return req_id
-
-
-def list_rfid_replacement_requests(status=None):
-    with _lock,_connect() as conn:
-        params=[]; where=""
-        if status: where="WHERE q.status=?"; params=[status]
-        rows=conn.execute(f"""SELECT q.*,r.uid,r.label,r.status AS card_status,u.name AS user_name,v.name AS vehicle_name
-            FROM rfid_replacement_requests q JOIN rfid_cards r ON r.id=q.card_id JOIN users u ON u.id=q.user_id
-            LEFT JOIN vehicles v ON v.id=r.vehicle_id {where} ORDER BY CASE q.status WHEN 'Offen' THEN 0 WHEN 'In Bearbeitung' THEN 1 ELSE 2 END,q.id DESC""",params).fetchall()
-        return [dict(r) for r in rows]
-
-
-def update_rfid_replacement_request(request_id,status,resolution_note=None):
-    allowed={"Offen","In Bearbeitung","Erledigt","Abgelehnt"}
-    if status not in allowed: raise ValueError("Ungültiger Anfragestatus.")
-    with _lock,_connect() as conn:
-        req=conn.execute("SELECT * FROM rfid_replacement_requests WHERE id=?",(request_id,)).fetchone()
-        if not req:return False
-        now=utc_now(); resolved=now if status in {"Erledigt","Abgelehnt"} else None
-        conn.execute("UPDATE rfid_replacement_requests SET status=?,updated_at=?,resolved_at=?,resolution_note=? WHERE id=?",(status,now,resolved,resolution_note,request_id))
-        _rfid_log_event_conn(conn,req["card_id"],"request_status",None,None,f"Ersatzanfrage #{request_id}: {status}" + (f" · {resolution_note}" if resolution_note else ""),"admin")
-        if status in {"Erledigt","Abgelehnt"}:
-            conn.execute("UPDATE notifications SET active=0 WHERE notification_key=?",(f"rfid-request:{request_id}",))
-        conn.commit();return True
-
-
-def delete_rfid_replacement_request(request_id):
-    """Delete only the self-service request; card state and card history stay intact."""
-    with _lock,_connect() as conn:
-        req=conn.execute("SELECT * FROM rfid_replacement_requests WHERE id=?",(int(request_id),)).fetchone()
-        if not req:
-            return None
-        item=dict(req)
-        conn.execute("DELETE FROM rfid_replacement_requests WHERE id=?",(int(request_id),))
-        conn.execute("UPDATE notifications SET active=0 WHERE notification_key=?",(f"rfid-request:{int(request_id)}",))
-        _rfid_log_event_conn(conn,int(req["card_id"]),"request_deleted",None,None,
-            f"Ersatzanfrage #{int(request_id)} gelöscht · letzter Status: {req['status']}","admin")
-        conn.commit()
-        return item
-
-
-def portal_rfid_cards(user_id):
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT r.id,r.uid,r.label,r.status,r.issued_at,r.expires_at,r.last_used_at,r.blocked_at,r.blocked_reason,
-            v.name AS vehicle_name,v.plate AS vehicle_plate,
-            (SELECT COUNT(*) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS session_count,
-            (SELECT COALESCE(SUM(t.energy_kwh),0) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS energy_kwh,
-            (SELECT id FROM rfid_replacement_requests q WHERE q.card_id=r.id AND q.status IN ('Offen','In Bearbeitung') ORDER BY q.id DESC LIMIT 1) AS open_request_id,
-            (SELECT status FROM rfid_replacement_requests q WHERE q.card_id=r.id AND q.status IN ('Offen','In Bearbeitung') ORDER BY q.id DESC LIMIT 1) AS request_status
-            FROM rfid_cards r LEFT JOIN vehicles v ON v.id=r.vehicle_id WHERE r.user_id=? ORDER BY CASE r.status WHEN 'Aktiv' THEN 0 ELSE 1 END,r.id DESC""",(user_id,)).fetchall()
-        result=[]
-        for row in rows:
-            item=dict(row); uid=str(item.pop("uid") or "")
-            item["uid_masked"]=("••••"+uid[-4:]) if len(uid)>4 else ("••"+uid[-2:] if uid else "—")
-            result.append(item)
-        return result
 
 def _month_bounds_utc(now=None):
     now = now or datetime.now(timezone.utc)
@@ -3905,7 +3786,7 @@ def list_charge_points_admin(include_retired=True):
             cp["connectors"] = [dict(r) for r in conn.execute("SELECT * FROM connectors WHERE charge_point_id=? ORDER BY connector_id", (cp["id"],)).fetchall()]
         return rows
 
-def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number=None, firmware=None, ocpp_version="1.6J", location=None, connector_count=1, connector_type="Type 2", max_power_kw=22, notes=None, rfid_self_enroll_mode="auto"):
+def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number=None, firmware=None, ocpp_version="1.6J", location=None, connector_count=1, connector_type="Type 2", max_power_kw=22, notes=None):
     cp_id = (cp_id or "").strip()
     if not cp_id:
         raise ValueError("Charge Point ID darf nicht leer sein")
@@ -3919,18 +3800,15 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
         raise ValueError("Maximale Leistung muss eine Zahl sein")
     if maxkw < 0 or maxkw > 1000:
         raise ValueError("Maximale Leistung muss zwischen 0 und 1000 kW liegen")
-    enroll_mode=str(rfid_self_enroll_mode or "auto").strip().lower()
-    if enroll_mode not in {"auto","enabled","disabled"}:
-        raise ValueError("RFID Self-Service muss Automatisch, Aktiviert oder Deaktiviert sein")
     with _lock, _connect() as conn:
         if conn.execute("SELECT 1 FROM charge_points WHERE id=?", (cp_id,)).fetchone():
             return False
         conn.execute(
             """INSERT INTO charge_points(
                 id,vendor,model,serial_number,firmware,status,last_seen,power_kw,energy_kwh,
-                connector_count,max_power_kw,simulated,location,connector_type,ocpp_version,notes,rfid_self_enroll_mode,retired,source_type
-            ) VALUES(?,?,?,?,?,'Unknown',NULL,0,0,?,?,0,?,?,?,?,?,0,?)""",
-            (cp_id, vendor, model, serial_number, firmware, count, maxkw, location, connector_type or "Type 2", ocpp_version or "1.6J", notes, enroll_mode, 'manual')
+                connector_count,max_power_kw,simulated,location,connector_type,ocpp_version,notes,retired,source_type
+            ) VALUES(?,?,?,?,?,'Unknown',NULL,0,0,?,?,0,?,?,?,?,0,?)""",
+            (cp_id, vendor, model, serial_number, firmware, count, maxkw, location, connector_type or "Type 2", ocpp_version or "1.6J", notes, 'manual')
         )
         for cid in range(1, count + 1):
             conn.execute(
@@ -3941,11 +3819,7 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
         return True
 
 def update_charge_point(cp_id, **fields):
-    allowed={"vendor","model","serial_number","firmware","ocpp_version","location","connector_type","max_power_kw","connector_count","notes","rfid_self_enroll_mode"}
-    if "rfid_self_enroll_mode" in fields:
-        mode=str(fields.get("rfid_self_enroll_mode") or "auto").strip().lower()
-        if mode not in {"auto","enabled","disabled"}: raise ValueError("Ungültiger RFID-Self-Service-Modus")
-        fields["rfid_self_enroll_mode"]=mode
+    allowed={"vendor","model","serial_number","firmware","ocpp_version","location","connector_type","max_power_kw","connector_count","notes"}
     updates=[(k,fields[k]) for k in allowed if k in fields]
     if not updates: return False
     with _lock,_connect() as conn:
@@ -6965,7 +6839,7 @@ def save_registration_settings(payload):
     result["skipped_auto_user_ids"]=[]
     return result
 
-# V0.9.7.20 - public access requests and self-service RFID enrollment
+# V0.9.7.20 - public access requests
 
 def access_request_start_allowed(email_hash, ip_hash, window_minutes=60, ip_limit=5):
     cutoff=(datetime.now(timezone.utc)-timedelta(minutes=max(1,int(window_minutes)))).isoformat()
@@ -7127,16 +7001,6 @@ def access_request_counts():
         return {'new':d.get('Neu',0),'review':d.get('In Prüfung',0),'approved':d.get('Genehmigt',0),'rejected':d.get('Abgelehnt',0),'total':sum(d.values())}
 
 
-def rfid_enrollment_charge_points():
-    now=(datetime.now(timezone.utc)-timedelta(days=3650)).isoformat()
-    with _connect() as conn:
-        rows=conn.execute("""SELECT cp.id,cp.location,cp.vendor,cp.model,cp.status,cp.last_seen,COALESCE(cp.rfid_self_enroll_mode,'auto') AS rfid_self_enroll_mode,
-            EXISTS(SELECT 1 FROM events e WHERE e.charge_point_id=cp.id AND e.event_type IN ('Authorize','StartTransaction') AND e.ts>=? AND (e.event_type='Authorize' OR e.payload LIKE '%id_tag=%')) AS authorize_seen
-            FROM charge_points cp WHERE COALESCE(cp.onboarded,1)=1 AND COALESCE(cp.ignored,0)=0 AND COALESCE(cp.retired,0)=0 AND COALESCE(cp.archived,0)=0
-            ORDER BY COALESCE(NULLIF(TRIM(cp.location),''),cp.id),cp.id""",(now,)).fetchall()
-        return [dict(r) for r in rows]
-
-
 def active_rfid_count(user_id):
     with _connect() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM rfid_cards WHERE user_id=? AND status='Aktiv'",(int(user_id),)).fetchone()[0] or 0)
@@ -7144,82 +7008,6 @@ def active_rfid_count(user_id):
 def user_has_active_rfid(user_id):
     return active_rfid_count(user_id)>0
 
-
-def start_rfid_enrollment(user_id, charge_point_id, seconds=60):
-    now=datetime.now(timezone.utc); expires=now+timedelta(seconds=max(30,min(int(seconds),120)))
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT id,status,portal_enabled FROM users WHERE id=?",(int(user_id),)).fetchone()
-        if not user or user['status']!='Aktiv' or not int(user['portal_enabled'] or 0): raise ValueError('Der Ladebenutzer ist nicht für den Self-Service freigeschaltet.')
-        if int(conn.execute("SELECT COUNT(*) FROM rfid_cards WHERE user_id=? AND status='Aktiv'",(int(user_id),)).fetchone()[0] or 0) >= 2: raise ValueError('Im Self-Service können maximal zwei aktive Chips genutzt werden. Für weitere RFIDs wenden Sie sich bitte an die Administration.')
-        cp=conn.execute("SELECT id,COALESCE(rfid_self_enroll_mode,'auto') mode FROM charge_points WHERE id=? AND COALESCE(onboarded,1)=1 AND COALESCE(ignored,0)=0 AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0",(str(charge_point_id),)).fetchone()
-        if not cp: raise ValueError('Ladesäule nicht gefunden oder nicht verfügbar.')
-        if cp['mode']=='disabled': raise ValueError('Automatisches Chip-Anlernen ist an dieser Ladesäule deaktiviert. Bitte wenden Sie sich an die Administration.')
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='expired',completed_at=?,message='Zeitfenster abgelaufen' WHERE status='active' AND expires_at<=?",(now.isoformat(),now.isoformat()))
-        busy=conn.execute("SELECT id FROM rfid_enrollment_sessions WHERE charge_point_id=? AND status='active' AND expires_at>?",(str(charge_point_id),now.isoformat())).fetchone()
-        if busy: raise ValueError('An dieser Ladesäule läuft bereits ein Einlernvorgang. Bitte versuchen Sie es in einer Minute erneut.')
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='cancelled',completed_at=?,message='Neuer Einlernvorgang gestartet' WHERE user_id=? AND status IN ('active','candidate','conflict')",(now.isoformat(),int(user_id)))
-        cur=conn.execute("INSERT INTO rfid_enrollment_sessions(user_id,charge_point_id,created_at,expires_at,status) VALUES(?,?,?,?, 'active')",(int(user_id),str(charge_point_id),now.isoformat(),expires.isoformat()))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def capture_rfid_enrollment_candidate(charge_point_id, uid):
-    now=datetime.now(timezone.utc); uid=str(uid or '').strip()
-    if not uid: return None
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='expired',completed_at=?,message='Zeitfenster abgelaufen' WHERE status='active' AND expires_at<=?",(now.isoformat(),now.isoformat()))
-        row=conn.execute("SELECT * FROM rfid_enrollment_sessions WHERE charge_point_id=? AND status='active' AND expires_at>? ORDER BY id DESC LIMIT 1",(str(charge_point_id),now.isoformat())).fetchone()
-        if not row:
-            conn.commit(); return None
-        existing=conn.execute("SELECT r.id,r.user_id,u.name FROM rfid_cards r LEFT JOIN users u ON u.id=r.user_id WHERE r.uid=?",(uid,)).fetchone()
-        if existing:
-            conn.execute("UPDATE rfid_enrollment_sessions SET status='conflict',candidate_uid=NULL,detected_at=?,completed_at=?,message='Der erkannte Chip ist bereits einem Benutzer zugeordnet.' WHERE id=?",(now.isoformat(),now.isoformat(),int(row['id'])))
-            conn.commit(); return {'captured':True,'session_id':int(row['id']),'status':'conflict'}
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='candidate',candidate_uid=?,detected_at=?,message='Chip erkannt - Bestätigung im Portal erforderlich' WHERE id=?",(uid,now.isoformat(),int(row['id'])))
-        conn.commit(); return {'captured':True,'session_id':int(row['id']),'status':'candidate'}
-
-
-def rfid_enrollment_status(user_id, session_id=None):
-    now=datetime.now(timezone.utc)
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='expired',completed_at=?,message='Innerhalb von 60 Sekunden wurde kein Chip erkannt.' WHERE user_id=? AND status='active' AND expires_at<=?",(now.isoformat(),int(user_id),now.isoformat()))
-        if session_id:
-            row=conn.execute("SELECT * FROM rfid_enrollment_sessions WHERE id=? AND user_id=?",(int(session_id),int(user_id))).fetchone()
-        else:
-            row=conn.execute("SELECT * FROM rfid_enrollment_sessions WHERE user_id=? ORDER BY id DESC LIMIT 1",(int(user_id),)).fetchone()
-        conn.commit()
-        if not row: return None
-        d=dict(row); d['candidate_uid_masked']=('••••'+str(d.get('candidate_uid') or '')[-4:]) if d.get('candidate_uid') else None
-        return d
-
-
-def confirm_rfid_enrollment(user_id, session_id, accepted):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT * FROM rfid_enrollment_sessions WHERE id=? AND user_id=?",(int(session_id),int(user_id))).fetchone()
-        if not row: raise ValueError('Einlernvorgang nicht gefunden.')
-        if row['status']!='candidate' or not row['candidate_uid']: raise ValueError('Es liegt kein bestätigbarer Chip vor.')
-        if not accepted:
-            conn.execute("UPDATE rfid_enrollment_sessions SET status='cancelled',completed_at=?,message='Benutzer hat den erkannten Chip verworfen.' WHERE id=?",(now,int(session_id)))
-            conn.commit(); return {'ok':True,'accepted':False}
-        if conn.execute("SELECT 1 FROM rfid_cards WHERE uid=?",(row['candidate_uid'],)).fetchone():
-            conn.execute("UPDATE rfid_enrollment_sessions SET status='conflict',completed_at=?,message='Chip wurde zwischenzeitlich bereits zugeordnet.' WHERE id=?",(now,int(session_id)))
-            conn.commit(); raise ValueError('Dieser Chip wurde inzwischen bereits zugeordnet. Bitte wiederholen Sie den Vorgang.')
-        existing_active=int(conn.execute("SELECT COUNT(*) FROM rfid_cards WHERE user_id=? AND status='Aktiv'",(int(user_id),)).fetchone()[0] or 0)
-        if existing_active >= 2: raise ValueError('Im Self-Service können maximal zwei aktive Chips genutzt werden. Für weitere RFIDs wenden Sie sich bitte an die Administration.')
-        uid=str(row['candidate_uid']); created=utc_now(); label='Persönlicher Chip' if existing_active==0 else 'Persönlicher Chip 2'
-        cur=conn.execute("""INSERT INTO rfid_cards(uid,label,user_id,vehicle_id,status,created_at,issued_at,expires_at,blocked_at,blocked_reason,replacement_for_id,notes)
-            VALUES(?,?,?,NULL,'Aktiv',?,?,NULL,NULL,NULL,NULL,?)""",(uid,label,int(user_id),created,created,'Per Self-Service an Ladesäule angelernt'))
-        card_id=int(cur.lastrowid)
-        _rfid_log_event_conn(conn,card_id,'created',None,'Aktiv','RFID-Chip per Self-Service angelernt','portal')
-        _rfid_local_list_bump_conn(conn,[uid])
-        conn.execute("UPDATE rfid_enrollment_sessions SET status='confirmed',completed_at=?,message='Chip erfolgreich zugeordnet.' WHERE id=?",(now,int(session_id)))
-        conn.commit(); return {'ok':True,'accepted':True,'card_id':card_id,'uid':uid,'charge_point_id':row['charge_point_id']}
-
-
-def cancel_rfid_enrollment(user_id, session_id):
-    with _lock,_connect() as conn:
-        cur=conn.execute("UPDATE rfid_enrollment_sessions SET status='cancelled',completed_at=?,message='Einlernvorgang abgebrochen.' WHERE id=? AND user_id=? AND status IN ('active','candidate','conflict')",(utc_now(),int(session_id),int(user_id)))
-        conn.commit(); return cur.rowcount>0
 
 def seed_default_achievements():
     """Create the editable built-in achievement library exactly once per seed key."""
