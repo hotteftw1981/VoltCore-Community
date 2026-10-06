@@ -398,21 +398,6 @@ def init_db():
                 delivered_at TEXT NOT NULL,
                 PRIMARY KEY(subscription_id,notification_id,revision)
             );
-            CREATE TABLE IF NOT EXISTS portal_pin_reset_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email_hash TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                user_id INTEGER,
-                requested_at TEXT NOT NULL,
-                mail_sent INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS portal_pin_reset_tokens (
-                token_hash TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at TEXT
-            );
             CREATE TABLE IF NOT EXISTS access_request_verifications (
                 token_hash TEXT PRIMARY KEY,
                 email TEXT NOT NULL,
@@ -488,19 +473,6 @@ def init_db():
                 billing_group_id INTEGER,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS portal_sessions (
-                token_hash TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS portal_login_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip_hash TEXT NOT NULL,
-                ts TEXT NOT NULL,
-                success INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS achievements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -800,10 +772,6 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN charge_access_mode TEXT NOT NULL DEFAULT 'all'")
         user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         for name, statement in {
-            "portal_pin_hash": "ALTER TABLE users ADD COLUMN portal_pin_hash TEXT",
-            "portal_pin_set_at": "ALTER TABLE users ADD COLUMN portal_pin_set_at TEXT",
-            "portal_enabled": "ALTER TABLE users ADD COLUMN portal_enabled INTEGER NOT NULL DEFAULT 0",
-            "portal_last_login_at": "ALTER TABLE users ADD COLUMN portal_last_login_at TEXT",
             "gamification_seen_award_id": "ALTER TABLE users ADD COLUMN gamification_seen_award_id INTEGER",
             "gamification_seen_level": "ALTER TABLE users ADD COLUMN gamification_seen_level INTEGER",
         }.items():
@@ -849,9 +817,12 @@ def init_db():
         }.items():
             if name not in access_request_columns:
                 conn.execute(statement)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_email ON portal_pin_reset_requests(email_hash,requested_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_ip ON portal_pin_reset_requests(ip_hash,requested_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_tokens_expiry ON portal_pin_reset_tokens(expires_at,used_at)")
+        # Community is backend-only: remove obsolete personal portal state
+        # left by the 0.9.7.74/0.9.7.75 release candidates.
+        conn.execute("DROP TABLE IF EXISTS portal_sessions")
+        conn.execute("DROP TABLE IF EXISTS portal_login_attempts")
+        conn.execute("DROP TABLE IF EXISTS portal_pin_reset_tokens")
+        conn.execute("DROP TABLE IF EXISTS portal_pin_reset_requests")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_verify_email ON access_request_verifications(email_hash,created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_enrollment_active ON rfid_enrollment_sessions(charge_point_id,status,expires_at)")
@@ -3047,7 +3018,6 @@ def _user_delete_check_conn(conn, user_id):
         "charge_point_links":int(conn.execute("SELECT COUNT(*) FROM user_charge_point_access WHERE user_id=?",(uid,)).fetchone()[0] or 0),
         "billing_group_links":int(conn.execute("SELECT COUNT(*) FROM user_billing_groups WHERE user_id=?",(uid,)).fetchone()[0] or 0),
         "achievements":int(conn.execute("SELECT COUNT(*) FROM achievement_awards WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "portal_sessions":int(conn.execute("SELECT COUNT(*) FROM portal_sessions WHERE user_id=?",(uid,)).fetchone()[0] or 0),
         "bonus_grants":checks["bonus_grants"],
         "bonus_usage":checks["bonus_usage"],
         "voucher_redemptions":checks["voucher_redemptions"],
@@ -3108,9 +3078,6 @@ def delete_user_permanently(user_id):
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_sessions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_pin_reset_tokens WHERE user_id=?",(uid,))
-            conn.execute("UPDATE portal_pin_reset_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
             conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
@@ -3171,9 +3138,6 @@ def purge_user_with_history(user_id):
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_sessions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_pin_reset_tokens WHERE user_id=?",(uid,))
-            conn.execute("UPDATE portal_pin_reset_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
             conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
@@ -3759,8 +3723,6 @@ def list_users_rich():
         result=[]
         for row in rows:
             item=dict(row)
-            item.pop("portal_pin_hash", None)
-            item["portal_pin_set"] = bool(item.get("portal_pin_set_at"))
             item["charge_access_mode"]=_normalize_charge_access_mode(item.get("charge_access_mode"))
             item["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(item["id"],)).fetchall()]
             cost_row=conn.execute("""SELECT COALESCE(SUM(COALESCE(t.cost_cents,0)),0)
@@ -3834,8 +3796,6 @@ def user_details(user_id, transaction_page=1, transaction_page_size=10):
             tx["timing"]=_transaction_time_breakdown_conn(conn,int(tx["id"])) or {"charging_seconds":float(tx.get("charging_seconds") or 0),"stand_seconds":float(tx.get("stand_seconds") or 0),"connection_seconds":float(tx.get("connection_seconds") or 0)}
         st=conn.execute("""SELECT COUNT(*) sessions,COALESCE(SUM(energy_kwh),0) energy,COALESCE(SUM(COALESCE(cost_cents,0)),0)/100.0 costs,MAX(started_at) last_used_at FROM transactions WHERE user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?)))""",(user_id,user_id,user_id)).fetchone()
         user=dict(u)
-        user.pop("portal_pin_hash", None)
-        user["portal_pin_set"] = bool(user.get("portal_pin_set_at"))
         user["charge_access_mode"]=_normalize_charge_access_mode(user.get("charge_access_mode"))
         user["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(int(user_id),)).fetchall()]
         used=_user_month_energy_conn(conn,user_id,start_utc,end_utc)
@@ -5238,142 +5198,7 @@ def diagnostic_summary(cp_id):
     return {"event_counts":[dict(x) for x in events],"warnings":[dict(x) for x in warnings],"telemetry_seen":sum(1 for x in caps if x.get("seen")),"telemetry_total":len(caps),"hints":[],"health":charge_point_health(cp_id),"history":diagnostic_history(cp_id,limit=60)}
 
 
-# V0.9.0 - private charging-credit portal, privacy-safe rankings and achievements
-
-def set_user_portal_pin(user_id, encoded_hash, enabled=True):
-    with _lock, _connect() as conn:
-        if not conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone():
-            return False
-        conn.execute(
-            "UPDATE users SET portal_pin_hash=?, portal_pin_set_at=?, portal_enabled=? WHERE id=?",
-            (encoded_hash, utc_now(), 1 if enabled else 0, user_id),
-        )
-        conn.execute("DELETE FROM portal_sessions WHERE user_id=?", (user_id,))
-        conn.commit()
-        return True
-
-
-def set_user_portal_enabled(user_id, enabled):
-    with _lock, _connect() as conn:
-        cur=conn.execute("UPDATE users SET portal_enabled=? WHERE id=?", (1 if enabled else 0, user_id))
-        if not enabled:
-            conn.execute("DELETE FROM portal_sessions WHERE user_id=?", (user_id,))
-        conn.commit(); return cur.rowcount > 0
-
-
-def portal_pin_records(include_disabled=False):
-    with _lock, _connect() as conn:
-        extra="" if include_disabled else "AND portal_enabled=1"
-        return [dict(r) for r in conn.execute(
-            f"SELECT id,name,portal_pin_hash,portal_enabled FROM users WHERE status='Aktiv' {extra} AND portal_pin_hash IS NOT NULL ORDER BY id"
-        ).fetchall()]
-
-
-def portal_user_for_reset_email(email):
-    key=str(email or "").strip().casefold()
-    if not key: return None
-    with _connect() as conn:
-        rows=conn.execute("""SELECT id,name,email,portal_enabled,portal_pin_set_at FROM users
-            WHERE status='Aktiv' AND portal_enabled=1 AND portal_pin_hash IS NOT NULL AND LOWER(TRIM(COALESCE(email,'')))=?""",(key,)).fetchall()
-        return dict(rows[0]) if len(rows)==1 else None
-
-
-def portal_pin_reset_allowed(email_hash, ip_hash, window_minutes=60, ip_limit=5):
-    cutoff=(datetime.now(timezone.utc)-timedelta(minutes=max(1,int(window_minutes)))).isoformat()
-    with _connect() as conn:
-        by_email=int(conn.execute("SELECT COUNT(*) FROM portal_pin_reset_requests WHERE email_hash=? AND requested_at>=?",(str(email_hash),cutoff)).fetchone()[0] or 0)
-        by_ip=int(conn.execute("SELECT COUNT(*) FROM portal_pin_reset_requests WHERE ip_hash=? AND requested_at>=?",(str(ip_hash),cutoff)).fetchone()[0] or 0)
-        return by_email < 1 and by_ip < max(1,int(ip_limit))
-
-
-def record_portal_pin_reset_request(email_hash, ip_hash, user_id=None, mail_sent=False):
-    now=datetime.now(timezone.utc)
-    with _lock,_connect() as conn:
-        conn.execute("DELETE FROM portal_pin_reset_requests WHERE requested_at<?",((now-timedelta(days=30)).isoformat(),))
-        conn.execute("DELETE FROM portal_pin_reset_tokens WHERE expires_at<?",((now-timedelta(days=7)).isoformat(),))
-        cur=conn.execute("INSERT INTO portal_pin_reset_requests(email_hash,ip_hash,user_id,requested_at,mail_sent) VALUES(?,?,?,?,?)",(str(email_hash),str(ip_hash),user_id,now.isoformat(),1 if mail_sent else 0))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def mark_portal_pin_reset_mail_sent(request_id):
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE portal_pin_reset_requests SET mail_sent=1 WHERE id=?",(int(request_id),)); conn.commit()
-
-
-def create_portal_pin_reset_token(user_id, token_hash, expires_at):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE portal_pin_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL",(now,int(user_id)))
-        conn.execute("DELETE FROM portal_pin_reset_tokens WHERE expires_at<?",(now,))
-        conn.execute("INSERT INTO portal_pin_reset_tokens(token_hash,user_id,created_at,expires_at) VALUES(?,?,?,?)",(str(token_hash),int(user_id),now,str(expires_at)))
-        conn.commit(); return True
-
-
-def portal_pin_reset_token(token_hash):
-    now=utc_now()
-    with _connect() as conn:
-        row=conn.execute("""SELECT t.token_hash,t.user_id,t.created_at,t.expires_at,u.name,u.email
-            FROM portal_pin_reset_tokens t JOIN users u ON u.id=t.user_id
-            WHERE t.token_hash=? AND t.used_at IS NULL AND t.expires_at>? AND u.status='Aktiv' AND u.portal_enabled=1""",(str(token_hash),now)).fetchone()
-        return dict(row) if row else None
-
-
-def consume_portal_pin_reset_token(token_hash, encoded_hash):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT user_id FROM portal_pin_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>?",(str(token_hash),now)).fetchone()
-        if not row: return None
-        user_id=int(row[0])
-        conn.execute("UPDATE users SET portal_pin_hash=?,portal_pin_set_at=?,portal_enabled=1 WHERE id=?",(str(encoded_hash),now,user_id))
-        conn.execute("DELETE FROM portal_sessions WHERE user_id=?",(user_id,))
-        conn.execute("UPDATE portal_pin_reset_tokens SET used_at=? WHERE token_hash=?",(now,str(token_hash)))
-        conn.commit(); return user_id
-
-
-def create_portal_session(token_hash, user_id, expires_at):
-    now=utc_now()
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM portal_sessions WHERE expires_at<=?", (now,))
-        conn.execute("INSERT OR REPLACE INTO portal_sessions(token_hash,user_id,created_at,expires_at,last_seen_at) VALUES(?,?,?,?,?)", (token_hash,user_id,now,expires_at,now))
-        conn.execute("UPDATE users SET portal_last_login_at=? WHERE id=?", (now,user_id))
-        conn.commit()
-
-
-def portal_user_for_session(token_hash):
-    if not token_hash: return None
-    now=utc_now()
-    with _lock, _connect() as conn:
-        row=conn.execute("""SELECT u.id,u.name,u.role,u.department,u.portal_enabled,u.portal_pin_set_at,u.portal_last_login_at,s.expires_at
-            FROM portal_sessions s JOIN users u ON u.id=s.user_id
-            WHERE s.token_hash=? AND s.expires_at>? AND u.portal_enabled=1 AND u.status='Aktiv'""", (token_hash,now)).fetchone()
-        if not row: return None
-        conn.execute("UPDATE portal_sessions SET last_seen_at=? WHERE token_hash=?", (now,token_hash)); conn.commit()
-        return dict(row)
-
-
-def delete_portal_session(token_hash):
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM portal_sessions WHERE token_hash=?", (token_hash,)); conn.commit()
-
-
-def portal_login_failures(ip_hash, minutes=10):
-    cutoff=(datetime.now(timezone.utc)-timedelta(minutes=minutes)).isoformat()
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM portal_login_attempts WHERE ts<?", ((datetime.now(timezone.utc)-timedelta(days=2)).isoformat(),))
-        row=conn.execute("SELECT COUNT(*) FROM portal_login_attempts WHERE ip_hash=? AND success=0 AND ts>=?", (ip_hash,cutoff)).fetchone()
-        conn.commit(); return int(row[0] or 0)
-
-
-def record_portal_login_attempt(ip_hash, success):
-    with _lock, _connect() as conn:
-        if success:
-            conn.execute("DELETE FROM portal_login_attempts WHERE ip_hash=?", (ip_hash,))
-        else:
-            conn.execute("INSERT INTO portal_login_attempts(ip_hash,ts,success) VALUES(?,?,0)", (ip_hash,utc_now()))
-        conn.commit()
-
-
-ACHIEVEMENT_METRICS={
+# Gamification / engagement legacy follows; removed in a later Community cleanup block.\n\nACHIEVEMENT_METRICS={
     "manual",
     "energy_total",
     "sessions_total",
