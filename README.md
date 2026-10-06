@@ -161,6 +161,7 @@ Aktuell vorhanden:
 - 🌍 Mehrsprachigkeit / i18n: `docs/I18N.md`
 - 🎨 Branding & Logo-Set: `docs/BRANDING.md`
 - 🐳🟦 Installation: `docs/INSTALLATION.md`
+- 🔌 Ladepunkt verbinden / OCPP-URL: `docs/OCPP_CONNECTION.md`
 
 Ausführliche Installations-, Konfigurations-, Update-, Backup-, OCPP-, Security- und Troubleshooting-Dokumentation folgt mit dem weiteren Community-Ausbau. 🛠️📖
 

@@ -100,7 +100,27 @@ http://192.168.1.50:8010
 
 Der OCPP-1.6J-Endpunkt läuft standardmäßig auf Port **9000**.
 
-Das genaue URL-Schema und die Onboarding-Schritte werden in der separaten OCPP-Anleitung dokumentiert, sobald die Community-Oberfläche vollständig integriert ist.
+Die URL hat dieses Schema:
+
+```text
+ws://<SERVER>:9000/<CHARGE-POINT-ID>
+```
+
+Beispiel:
+
+```text
+ws://192.168.1.50:9000/AMTRON-01
+```
+
+Für WSS gilt entsprechend:
+
+```text
+wss://<SERVER>:9000/<CHARGE-POINT-ID>
+```
+
+👉 **[Ausführliche Anleitung: Ladepunkt mit VoltCore Community verbinden](OCPP_CONNECTION.md)**
+
+Dort sind auch WS/WSS, Reverse Proxy, OCPP Basic Auth, Onboarding, Fehlercodes und konkrete Troubleshooting-Beispiele beschrieben.
 
 ## 💾 Persistente Daten
 

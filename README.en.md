@@ -161,6 +161,7 @@ Current project documentation:
 - 🌍 Internationalisation: `docs/I18N.md`
 - 🎨 Branding & logo set: `docs/BRANDING.md`
 - 🐳🟦 Installation: `docs/INSTALLATION.en.md`
+- 🔌 Charge point connection / OCPP URL: `docs/OCPP_CONNECTION.en.md`
 
 More detailed installation, configuration, update, backup, OCPP, security and troubleshooting documentation will be added as the Community build matures. 🛠️📖
 
