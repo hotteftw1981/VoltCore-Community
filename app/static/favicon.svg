@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+<title id="title">VoltCore Community app icon</title>
+<defs>
+  <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#169CFF"/><stop offset="0.55" stop-color="#176AF4"/><stop offset="1" stop-color="#0C43BF"/></linearGradient>
+</defs>
+<rect x="24" y="24" width="464" height="464" rx="112" fill="url(#tile)"/>
+<g transform="translate(85 95)" fill="#FFF">
+  <path d="M0 20 H72 L132 150 L194 20 H258 L138 266 Q124 289 109 266 Z"/>
+  <path d="M240 43 A104 104 0 1 0 240 251" fill="none" stroke="#FFF" stroke-width="55"/>
+  <path d="M154 147 H228" fill="none" stroke="#FFF" stroke-width="25" stroke-linecap="round"/>
+  <rect x="218" y="123" width="52" height="48" rx="14"/>
+  <rect x="266" y="130" width="35" height="10" rx="5"/>
+  <rect x="266" y="154" width="35" height="10" rx="5"/>
+</g>
+</svg>
