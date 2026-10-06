@@ -15,7 +15,7 @@ log = logging.getLogger("voltcore.push")
 _PRIVATE_KEY_SETTING = "web_push_vapid_private_key"
 _PUBLIC_KEY_SETTING = "web_push_vapid_public_key"
 _SUBJECT_SETTING = "web_push_vapid_subject"
-_DEFAULT_SUBJECT = "mailto:p.garbe@drk-schwelm.org"
+_DEFAULT_SUBJECT = "https://github.com/hotteftw1981/VoltCore-Community"
 
 
 def _b64url(value: bytes) -> str:
