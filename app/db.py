@@ -4795,73 +4795,11 @@ def diagnostic_summary(cp_id):
     return {"event_counts":[dict(x) for x in events],"warnings":[dict(x) for x in warnings],"telemetry_seen":sum(1 for x in caps if x.get("seen")),"telemetry_total":len(caps),"hints":[],"health":charge_point_health(cp_id),"history":diagnostic_history(cp_id,limit=60)}
 
 
-# Gamification / engagement legacy follows; removed in a later Community cleanup block.\n\nACHIEVEMENT_METRICS={
-    "manual",
-    "energy_total",
-    "sessions_total",
-    "energy_month",
-    "energy_year",
-    "sessions_month",
-    "sessions_year",
-    "stand_minutes_total",
-    "charging_hours_total",
-    "max_session_energy",
-    "max_session_power",
-    "distinct_charge_points",
-    "distinct_vehicles",
-    "days_active",
-    "months_active",
-    "weekend_sessions",
-    "early_sessions",
-    "evening_sessions",
-    "night_sessions",
-    "midnight_sessions",
-    "long_sessions",
-    "quick_sessions",
-    "prompt_unplug_sessions",
-    "exact_42_sessions",
-    "max_month_energy",
-    "max_month_sessions",
-    "week_streak",
-}
-ACHIEVEMENT_RARITIES={"common","uncommon","rare","epic","legendary","secret"}
-
-LEADERBOARD_METRIC_META={
-    "energy_kwh":{"label":"Geladene Energie","icon":"🔋","unit":"kWh","decimals":1,"order":10,"description":"Summe der im gewählten Zeitraum geladenen Energie. Mehr kWh bedeuten einen höheren Rang."},
-    "sessions":{"label":"Ladevorgänge","icon":"🔌","unit":"Sessions","decimals":0,"order":20,"description":"Anzahl der Ladevorgänge im gewählten Zeitraum. Wer häufiger lädt, steht weiter oben."},
-    "xp":{"label":"XP-Rangliste","icon":"⚡","unit":"XP","decimals":0,"order":30,"description":"Vergleicht die gesammelten Erfahrungspunkte aus freigeschalteten Achievements und Erfolgen."},
-    "achievement_count":{"label":"Achievement-Sammler","icon":"🏆","unit":"Achievements","decimals":0,"order":40,"description":"Vergleicht die Anzahl freigeschalteter Achievements. Die meisten Auszeichnungen führen die Rangliste an."},
-    "early_sessions":{"label":"Frühlader / Early Birds","icon":"🌅","unit":"Sessions","decimals":0,"order":100,"description":"Zählt Ladevorgänge am frühen Morgen zwischen 05:00 und 08:00 Uhr."},
-    "evening_sessions":{"label":"Feierabend-Lader","icon":"🌇","unit":"Sessions","decimals":0,"order":110,"description":"Zählt Ladevorgänge am Feierabend zwischen 17:00 und 22:00 Uhr."},
-    "night_sessions":{"label":"Night Owls","icon":"🌙","unit":"Sessions","decimals":0,"order":120,"description":"Zählt Nachtladungen ab 22:00 Uhr bis vor 05:00 Uhr."},
-    "weekend_sessions":{"label":"Wochenend-Lader","icon":"🏖️","unit":"Sessions","decimals":0,"order":130,"description":"Zählt Ladevorgänge an Samstagen und Sonntagen."},
-    "week_streak":{"label":"Streak Champions","icon":"🔥","unit":"Wochen","decimals":0,"order":140,"description":"Misst die längste Serie aufeinanderfolgender Kalenderwochen mit mindestens einem Ladevorgang."},
-    "max_session_energy":{"label":"Größte Einzelladung","icon":"🥤","unit":"kWh","decimals":1,"order":150,"description":"Wertet die größte Energiemenge einer einzelnen Ladesession."},
-    "max_session_power":{"label":"Power-Peak","icon":"⚡","unit":"kW","decimals":1,"order":160,"description":"Wertet die höchste in einer Session gemessene Ladeleistung."},
-    "distinct_charge_points":{"label":"Ladepunkt-Entdecker","icon":"🧭","unit":"Ladepunkte","decimals":0,"order":170,"description":"Zählt, an wie vielen unterschiedlichen Ladepunkten geladen wurde."},
-    "distinct_vehicles":{"label":"Flottenhopper","icon":"🚗","unit":"Fahrzeuge","decimals":0,"order":180,"description":"Zählt, wie viele unterschiedliche zugeordnete Fahrzeuge in Sessions verwendet wurden."},
-    "days_active":{"label":"Aktive Ladetage","icon":"📆","unit":"Tage","decimals":0,"order":190,"description":"Zählt unterschiedliche Kalendertage mit mindestens einem Ladevorgang."},
-    "months_active":{"label":"Aktive Lademonate","icon":"🗓️","unit":"Monate","decimals":0,"order":200,"description":"Zählt unterschiedliche Kalendermonate mit mindestens einem Ladevorgang."},
-    "charging_hours_total":{"label":"Ladezeit-Könige","icon":"⏱️","unit":"Std.","decimals":1,"order":210,"description":"Summiert die tatsächliche Ladezeit aller Sessions im Zeitraum."},
-    "max_month_energy":{"label":"Stärkster Lademonat","icon":"📊","unit":"kWh","decimals":1,"order":220,"description":"Vergleicht den stärksten einzelnen Lademonat nach geladener Energie."},
-    "max_month_sessions":{"label":"Session-Sammler","icon":"🧮","unit":"Sessions","decimals":0,"order":230,"description":"Vergleicht den Monat mit den meisten einzelnen Ladevorgängen."},
-    "long_sessions":{"label":"Langzeitparker","icon":"🅿️","unit":"Sessions","decimals":0,"order":240,"description":"Zählt lange angeschlossene Sessions ab vier Stunden."},
-    "quick_sessions":{"label":"Power Naps","icon":"😴","unit":"Sessions","decimals":0,"order":250,"description":"Zählt kurze Sessions mit Energiefluss und höchstens 45 Minuten Dauer."},
-    "prompt_unplug_sessions":{"label":"Stecker-Sprinter","icon":"🏃","unit":"Sessions","decimals":0,"order":260,"description":"Zählt Sessions, bei denen der Connector nach Sessionende innerhalb von 10 Minuten wieder frei gemeldet wurde."},
-}
-LEADERBOARD_METRIC_ALIASES={
-    "energy_total":"energy_kwh","energy_month":"energy_kwh","energy_year":"energy_kwh",
-    "sessions_total":"sessions","sessions_month":"sessions","sessions_year":"sessions",
-}
-LEADERBOARD_ALWAYS_ENABLED={"energy_kwh","sessions","xp","achievement_count"}
-
-
 BRANDING_DEFAULTS = {
     "product_name":"VoltCore Community",
     "organization_name":"Ihre Organisation",
     "display_name":"VoltCore Community",
     "product_subtitle":"Community Edition · OCPP Charging Management",
-    "voucher_prefix":"VOLT",
     "primary_color":"#2563eb",
     "logo_light_url":"",
     "logo_dark_url":"",
