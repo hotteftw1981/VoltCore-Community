@@ -39,7 +39,6 @@ from . import invites
 from . import totp
 from . import updates
 from . import web_push
-from .ladecloud_import import parse_ladecloud_xlsx
 from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
 try:
     from .ocpp_server import sync_local_list, sync_pending_local_lists
@@ -310,7 +309,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/integrations/fleet/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -445,7 +444,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/cost-centers","/imports","/load-management","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/registration-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests") or path.startswith("/api/import/") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/registration-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -925,21 +924,6 @@ async def users_page(request: Request):
     return render(request, "users.html", page="users")
 
 
-@app.get("/imports", response_class=HTMLResponse)
-async def imports_page(request: Request):
-    return render(request,"imports.html",page="imports")
-
-
-@app.get("/load-management", response_class=HTMLResponse)
-async def load_page(request: Request):
-    return render(request,"load_management.html",page="load-management")
-
-
-@app.get("/cost-centers", response_class=HTMLResponse)
-async def cost_centers_page(request: Request):
-    return render(request,"cost_centers.html",page="cost-centers")
-
-
 @app.get("/reports", response_class=HTMLResponse)
 async def reports_page(request: Request):
     return render(request, "reports.html", page="reports")
@@ -1206,74 +1190,6 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
 
 
-IMPORT_DIR = db.DATA_DIR / "imports"
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_IMPORT_BYTES = 20 * 1024 * 1024
-
-
-def _import_file(token: str):
-    token=str(token or "").strip()
-    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
-        raise HTTPException(400,"Ungültiger Import-Token")
-    path=IMPORT_DIR / f"ladecloud-{token}.xlsx"
-    if not path.exists(): raise HTTPException(404,"Importdatei nicht mehr verfügbar. Bitte erneut hochladen.")
-    return path
-
-
-def _suggest_import_users(parsed_users):
-    backend=db.list_users_rich(); cards={str(c.get("uid")):c for c in db.list_rfid_cards()}
-    result=[]
-    for src in parsed_users:
-        tag=str(src["rfid_tag"]); source_name=str(src.get("source_user_name") or "").strip(); suggestion=None; reason=None
-        card=cards.get(tag)
-        if card and card.get("user_id"):
-            suggestion=int(card["user_id"]); reason="RFID bereits zugeordnet"
-        else:
-            key=source_name.casefold(); scored=[]
-            for u in backend:
-                name=str(u.get("name") or "").strip(); cf=name.casefold(); tokens=[x for x in cf.replace("-"," ").split() if x]
-                score=100 if cf==key else 90 if tokens and tokens[-1]==key else 80 if key and key in tokens else 50 if key and key in cf else 0
-                if score: scored.append((score,int(u["id"]),name))
-            scored.sort(reverse=True)
-            if scored and (len(scored)==1 or scored[0][0] > scored[1][0]): suggestion=scored[0][1]; reason="Name automatisch erkannt"
-        item=dict(src); item["suggested_user_id"]=suggestion; item["suggestion_reason"]=reason; result.append(item)
-    return result
-
-
-@app.post("/api/import/ladecloud/preview")
-async def ladecloud_import_preview(file: UploadFile = File(...)):
-    if not str(file.filename or "").lower().endswith(".xlsx"):
-        raise HTTPException(400,"Bitte einen XLSX-Export aus lade.cloud auswählen.")
-    data=await file.read(MAX_IMPORT_BYTES+1)
-    if len(data)>MAX_IMPORT_BYTES: raise HTTPException(413,"Die Importdatei darf maximal 20 MB groß sein.")
-    try: parsed=parse_ladecloud_xlsx(data)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    token=secrets.token_hex(16); (IMPORT_DIR/f"ladecloud-{token}.xlsx").write_bytes(data)
-    return {
-        "token":token,"sessions":parsed["sessions"],"energy_kwh":parsed["energy_kwh"],"first_at":parsed["first_at"],"last_at":parsed["last_at"],
-        "users":_suggest_import_users(parsed["users"]),"charge_points":parsed["charge_points"],"backend_users":[{"id":u["id"],"name":u["name"],"status":u["status"]} for u in db.list_users_rich()],
-        "backend_charge_points":[{"id":c["id"],"vendor":c.get("vendor"),"model":c.get("model"),"location":c.get("location")} for c in db.list_charge_points() if int(c.get("ignored") or 0)==0],
-        "warnings":parsed["warnings"],"existing_import":db.import_history_stats("lade.cloud"),
-    }
-
-
-@app.post("/api/import/ladecloud/execute")
-async def ladecloud_import_execute(payload: dict):
-    path=_import_file(payload.get("token"))
-    try: parsed=parse_ladecloud_xlsx(path.read_bytes())
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    user_mapping=payload.get("user_mapping") or {}; cp_mapping=payload.get("charge_point_mapping") or {}
-    missing_users=[u["rfid_tag"] for u in parsed["users"] if str(u["rfid_tag"]) not in user_mapping]
-    missing_cps=[c["source_charge_point"] for c in parsed["charge_points"] if str(c["source_charge_point"]) not in cp_mapping]
-    if missing_users: raise HTTPException(400,"Nicht alle RFID-Benutzer wurden zugeordnet.")
-    if missing_cps: raise HTTPException(400,"Nicht alle lade.cloud-Ladepunkte wurden zugeordnet.")
-    try: result=db.import_ladecloud_rows(parsed["rows"],user_mapping,cp_mapping)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    try: path.unlink()
-    except OSError: pass
-    return {"ok":True,**result,"history":db.import_history_stats("lade.cloud")}
-
-
 @app.get("/api/settings/branding")
 async def api_branding_settings():
     return db.branding_settings()
@@ -1476,16 +1392,6 @@ def _ocpp_transport_status():
     if cert or key:
         return {"level":"bad","label":"TLS unvollständig","detail":"OCPP_TLS_CERTFILE und OCPP_TLS_KEYFILE müssen gemeinsam gesetzt sein","affects_overall":True}
     return {"level":"neutral","label":"WS / Proxy","detail":"Direktes WSS deaktiviert · TLS kann am Reverse Proxy terminiert werden","affects_overall":False}
-
-
-def _fleet_integration_status():
-    enabled=bool(str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip())
-    return {
-        "level":"ok" if enabled else "neutral",
-        "label":"Bereit" if enabled else "Deaktiviert",
-        "detail":"Read-only Fleet API v1 mit Bearer-Token aktiv" if enabled else "Vorbereitete Fuhrpark-Schnittstelle · kein Token gesetzt",
-        "affects_overall":False,
-    }
 
 
 def _system_status_payload(auth=None):
@@ -2014,7 +1920,6 @@ async def api_tariffs():
         "groups":db.list_billing_groups(),
         "users":db.list_tariff_users(),
         "charge_points":db.list_tariff_charge_points(),
-        "cost_centers":db.list_cost_centers(True),
     }
 
 class TariffPayload(BaseModel):
@@ -2024,7 +1929,6 @@ class TariffPayload(BaseModel):
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
     billing_group_id: int | None = None
 
 class TariffVersionPayload(BaseModel):
@@ -2032,7 +1936,6 @@ class TariffVersionPayload(BaseModel):
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
     billing_group_id: int | None = None
 
 @app.post("/api/tariffs")
@@ -2054,18 +1957,17 @@ async def remove_tariff(tariff_id:int):
 
 class BillingGroupPayload(BaseModel):
     name: str
-    cost_center: str | None = None
     active: bool = True
 
 @app.post("/api/billing-groups")
 async def create_group(payload: BillingGroupPayload):
-    try: return {"id":db.create_billing_group(payload.name,payload.cost_center)}
+    try: return {"id":db.create_billing_group(payload.name)}
     except ValueError as exc: raise HTTPException(400,str(exc))
 
 @app.put("/api/billing-groups/{group_id}")
 async def update_group(group_id:int,payload:BillingGroupPayload):
     active=bool(getattr(payload,"active",True))
-    try: ok=db.update_billing_group(group_id,payload.name,payload.cost_center,active)
+    try: ok=db.update_billing_group(group_id,payload.name,active)
     except ValueError as exc: raise HTTPException(400,str(exc))
     if not ok: raise HTTPException(404,"Abrechnungsgruppe nicht gefunden")
     return {"ok":True}
@@ -2428,45 +2330,6 @@ async def set_transaction_vehicle(transaction_id: int, payload: dict):
     if not db.set_transaction_vehicle(transaction_id, vehicle_id):
         raise HTTPException(400, "Fahrzeug konnte nicht zugeordnet werden")
     return {"ok": True, "transaction": db.get_transaction(transaction_id)}
-
-
-def _require_fleet_integration(request: Request):
-    expected=str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip()
-    if not expected:
-        raise HTTPException(503,"Fuhrpark-Schnittstelle ist deaktiviert")
-    auth=str(request.headers.get("authorization") or "")
-    supplied=auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied or not secrets.compare_digest(supplied,expected):
-        try:
-            db.add_security_event("Fleet API authentication failed",severity="warning",category="fleet_api",remote=_client_text(request),success=False,detail=request.url.path)
-        except Exception:
-            pass
-        raise HTTPException(401,"Ungültiger Fuhrpark-Integrationstoken",headers={"WWW-Authenticate":"Bearer"})
-    return True
-
-
-def _fleet_no_store(response: Response):
-    response.headers["Cache-Control"]="no-store"
-    response.headers["Pragma"]="no-cache"
-    response.headers["X-Content-Type-Options"]="nosniff"
-
-
-@app.get("/api/integrations/fleet/v1/health")
-async def fleet_integration_health(request: Request, response: Response):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    return {"ok":True,"api":"fleet-v1","backend_version":APP_VERSION,"mode":"read-only"}
-
-
-@app.get("/api/integrations/fleet/v1/sessions")
-async def fleet_integration_sessions(request: Request, response: Response, since: str | None = None, limit: int = 200):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    try:
-        rows=db.fleet_integration_sessions(since=since,limit=limit)
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    return {"api":"fleet-v1","count":len(rows),"sessions":rows}
 
 
 @app.get("/api/vehicles")
@@ -2881,11 +2744,6 @@ async def api_rfid_local_list_offline_auth(payload: dict):
     if result.get("offline"):
         raise HTTPException(409,result.get("detail") or "Ladepunkt ist offline")
     return {"ok":bool(result.get("ok")),"result":result}
-
-
-IMPORT_DIR = db.DATA_DIR / "imports"
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_IMPORT_BYTES = 20 * 1024 * 1024
 
 
 def _remote_audit(request: Request, cp_id: str, action: str, details: str = "", status_code: int = 200):
@@ -3623,92 +3481,6 @@ async def api_security_clear_secret(cp_id: str, request: Request):
     db.add_security_event("OCPP secret removed",severity="warning",category="admin",charge_point_id=cp_id,system_user_id=auth.get("id"),username=auth.get("username"),success=True)
     return {"ok":True}
 
-
-class CostCenterPayload(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-    active: bool = True
-
-@app.get("/api/cost-centers")
-async def api_cost_centers(include_inactive: bool=True):
-    return {"items":db.list_cost_centers(include_inactive)}
-
-@app.post("/api/cost-centers")
-async def api_create_cost_center(payload: CostCenterPayload):
-    try: return {"id":db.create_cost_center(payload.code,payload.name,payload.description)}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/cost-centers/{cost_center_id}")
-async def api_update_cost_center(cost_center_id:int,payload:CostCenterPayload):
-    try: ok=db.update_cost_center(cost_center_id,payload.code,payload.name,payload.description,payload.active)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Kostenstelle nicht gefunden")
-    return {"ok":True,"item":db.get_cost_center(cost_center_id)}
-
-class SmartChargingSettingsPayload(BaseModel):
-    enabled: bool = False
-    site_limit_kw: float = 132
-    reserve_kw: float = 0
-    rebalance_seconds: int = 15
-    min_change_kw: float = 0.5
-
-class SmartConnectorPayload(BaseModel):
-    enabled: bool = True
-    priority: int = 3
-    min_kw: float = 1.4
-    max_kw: float | None = None
-
-@app.get("/api/load-management")
-async def api_load_management():
-    cps = _with_live_power(db.list_charge_points())
-    current_values=[float(c["power_kw"]) for c in cps if c.get("power_kw") is not None and c.get("status") == "Charging"]
-    settings=db.smart_charging_settings()
-    policies=db.list_smart_charging_connectors()
-    active=db.smart_charging_inputs()
-    runtime=dict(SMART_CHARGING_RUNTIME)
-    plan={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in runtime.get("allocations",[])}
-    active_keys={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)) for x in active}
-    for p in policies:
-        p["connected"]=is_connected(p["charge_point_id"])
-        key=(str(p["charge_point_id"]),int(p["connector_id"]))
-        planned=plan.get(key) or {}
-        p["active"]=key in active_keys
-        p["planned_kw"]=planned.get("desired_kw")
-        p["cap_kw"]=planned.get("cap_kw")
-        p["curtailed_kw"]=planned.get("curtailed_kw")
-        if planned.get("allocation_reason"):
-            p["allocation_reason"]=planned["allocation_reason"]
-        elif p["active"] and not p["connected"]:
-            p["allocation_reason"]="Offline – Kapazität wird konservativ reserviert"
-        elif p["active"] and int(p.get("enabled") or 0)==0:
-            p["allocation_reason"]="Manuell aus der automatischen Regelung genommen"
-        else:
-            p["allocation_reason"]="Keine aktive Session"
-    current=round(sum(current_values),2) if current_values else 0.0
-    usable=max(0.0,float(settings["site_limit_kw"])-float(settings["reserve_kw"]))
-    allocated=round(sum(float(p.get("allocated_kw") or 0) for p in policies),2)
-    fixed=float(runtime.get("fixed_load_kw") or 0)
-    headroom=round(max(0.0,usable-current),2)
-    return {"limit_kw":settings["site_limit_kw"],"reserve_kw":settings["reserve_kw"],"enabled":settings["enabled"],"rebalance_seconds":settings["rebalance_seconds"],"min_change_kw":settings["min_change_kw"],"current_kw":current,"usable_kw":round(usable,2),"headroom_kw":headroom,"allocated_kw":allocated,"fixed_load_kw":round(fixed,2),"runtime":runtime,"rules":db.list_load_rules(),"charge_points":cps,"connectors":policies,"active_sessions":active}
-
-@app.put("/api/smart-charging/settings")
-async def api_smart_charging_settings(payload:SmartChargingSettingsPayload):
-    try: settings=db.set_smart_charging_settings(payload.enabled,payload.site_limit_kw,payload.reserve_kw,payload.rebalance_seconds,payload.min_change_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Einstellungen geändert")
-    return {"ok":True,"settings":settings}
-
-@app.put("/api/smart-charging/connectors/{cp_id}/{connector_id}")
-async def api_smart_connector(cp_id:str,connector_id:int,payload:SmartConnectorPayload):
-    try: db.set_smart_connector_policy(unquote(cp_id),connector_id,payload.enabled,payload.priority,payload.min_kw,payload.max_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Connector-Regel geändert")
-    return {"ok":True}
-
-@app.post("/api/smart-charging/rebalance")
-async def api_smart_rebalance():
-    return {"ok":True,"result":await _rebalance_smart_charging(force=True,trigger="Manuell ausgelöst")}
 
 @app.get("/api/search")
 async def api_global_search(q: str=""):
