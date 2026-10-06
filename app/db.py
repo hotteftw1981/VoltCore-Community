@@ -116,24 +116,14 @@ def _purge_legacy_demo_data(conn):
     conn.execute("UPDATE charge_points SET simulated=0 WHERE COALESCE(simulated,0)<>0")
 
 
-LEGACY_PRODUCT_NAME_V50 = "DRK OCPP Backend"
-
-
 def _migrate_branding_identity_v51_conn(conn, existing_settings_count):
-    """Community compatibility migration without organization-specific defaults."""
+    """Keep the historical migration marker without seeding organization branding."""
     marker=conn.execute("SELECT value FROM app_settings WHERE key='branding_identity_v51_migrated'").fetchone()
     if marker:
         return False
-    now=utc_now()
-    product_row=conn.execute("SELECT value FROM app_settings WHERE key='branding_product_name'").fetchone()
-    if product_row and str(product_row[0] or "").strip()==LEGACY_PRODUCT_NAME_V50:
-        conn.execute(
-            "UPDATE app_settings SET value='VoltCore Community',updated_at=? WHERE key='branding_product_name'",
-            (now,),
-        )
     conn.execute(
         "INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",
-        ("branding_identity_v51_migrated","1",now),
+        ("branding_identity_v51_migrated","1",utc_now()),
     )
     return False
 
