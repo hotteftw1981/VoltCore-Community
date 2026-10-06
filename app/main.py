@@ -793,6 +793,22 @@ async def public_access_request_start_page(request:Request, sent:str|None=None):
     return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
 
 
+@app.post("/public/access-request/start", response_class=HTMLResponse)
+async def public_access_request_start(request:Request, email:str=Form(...)):
+    cfg=db.registration_settings()
+    if not cfg.get("enabled"):
+        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+    email_key=str(email or "").strip().casefold()
+    if len(email_key)>254 or "@" not in email_key:
+        return render(request,"access_request.html",status_code=400,page="public",step="start",error="Bitte geben Sie eine gültige E-Mail-Adresse ein.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+    raw=secrets.token_urlsafe(32)
+    expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
+    db.create_access_request_verification(email_key,hashlib.sha256(email_key.encode("utf-8")).hexdigest(),_client_hash(request),_session_hash(raw),expires)
+    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
+    await asyncio.to_thread(mailer.send_template,"system",[email_key],{"subject":"VoltCore Community · E-Mail bestätigen","headline":"Registrierung bestätigen","body":"Bitte bestätigen Sie Ihre E-Mail-Adresse, um den Antrag fortzusetzen.","detail":"Der Link ist 30 Minuten gültig.","cta_label":"Registrierung fortsetzen","cta_url":f"{base}/public/access-request/form?token={raw}"},base)
+    return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
+
+
 @app.get("/public/access-request/form", response_class=HTMLResponse)
 async def public_access_request_form(request:Request, token:str=""):
     cfg=db.registration_settings()
