@@ -882,7 +882,7 @@ async def registration_request_detail_page(request:Request,request_id:int,result
         return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
     item=db.access_request_view(request_id)
     if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    message={"approved":"Antrag genehmigt und Ladeportal-Zugang erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
+    message={"approved":"Antrag genehmigt und Ladebenutzer im Backend erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
     return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
 
 
@@ -903,13 +903,12 @@ async def registration_request_decision(request:Request,request_id:int,action:st
     if action!="approve":
         raise HTTPException(400,"Ungültige Aktion")
     limit=None if str(monthly_kwh_limit or "").strip()=="" else max(0.0,float(str(monthly_kwh_limit).replace(",",".")))
-    pin=_generate_unique_portal_pin()
-    db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),limit,monthly_limit_mode,note,"manual",return_details=True)
+    db.approve_access_request(request_id,auth.get("id"),limit,monthly_limit_mode,note,"manual",return_details=True)
     db.deactivate_notification(f"access-request:{request_id}")
     base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
     if mailer.settings(False).get("enabled"):
         try:
-            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Öffnen Sie das Ladeportal und verwenden Sie „PIN vergessen?“, um Ihre persönliche PIN sicher festzulegen.","cta_label":"Ladeportal öffnen","cta_url":base+"/public/ladeguthaben"},base)
+            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Ihr Ladebenutzer wird ausschließlich durch die Administration im VoltCore-Backend verwaltet. Für Ladebenutzer gibt es keinen separaten Portal- oder PIN-Zugang."},base)
         except Exception:
             logging.exception("Registration approval notification failed")
     return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
