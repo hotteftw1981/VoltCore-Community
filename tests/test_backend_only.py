@@ -244,5 +244,27 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         ):
             self.assertFalse((ROOT / relative).exists())
 
+
+    def test_documentation_matches_backend_only_scope(self):
+        readme_de = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme_en = (ROOT / "README.en.md").read_text(encoding="utf-8")
+        scope = (ROOT / "docs" / "COMMUNITY_SCOPE.md").read_text(encoding="utf-8")
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+        self.assertIn("Backend-only", readme_de)
+        self.assertIn("Backend-only", readme_en)
+        self.assertIn("intentionally **backend-only**", scope)
+        self.assertIn("0.9.7.76 — Backend-only Community scope", changelog)
+
+        for stale in (
+            "Public charging portal restored",
+            "Public registration restored",
+            "Restored Smart Charging, Engagement, Cost Centers",
+            "The Community edition now includes additional neutral modules restored",
+        ):
+            self.assertNotIn(stale, scope)
+            self.assertNotIn(stale, readme_de)
+            self.assertNotIn(stale, readme_en)
+
 if __name__ == "__main__":
     unittest.main()
