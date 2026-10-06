@@ -535,10 +535,7 @@ async def first_run_submit(request: Request):
 
         credit_enabled=form.get("free_credit_enabled")=="1"
         default_kwh=float(str(form.get("default_monthly_kwh") or "0").replace(",","."))
-        if default_kwh < 0 or default_kwh > 100000:
-            raise ValueError("Das Standard-Ladeguthaben ist ungültig.")
-        db.set_setting("community_free_credit_enabled","1" if credit_enabled else "0")
-        db.set_setting("community_default_monthly_kwh",str(round(default_kwh,3) if credit_enabled else 0))
+        db.save_community_charging_credit_settings(credit_enabled,default_kwh)
 
         invite_email=str(form.get("invite_email") or "").strip()
         if invite_email:
@@ -565,7 +562,7 @@ async def first_run_submit(request: Request):
         db.add_activity(
             system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
             action="Community-Ersteinrichtung abgeschlossen",category="System",target=display_name,
-            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatsguthaben: {'aktiv' if credit_enabled else 'aus'} · Einladung: {'gesendet' if invite_email else 'übersprungen'}",
+            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Freikontingent: {'aktiv' if credit_enabled else 'aus'} · Einladung: {'gesendet' if invite_email else 'übersprungen'}",
         )
     except (ValueError,TypeError) as exc:
         return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error=str(exc))
@@ -955,6 +952,24 @@ async def pwa_manifest():
 @app.get("/service-worker.js")
 async def pwa_service_worker():
     return FileResponse(BASE_DIR/"static"/"service-worker.js",media_type="application/javascript",headers={"Cache-Control":"no-cache","Service-Worker-Allowed":"/"})
+
+
+class ChargingCreditSettingsPayload(BaseModel):
+    enabled: bool = False
+    default_monthly_kwh: float = 0
+
+
+@app.get("/api/settings/charging-credit")
+async def api_charging_credit_settings():
+    return db.community_charging_credit_settings()
+
+
+@app.put("/api/settings/charging-credit")
+async def api_charging_credit_settings_save(payload:ChargingCreditSettingsPayload):
+    try:
+        return {"ok":True,"settings":db.save_community_charging_credit_settings(payload.enabled,payload.default_monthly_kwh)}
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
 
 
 class MailSettingsPayload(BaseModel):
@@ -2335,18 +2350,17 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
     if not before: raise HTTPException(404,"Benutzer nicht gefunden")
     before_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     data=payload.model_dump()
-    data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
     try: updated=db.update_user(user_id,**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     if not updated: raise HTTPException(404,"Benutzer nicht gefunden")
-    _schedule_local_list_sync("Benutzerdaten / Ladebudget geändert")
+    _schedule_local_list_sync("Benutzerdaten / Ladelimit geändert")
     user=db.get_user(user_id) or {}
     old_budget=before.get("monthly_kwh_limit"); new_budget=user.get("monthly_kwh_limit")
     if old_budget!=new_budget:
         auth=getattr(request.state,"auth_user",None) or {}
         def n(v,suffix=""):
             return "—" if v is None else f"{float(v):g}{suffix}"
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebudget geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Monatsbudget: {n(old_budget,' kWh')} → {n(new_budget,' kWh')}")
+        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladelimit geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Monatslimit: {n(old_budget,' kWh')} → {n(new_budget,' kWh')}")
     after_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     if before_access!=after_access:
         auth=getattr(request.state,"auth_user",None) or {}
