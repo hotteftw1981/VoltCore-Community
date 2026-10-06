@@ -82,6 +82,8 @@ Geplant sind:
 
 Öffentliche Community-Releases sollen sich prüfen lassen, **ohne dass jede Installation zwingend einen eigenen GitHub-Zugriffstoken speichern muss**. 🔓🐙
 
+> 🧩 **Wichtig:** GitHub Releases sind die feste Updatequelle der Community Edition. Der eigentliche Installationsweg bleibt bewusst deployment-neutral. Docker, Portainer oder andere Varianten dürfen später eigene Installer bereitstellen — **VoltCore Community selbst ist nicht an Portainer gebunden.**
+
 ## 🌍 Sprachen
 
 VoltCore Community wird von Anfang an **mehrsprachig** aufgebaut. 🌐✨
