@@ -227,7 +227,7 @@ PORTAL_PIN_ITERATIONS = 180000
 PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/liveview", "/api/liveview", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/liveview", "/api/liveview", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -484,7 +484,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/access-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -664,7 +664,7 @@ async def login_page(request: Request, next: str = "/", reason: str | None = Non
     token=request.cookies.get(SESSION_COOKIE)
     if token and db.system_user_for_session(_session_hash(token)):
         return RedirectResponse(url="/", status_code=303)
-    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason)
+    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason, registration=db.registration_settings())
 
 
 @app.post("/login", response_class=HTMLResponse)
