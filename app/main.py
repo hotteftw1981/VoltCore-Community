@@ -1266,7 +1266,6 @@ def _system_status_payload(auth=None):
         ocpp={"level":"bad","label":f"{online}/{total} online","detail":operational["detail"]}
 
     mail=mailer.settings()
-    registration=db.registration_settings()
     configured=bool(mail.get("host") and mail.get("from_email") and (not mail.get("username") or mail.get("password_configured")))
     last_test=mail.get("last_test_at")
     last_test_error=mail.get("last_test_error")
@@ -1276,8 +1275,6 @@ def _system_status_payload(auth=None):
         mail_status={"level":"ok","label":"Aktiv","detail":"SMTP konfiguriert"+(" · zuletzt getestet "+_local_text(last_test,"%d.%m. %H:%M") if last_test else "")}
     elif mail.get("enabled"):
         mail_status={"level":"bad","label":"Unvollständig","detail":"SMTP-Host oder Absenderadresse fehlt"}
-    elif registration.get("enabled"):
-        mail_status={"level":"warn","label":"Deaktiviert","detail":"Online-Registrierung benötigt den E-Mail-Versand"}
     else:
         mail_status={"level":"neutral","label":"Deaktiviert","detail":"Regulärer E-Mail-Versand ist ausgeschaltet"}
 
@@ -1285,11 +1282,10 @@ def _system_status_payload(auth=None):
     services=[
         {"key":"backend","name":"Backend","level":"ok","label":"Online","detail":f"Version {APP_VERSION}","affects_overall":True},
         {"key":"ocpp","name":"OCPP","affects_overall":total>0,**ocpp},
-        {"key":"mail","name":"E-Mail / SMTP","affects_overall":bool(registration.get("enabled")),**mail_status},
+        {"key":"mail","name":"E-Mail / SMTP","affects_overall":False,**mail_status},
         {"key":"backup","name":"Backup","affects_overall":bool(backup_status.get("scheduled")),**backup_status},
         {"key":"pwa","name":"PWA","level":"ok","label":"Bereit","detail":"Installierbare Web-App · Push-Benachrichtigungen verfügbar","affects_overall":False},
         {"key":"ocpp_transport","name":"OCPP-Transport",**_ocpp_transport_status()},
-        {"key":"fleet_integration","name":"Fuhrpark-API",**_fleet_integration_status()},
     ]
     if auth and auth.get("role")=="admin":
         sec=_security_dashboard_summary()
