@@ -2,6 +2,19 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.76 — Backend-only Community scope
+
+### Removed
+- Removed the personal charging portal and all PIN login/reset flows.
+- Removed public charging-user registration and access-request workflows.
+- Removed charging-user RFID self-service and replacement-request surfaces.
+- Removed Community-inappropriate UI/routes for Achievements, Events, leaderboards, bonus/vouchers, load management, cost centers, lade.cloud imports and Fleet Integration.
+
+### Changed
+- Community is now explicitly defined as an administrative backend only.
+- Charging users, RFID cards and vehicles are managed exclusively by authorized backend users.
+- Kept core live charging state and diagnostics independent from removed advanced modules.
+
 ## 0.9.7.75 — Community scope correction
 
 ### Removed
