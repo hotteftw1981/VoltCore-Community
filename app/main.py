@@ -3869,6 +3869,96 @@ async def api_security_clear_secret(cp_id: str, request: Request):
     return {"ok":True}
 
 
+class CostCenterPayload(BaseModel):
+    code: str
+    name: str
+    description: str | None = None
+    active: bool = True
+
+@app.get("/api/cost-centers")
+async def api_cost_centers(include_inactive: bool=True):
+    return {"items":db.list_cost_centers(include_inactive)}
+
+@app.post("/api/cost-centers")
+async def api_create_cost_center(payload: CostCenterPayload):
+    try: return {"id":db.create_cost_center(payload.code,payload.name,payload.description)}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.put("/api/cost-centers/{cost_center_id}")
+async def api_update_cost_center(cost_center_id:int,payload:CostCenterPayload):
+    try: ok=db.update_cost_center(cost_center_id,payload.code,payload.name,payload.description,payload.active)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    if not ok: raise HTTPException(404,"Kostenstelle nicht gefunden")
+    return {"ok":True,"item":db.get_cost_center(cost_center_id)}
+
+@app.get("/api/search")
+async def api_global_search(q: str=""):
+    return db.global_search(q,6)
+
+class SmartChargingSettingsPayload(BaseModel):
+    enabled: bool = False
+    site_limit_kw: float = 132
+    reserve_kw: float = 0
+    rebalance_seconds: int = 15
+    min_change_kw: float = 0.5
+
+class SmartConnectorPayload(BaseModel):
+    enabled: bool = True
+    priority: int = 3
+    min_kw: float = 1.4
+    max_kw: float | None = None
+
+@app.get("/api/load-management")
+async def api_load_management():
+    cps = _with_live_power(db.list_charge_points())
+    current_values=[float(c["power_kw"]) for c in cps if c.get("power_kw") is not None and c.get("status") == "Charging"]
+    settings=db.smart_charging_settings()
+    policies=db.list_smart_charging_connectors()
+    active=db.smart_charging_inputs()
+    runtime=dict(SMART_CHARGING_RUNTIME)
+    plan={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in runtime.get("allocations",[])}
+    active_keys={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)) for x in active}
+    for p in policies:
+        p["connected"]=is_connected(p["charge_point_id"])
+        key=(str(p["charge_point_id"]),int(p["connector_id"]))
+        planned=plan.get(key) or {}
+        p["active"]=key in active_keys
+        p["planned_kw"]=planned.get("desired_kw")
+        p["cap_kw"]=planned.get("cap_kw")
+        p["curtailed_kw"]=planned.get("curtailed_kw")
+        if planned.get("allocation_reason"):
+            p["allocation_reason"]=planned["allocation_reason"]
+        elif p["active"] and not p["connected"]:
+            p["allocation_reason"]="Offline – Kapazität wird konservativ reserviert"
+        elif p["active"] and int(p.get("enabled") or 0)==0:
+            p["allocation_reason"]="Manuell aus der automatischen Regelung genommen"
+        else:
+            p["allocation_reason"]="Keine aktive Session"
+    current=round(sum(current_values),2) if current_values else 0.0
+    usable=max(0.0,float(settings["site_limit_kw"])-float(settings["reserve_kw"]))
+    allocated=round(sum(float(p.get("allocated_kw") or 0) for p in policies),2)
+    fixed=float(runtime.get("fixed_load_kw") or 0)
+    headroom=round(max(0.0,usable-current),2)
+    return {"limit_kw":settings["site_limit_kw"],"reserve_kw":settings["reserve_kw"],"enabled":settings["enabled"],"rebalance_seconds":settings["rebalance_seconds"],"min_change_kw":settings["min_change_kw"],"current_kw":current,"usable_kw":round(usable,2),"headroom_kw":headroom,"allocated_kw":allocated,"fixed_load_kw":round(fixed,2),"runtime":runtime,"rules":db.list_load_rules(),"charge_points":cps,"connectors":policies,"active_sessions":active}
+
+@app.put("/api/smart-charging/settings")
+async def api_smart_charging_settings(payload:SmartChargingSettingsPayload):
+    try: settings=db.set_smart_charging_settings(payload.enabled,payload.site_limit_kw,payload.reserve_kw,payload.rebalance_seconds,payload.min_change_kw)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    await _rebalance_smart_charging(force=True,trigger="Einstellungen geändert")
+    return {"ok":True,"settings":settings}
+
+@app.put("/api/smart-charging/connectors/{cp_id}/{connector_id}")
+async def api_smart_connector(cp_id:str,connector_id:int,payload:SmartConnectorPayload):
+    try: db.set_smart_connector_policy(unquote(cp_id),connector_id,payload.enabled,payload.priority,payload.min_kw,payload.max_kw)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    await _rebalance_smart_charging(force=True,trigger="Connector-Regel geändert")
+    return {"ok":True}
+
+@app.post("/api/smart-charging/rebalance")
+async def api_smart_rebalance():
+    return {"ok":True,"result":await _rebalance_smart_charging(force=True,trigger="Manuell ausgelöst")}
+
 @app.get("/api/search")
 async def api_global_search(q: str=""):
     return db.global_search(q,6)
