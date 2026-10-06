@@ -4299,3 +4299,524 @@ def global_search(query,limit_per_group=6):
         txs=[dict(r) for r in conn.execute("""SELECT t.id,t.charge_point_id,t.id_tag,t.status,u.name AS user_name,v.name AS vehicle_name FROM transactions t LEFT JOIN users u ON u.id=t.user_id LEFT JOIN vehicles v ON v.id=t.vehicle_id WHERE CAST(t.id AS TEXT) LIKE ? OR COALESCE(t.transaction_id,'') LIKE ? OR t.charge_point_id LIKE ? COLLATE NOCASE OR COALESCE(t.id_tag,'') LIKE ? COLLATE NOCASE OR COALESCE(u.name,'') LIKE ? COLLATE NOCASE OR COALESCE(v.name,'') LIKE ? COLLATE NOCASE OR COALESCE(v.plate,'') LIKE ? COLLATE NOCASE ORDER BY t.id DESC LIMIT ?""",(like,like,like,like,like,like,like,limit)).fetchall()]
         if txs: groups.append({"key":"transactions","label":"Ladevorgänge","items":[{"title":f"Ladevorgang #{r['id']}","subtitle":" · ".join(x for x in [r.get('user_name'),r.get('vehicle_name'),r.get('charge_point_id'),r.get('status')] if x),"url":f"/transactions/{r['id']}"} for r in txs]})
     return {"query":q,"groups":groups,"total":sum(len(g['items']) for g in groups)}
+
+
+# Shared Community audit, notifications, diagnostics, push and session helpers.
+
+def active_system_session_counts(user_id=None):
+    """Return active web-session counts without mutating session state."""
+    now=utc_now()
+    with _connect() as conn:
+        total=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE expires_at>=?",(now,)).fetchone()[0] or 0)
+        mine=0
+        if user_id is not None:
+            mine=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE user_id=? AND expires_at>=?",(int(user_id),now)).fetchone()[0] or 0)
+        return {"total":total,"mine":mine}
+
+
+def delete_other_system_sessions(user_id, keep_token_hash):
+    """End every other session of one account while preserving this browser."""
+    now=utc_now()
+    with _lock,_connect() as conn:
+        active_before=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE user_id=? AND token_hash<>? AND expires_at>=?",(int(user_id),str(keep_token_hash),now)).fetchone()[0] or 0)
+        conn.execute("DELETE FROM system_sessions WHERE user_id=? AND token_hash<>?",(int(user_id),str(keep_token_hash)))
+        conn.commit()
+        return active_before
+
+
+def security_event_summary(hours=24):
+    """Small aggregate used by the security dashboard without exposing event details."""
+    hours=max(1,min(int(hours or 24),168))
+    cutoff=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    with _connect() as conn:
+        web_failed=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND category='web_login' AND success=0",(cutoff,)).fetchone()[0] or 0)
+        ocpp_rejected=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND category='ocpp_auth' AND success=0",(cutoff,)).fetchone()[0] or 0)
+        critical=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND severity='critical'",(cutoff,)).fetchone()[0] or 0)
+        warnings=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND severity='warning'",(cutoff,)).fetchone()[0] or 0)
+    return {"hours":hours,"web_failed":web_failed,"ocpp_rejected":ocpp_rejected,"critical":critical,"warnings":warnings}
+
+
+def add_activity(system_user_id=None, username=None, display_name=None, action="Aktion", category="system", target=None, method=None, path=None, details=None, status_code=None):
+    """Persist a concise audit entry without storing request bodies or secrets."""
+    with _lock, _connect() as conn:
+        conn.execute(
+            """INSERT INTO activity_log(ts,system_user_id,username,display_name,action,category,target,method,path,details,status_code)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (utc_now(), system_user_id, username, display_name, action, category, target, method, path, details, status_code),
+        )
+        conn.commit()
+
+
+def recent_activity(limit=100, category=None, query=None):
+    limit=max(1,min(int(limit or 100),500))
+    clauses=[]; values=[]
+    if category:
+        clauses.append("category=?"); values.append(str(category))
+    if query:
+        q=f"%{str(query).strip()}%"
+        clauses.append("(action LIKE ? OR target LIKE ? OR username LIKE ? OR display_name LIKE ? OR details LIKE ?)")
+        values.extend([q,q,q,q,q])
+    where=(" WHERE "+" AND ".join(clauses)) if clauses else ""
+    with _connect() as conn:
+        rows=conn.execute(
+            "SELECT * FROM activity_log"+where+" ORDER BY id DESC LIMIT ?", values+[limit]
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def _severity_rank(value):
+    return {"info":1,"warning":2,"critical":3}.get(str(value or "info"),1)
+
+
+def _upsert_notification_conn(conn, key, source, severity, title, message=None, link=None, active=True, audience="all"):
+    now=utc_now()
+    existing=conn.execute("SELECT id,severity,active,source,last_seen_at,audience,revision FROM notifications WHERE notification_key=?",(key,)).fetchone()
+    if existing:
+        reactivated=not int(existing["active"] or 0) and bool(active)
+        escalated=_severity_rank(severity)>_severity_rank(existing["severity"])
+        seen_at=existing["last_seen_at"] if source == "event" and existing["source"] == "event" else now
+        revision=int(existing["revision"] or 1)+(1 if (reactivated or escalated) else 0)
+        conn.execute("""UPDATE notifications SET last_seen_at=?,source=?,severity=?,title=?,message=?,link=?,active=?,audience=?,revision=? WHERE id=?""",
+                     (seen_at,source,severity,title,message,link,1 if active else 0,str(audience or "all"),revision,existing["id"]))
+        if reactivated or escalated:
+            conn.execute("DELETE FROM notification_reads WHERE notification_id=?",(existing["id"],))
+        return int(existing["id"])
+    cur=conn.execute("""INSERT INTO notifications(notification_key,created_at,last_seen_at,source,severity,title,message,link,active,audience,revision)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,1)""",(key,now,now,source,severity,title,message,link,1 if active else 0,str(audience or "all")))
+    return int(cur.lastrowid)
+
+
+def create_notification(key, severity, title, message=None, link=None, audience="all", source="event"):
+    """Create/update an explicit notification, optionally restricted to a role."""
+    with _lock, _connect() as conn:
+        nid=_upsert_notification_conn(conn,str(key),str(source or "event"),str(severity or "info"),str(title),message,link,True,audience)
+        conn.commit(); return nid
+
+
+def _record_diagnostic_event_conn(conn, cp_id, severity, category, code, title, message=None, connector_id=None, transaction_id=None, state="event"):
+    conn.execute("""INSERT INTO diagnostic_events(ts,charge_point_id,connector_id,transaction_id,severity,category,code,title,message,state)
+                  VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                 (utc_now(),str(cp_id),connector_id,transaction_id,severity,category,code,title,message,state))
+
+
+def _sync_diagnostic_state_conn(conn, key, cp_id, severity, category, code, title, message=None, connector_id=None, transaction_id=None):
+    now=utc_now()
+    row=conn.execute("SELECT * FROM diagnostic_states WHERE state_key=?",(key,)).fetchone()
+    if row is None:
+        conn.execute("""INSERT INTO diagnostic_states(state_key,charge_point_id,connector_id,transaction_id,active,severity,category,code,title,message,first_seen_at,last_seen_at,last_changed_at)
+                      VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?)""",
+                     (key,str(cp_id),connector_id,transaction_id,severity,category,code,title,message,now,now,now))
+        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"opened")
+        return
+    was_active=bool(row["active"])
+    changed=(str(row["severity"])!=str(severity) or str(row["message"] or "")!=str(message or "") or str(row["title"])!=str(title))
+    conn.execute("""UPDATE diagnostic_states SET active=1,severity=?,category=?,code=?,title=?,message=?,connector_id=?,transaction_id=?,last_seen_at=?,last_changed_at=CASE WHEN ? THEN ? ELSE last_changed_at END WHERE state_key=?""",
+                 (severity,category,code,title,message,connector_id,transaction_id,now,1 if (not was_active or changed) else 0,now,key))
+    if not was_active:
+        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"opened")
+    elif changed and _severity_rank(severity)>_severity_rank(row["severity"]):
+        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"updated")
+
+
+def _resolve_missing_diagnostic_states_conn(conn, active_keys):
+    rows=conn.execute("SELECT * FROM diagnostic_states WHERE active=1").fetchall()
+    active=set(active_keys)
+    now=utc_now()
+    for row in rows:
+        if row["state_key"] in active:
+            continue
+        conn.execute("UPDATE diagnostic_states SET active=0,last_seen_at=?,last_changed_at=? WHERE state_key=?",(now,now,row["state_key"]))
+        _record_diagnostic_event_conn(conn,row["charge_point_id"],"info",row["category"],row["code"]+"_resolved",row["title"]+" behoben",row["message"],row["connector_id"],row["transaction_id"],"resolved")
+
+
+def active_diagnostic_states(cp_id):
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute("""SELECT * FROM diagnostic_states WHERE charge_point_id=? AND active=1
+            ORDER BY CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,last_changed_at DESC""",(str(cp_id),)).fetchall()]
+
+
+def _event_diagnostic_row(row):
+    event_type=str(row.get("event_type") or "")
+    payload=str(row.get("payload") or "")
+    low=payload.casefold()
+    severity="info"; category="communication"; title=event_type or "OCPP-Ereignis"; code="ocpp_"+event_type.casefold()
+    if event_type=="Connected": title="OCPP-Verbindung hergestellt"
+    elif event_type=="Disconnected": severity="warning"; title="OCPP-Verbindung getrennt"
+    elif event_type=="StatusNotification":
+        category="connector"; title="Connector-Status geändert"
+        if "status=faulted" in low or ("error=" in low and "error=noerror" not in low): severity="critical"; title="Connector meldet Fehler"
+    elif event_type in ("RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset"):
+        category="remote"; title=event_type
+        if "error=" in low or ("response=" in low and not any(x in low for x in ("response=accepted","response=unlocked","response=scheduled"))): severity="warning"
+    elif event_type in ("BudgetLimitReached","ZeroFlowAutoStop"):
+        category="session"; severity="warning"; title="Session-Automatik"
+    elif event_type=="Reconciled": category="session"; title="Session administrativ abgeglichen"
+    else:
+        return None
+    return {"id":"ocpp:"+str(row.get("id")),"ts":row.get("ts"),"charge_point_id":row.get("charge_point_id"),"connector_id":None,"transaction_id":row.get("transaction_id"),"severity":severity,"category":category,"code":code,"title":title,"message":payload,"state":"event"}
+
+
+def diagnostic_history(cp_id, severity=None, category=None, limit=100):
+    limit=max(1,min(int(limit or 100),250)); cp_id=str(cp_id)
+    with _connect() as conn:
+        synthetic=[dict(r) for r in conn.execute("SELECT * FROM diagnostic_events WHERE charge_point_id=? ORDER BY id DESC LIMIT 250",(cp_id,)).fetchall()]
+        event_types=("Connected","Disconnected","StatusNotification","RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset","BudgetLimitReached","ZeroFlowAutoStop","Reconciled")
+        marks=','.join('?' for _ in event_types)
+        raw=[dict(r) for r in conn.execute(f"SELECT * FROM events WHERE charge_point_id=? AND event_type IN ({marks}) ORDER BY id DESC LIMIT 250",(cp_id,*event_types)).fetchall()]
+    items=synthetic+[x for x in (_event_diagnostic_row(r) for r in raw) if x]
+    if severity: items=[x for x in items if str(x.get("severity"))==str(severity)]
+    if category: items=[x for x in items if str(x.get("category"))==str(category)]
+    items.sort(key=lambda x:str(x.get("ts") or ""),reverse=True)
+    return items[:limit]
+
+
+def charge_point_health(cp_id):
+    cp_id=str(cp_id); now=datetime.now(timezone.utc)
+    with _connect() as conn:
+        cp=conn.execute("SELECT * FROM charge_points WHERE id=?",(cp_id,)).fetchone()
+        if not cp: return None
+        stamps={}
+        for kind in ("Heartbeat","StatusNotification","MeterValues"):
+            row=conn.execute("SELECT ts FROM events WHERE charge_point_id=? AND event_type=? ORDER BY id DESC LIMIT 1",(cp_id,kind)).fetchone()
+            stamps[kind]=row[0] if row else None
+        last_session=conn.execute("SELECT id,ended_at,energy_kwh FROM transactions WHERE charge_point_id=? AND status='Completed' AND ended_at IS NOT NULL ORDER BY ended_at DESC,id DESC LIMIT 1",(cp_id,)).fetchone()
+        active=conn.execute("SELECT id FROM transactions WHERE charge_point_id=? AND status='Active' AND ended_at IS NULL",(cp_id,)).fetchall()
+        connectors=[dict(r) for r in conn.execute("SELECT connector_id,status,last_error_code,last_meter_at FROM connectors WHERE charge_point_id=? ORDER BY connector_id",(cp_id,)).fetchall()]
+        issues=[dict(r) for r in conn.execute("""SELECT * FROM diagnostic_states WHERE charge_point_id=? AND active=1
+            ORDER BY CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,last_changed_at DESC""",(cp_id,)).fetchall()]
+    def age(value):
+        if not value:return None
+        try:return max(0,int((now-datetime.fromisoformat(str(value).replace('Z','+00:00')).astimezone(timezone.utc)).total_seconds()))
+        except Exception:return None
+    status=str(cp["status"] or cp["station_status"] or "Unknown")
+    severity="ok"; label="Gesund"
+    if any(str(x.get("severity"))=="critical" for x in issues) or status=="Faulted": severity="critical"; label="Fehler"
+    elif issues or status in ("Offline","Unavailable","Unknown"): severity="warning"; label="Auffällig"
+    return {"status":severity,"label":label,"station_status":status,"last_message_at":cp["last_message_at"],"last_message_type":cp["last_message_type"],"last_message_age_seconds":age(cp["last_message_at"]),"last_heartbeat":stamps["Heartbeat"],"last_heartbeat_age_seconds":age(stamps["Heartbeat"]),"last_status_notification":stamps["StatusNotification"],"last_status_age_seconds":age(stamps["StatusNotification"]),"last_meter_values":stamps["MeterValues"],"last_meter_age_seconds":age(stamps["MeterValues"]),"last_successful_session":dict(last_session) if last_session else None,"active_sessions":len(active),"connectors":connectors,"active_issues":issues}
+
+
+def sync_notifications():
+    """Refresh state based notifications and ingest important OCPP events.
+
+    This function is intentionally read-mostly and never changes OCPP/charging state.
+    """
+    start_utc,end_utc,month_key=_month_bounds_utc()
+    now=datetime.now(timezone.utc)
+    with _lock, _connect() as conn:
+        # Track state keys and deactivate only conditions that disappeared. Historical/event notifications remain available.
+        state_keys=[]
+        diagnostic_keys=[]
+
+        cps=conn.execute("""SELECT id,status,station_status,station_error_code,last_seen,last_message_at
+                            FROM charge_points WHERE COALESCE(onboarded,1)=1 AND COALESCE(ignored,0)=0
+                              AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0""").fetchall()
+        for cp in cps:
+            status=str(cp["status"] or cp["station_status"] or "Unknown")
+            if status == "Faulted" or (cp["station_error_code"] and str(cp["station_error_code"]) not in ("NoError","None","")):
+                err=str(cp["station_error_code"] or "Fehlerstatus")
+                key=f"cp:{cp['id']}:fault"; state_keys.append(key)
+                _upsert_notification_conn(conn,key,"state","critical","Ladepunkt meldet einen Fehler",
+                                          f"{cp['id']} · {err}",f"/charge-points/{cp['id']}")
+                dkey=f"health:{cp['id']}:fault"; diagnostic_keys.append(dkey)
+                _sync_diagnostic_state_conn(conn,dkey,cp['id'],"critical","connector","station_fault","Ladepunkt meldet einen Fehler",err)
+            elif status in ("Offline","Unavailable","Unknown"):
+                key=f"cp:{cp['id']}:offline"; state_keys.append(key)
+                _upsert_notification_conn(conn,key,"state","warning","Ladepunkt nicht verfügbar",
+                                          f"{cp['id']} · Status {status}",f"/charge-points/{cp['id']}")
+                dkey=f"health:{cp['id']}:offline"; diagnostic_keys.append(dkey)
+                _sync_diagnostic_state_conn(conn,dkey,cp['id'],"warning","communication","station_offline","Ladepunkt nicht verfügbar",f"Status {status}")
+
+        users=conn.execute("SELECT id,name,monthly_kwh_limit,monthly_limit_mode FROM users WHERE status='Aktiv'").fetchall()
+        for user in users:
+            if user["monthly_kwh_limit"] is None:
+                continue
+            used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
+            state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
+            pct=float(state.get("percent") or 0)
+            if pct < 70:
+                continue
+            if pct >= 100:
+                threshold=100
+                if state.get("blocked"):
+                    sev,title="critical","Monatslimit erreicht – Laden gesperrt"
+                else:
+                    sev,title="critical","Monatsbudget vollständig verbraucht"
+            elif pct >= 90:
+                threshold=90; sev,title="warning","Monatsbudget bei mindestens 90 %"
+            else:
+                threshold=70; sev,title="warning","Monatsbudget bei mindestens 70 %"
+            remaining=state.get("remaining_kwh")
+            msg=f"{user['name']} · {pct:.0f} % verbraucht"
+            if remaining is not None:
+                msg+=f" · {float(remaining):.1f} kWh verbleibend"
+            key=f"budget:{month_key}:{user['id']}:{threshold}"; state_keys.append(key)
+            _upsert_notification_conn(conn,key,"state",sev,title,msg,"/users")
+
+        active_rows=conn.execute("""SELECT t.id,t.started_at,t.charge_point_id,t.connector_id,u.name AS user_name,c.last_meter_at,cp.status AS cp_status
+                                    FROM transactions t LEFT JOIN users u ON u.id=t.user_id
+                                    LEFT JOIN connectors c ON c.charge_point_id=t.charge_point_id AND c.connector_id=t.connector_id
+                                    LEFT JOIN charge_points cp ON cp.id=t.charge_point_id
+                                    WHERE t.status='Active' AND t.ended_at IS NULL""").fetchall()
+        for tx in active_rows:
+            try:
+                started=datetime.fromisoformat(str(tx["started_at"]).replace("Z","+00:00"))
+                hours=(now-started.astimezone(timezone.utc)).total_seconds()/3600.0
+            except Exception:
+                hours=0
+            if hours >= 4:
+                key=f"session:{tx['id']}:long"; state_keys.append(key)
+                _upsert_notification_conn(conn,key,"state","warning","Ungewöhnlich langer Ladevorgang",
+                                          f"{tx['user_name'] or 'Unbekannter Benutzer'} · {tx['charge_point_id']} · seit {hours:.1f} h",
+                                          f"/transactions/{tx['id']}")
+            cp_status=str(tx['cp_status'] or 'Unknown')
+            if cp_status not in ('Offline','Unavailable','Unknown','Faulted') and hours*3600 >= 300:
+                try:
+                    meter_age=(now-datetime.fromisoformat(str(tx['last_meter_at']).replace('Z','+00:00')).astimezone(timezone.utc)).total_seconds() if tx['last_meter_at'] else hours*3600
+                except Exception:
+                    meter_age=hours*3600
+                if meter_age >= 300:
+                    mins=max(5,int(meter_age//60)); sev='critical' if meter_age>=900 else 'warning'
+                    title='Keine Live-Messwerte während aktiver Session'
+                    msg=f"{tx['charge_point_id']} · Connector {tx['connector_id']} · seit {mins} min keine MeterValues"
+                    key=f"session:{tx['id']}:meter-stale"; state_keys.append(key)
+                    _upsert_notification_conn(conn,key,'state',sev,title,msg,f"/charge-points/{tx['charge_point_id']}?tab=diagnostics")
+                    dkey=f"meter:{tx['id']}"; diagnostic_keys.append(dkey)
+                    _sync_diagnostic_state_conn(conn,dkey,tx['charge_point_id'],sev,'telemetry','meter_values_stale',title,msg,int(tx['connector_id'] or 0),int(tx['id']))
+
+
+        if state_keys:
+            marks=','.join('?' for _ in state_keys)
+            conn.execute(f"UPDATE notifications SET active=0 WHERE source='state' AND notification_key NOT IN ({marks})", state_keys)
+        else:
+            conn.execute("UPDATE notifications SET active=0 WHERE source='state'")
+
+        _resolve_missing_diagnostic_states_conn(conn,diagnostic_keys)
+
+        event_cutoff=(now-timedelta(hours=24)).isoformat()
+        events=conn.execute("SELECT id,ts,charge_point_id,event_type,payload,transaction_id FROM events WHERE ts>=? ORDER BY id DESC LIMIT 250",(event_cutoff,)).fetchall()
+        for ev in events:
+            payload=str(ev["payload"] or "")
+            severity=title=message=link=None
+            if ev["event_type"] == "Authorize" and "accepted=False" in payload:
+                severity="warning"; title="RFID-Autorisierung abgelehnt"; message=f"{ev['charge_point_id']} · {payload}"
+            elif ev["event_type"] == "StartTransaction" and "rejected=true" in payload:
+                severity="warning"; title="Ladevorgang abgelehnt"; message=f"{ev['charge_point_id']} · {payload}"
+            elif ev["event_type"] == "BudgetLimitReached":
+                severity="critical"; title="Monatslimit während Ladevorgang erreicht"; message=f"{ev['charge_point_id']} · RemoteStop wird ausgelöst"
+            elif ev["event_type"] == "RemoteStopTransaction" and "error=" in payload:
+                severity="critical"; title="RemoteStop fehlgeschlagen"; message=f"{ev['charge_point_id']} · {payload}"
+            if severity:
+                link=f"/transactions/{ev['transaction_id']}" if ev["transaction_id"] else f"/charge-points/{ev['charge_point_id']}"
+                _upsert_notification_conn(conn,f"event:{ev['id']}","event",severity,title,message,link,True)
+        cleanup_cutoff=(now-timedelta(days=7)).isoformat()
+        conn.execute("UPDATE notifications SET active=0 WHERE source='event' AND created_at<?",(cleanup_cutoff,))
+        conn.commit()
+
+
+def _notification_role_conn(conn, user_id):
+    row=conn.execute("SELECT role FROM system_users WHERE id=?",(int(user_id),)).fetchone()
+    return str(row[0] if row else "viewer")
+
+
+def notifications_for_user(user_id, limit=12):
+    sync_notifications()
+    limit=max(1,min(int(limit or 12),100))
+    with _connect() as conn:
+        role=_notification_role_conn(conn,user_id)
+        audience=("all",role)
+        visible="""n.active=1 AND n.audience IN (?,?)
+            AND NOT EXISTS (
+                SELECT 1 FROM notification_dismissals d
+                WHERE d.notification_id=n.id AND d.user_id=? AND d.revision>=n.revision
+            )"""
+        unread=int(conn.execute(f"""SELECT COUNT(*) FROM notifications n
+                                  LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
+                                  WHERE {visible} AND r.notification_id IS NULL""",(user_id,*audience,user_id)).fetchone()[0])
+        rows=conn.execute(f"""SELECT n.*, CASE WHEN r.notification_id IS NULL THEN 0 ELSE 1 END AS is_read
+                            FROM notifications n LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
+                            WHERE {visible} ORDER BY CASE WHEN r.notification_id IS NULL THEN 0 ELSE 1 END ASC,
+                                     CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,
+                                     n.last_seen_at DESC LIMIT ?""",(user_id,*audience,user_id,limit)).fetchall()
+        return {"unread":unread,"items":[dict(r) for r in rows]}
+
+
+def mark_notification_read(notification_id, user_id):
+    with _lock, _connect() as conn:
+        role=_notification_role_conn(conn,user_id)
+        if not conn.execute("SELECT 1 FROM notifications WHERE id=? AND active=1 AND audience IN ('all',?)",(notification_id,role)).fetchone():
+            return False
+        conn.execute("INSERT OR REPLACE INTO notification_reads(notification_id,user_id,read_at) VALUES(?,?,?)",
+                     (notification_id,user_id,utc_now()))
+        conn.commit(); return True
+
+
+def dismiss_notification(notification_id, user_id):
+    """Hide one notification only for this system user and current notification revision."""
+    with _lock,_connect() as conn:
+        role=_notification_role_conn(conn,user_id)
+        row=conn.execute("SELECT id,revision FROM notifications WHERE id=? AND active=1 AND audience IN ('all',?)",(int(notification_id),role)).fetchone()
+        if not row:
+            return False
+        conn.execute("""INSERT INTO notification_dismissals(notification_id,user_id,revision,dismissed_at)
+            VALUES(?,?,?,?) ON CONFLICT(notification_id,user_id) DO UPDATE SET revision=excluded.revision,dismissed_at=excluded.dismissed_at""",
+            (int(notification_id),int(user_id),int(row["revision"] or 1),utc_now()))
+        conn.commit(); return True
+
+
+def dismiss_read_notifications(user_id):
+    """Hide all currently visible/read notifications for this user without deleting shared/system data."""
+    with _lock,_connect() as conn:
+        role=_notification_role_conn(conn,user_id)
+        now=utc_now()
+        rows=conn.execute("""SELECT n.id,n.revision FROM notifications n
+            JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
+            WHERE n.active=1 AND n.audience IN ('all',?)
+              AND NOT EXISTS (
+                SELECT 1 FROM notification_dismissals d
+                WHERE d.notification_id=n.id AND d.user_id=? AND d.revision>=n.revision
+              )""",(int(user_id),role,int(user_id))).fetchall()
+        conn.executemany("""INSERT INTO notification_dismissals(notification_id,user_id,revision,dismissed_at)
+            VALUES(?,?,?,?) ON CONFLICT(notification_id,user_id) DO UPDATE SET revision=excluded.revision,dismissed_at=excluded.dismissed_at""",
+            [(int(r["id"]),int(user_id),int(r["revision"] or 1),now) for r in rows])
+        conn.commit(); return len(rows)
+
+
+def _normalize_push_severity(value):
+    value=str(value or "warning").strip().lower()
+    return value if value in {"info","warning","critical"} else "warning"
+
+
+def save_web_push_subscription(user_id, endpoint, p256dh, auth, min_severity="warning", user_agent=""):
+    endpoint=str(endpoint or "").strip()
+    p256dh=str(p256dh or "").strip()
+    auth=str(auth or "").strip()
+    if not endpoint or not p256dh or not auth:
+        raise ValueError("Unvollständige Push-Subscription")
+    severity=_normalize_push_severity(min_severity)
+    now=utc_now()
+    with _lock,_connect() as conn:
+        existing=conn.execute("SELECT id FROM web_push_subscriptions WHERE endpoint=?",(endpoint,)).fetchone()
+        if existing:
+            sid=int(existing["id"])
+            conn.execute("""UPDATE web_push_subscriptions SET user_id=?,p256dh=?,auth=?,min_severity=?,
+                user_agent=?,updated_at=?,last_error=NULL WHERE id=?""",
+                (int(user_id),p256dh,auth,severity,str(user_agent or "")[:500],now,sid))
+        else:
+            cur=conn.execute("""INSERT INTO web_push_subscriptions(
+                user_id,endpoint,p256dh,auth,min_severity,user_agent,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?)""",
+                (int(user_id),endpoint,p256dh,auth,severity,str(user_agent or "")[:500],now,now))
+            sid=int(cur.lastrowid)
+        role=_notification_role_conn(conn,user_id)
+        rows=conn.execute("""SELECT n.id,n.revision FROM notifications n
+            WHERE n.active=1 AND n.audience IN ('all',?)""",(role,)).fetchall()
+        conn.executemany("""INSERT OR IGNORE INTO web_push_deliveries(
+            subscription_id,notification_id,revision,delivered_at
+        ) VALUES(?,?,?,?)""",[(sid,int(x["id"]),int(x["revision"] or 1),now) for x in rows])
+        conn.commit()
+        return {"id":sid,"min_severity":severity}
+
+
+def update_web_push_preference(user_id, endpoint, min_severity):
+    severity=_normalize_push_severity(min_severity)
+    with _lock,_connect() as conn:
+        cur=conn.execute("""UPDATE web_push_subscriptions SET min_severity=?,updated_at=?,last_error=NULL
+            WHERE user_id=? AND endpoint=?""",(severity,utc_now(),int(user_id),str(endpoint or "").strip()))
+        conn.commit()
+        return int(cur.rowcount or 0)>0
+
+
+def remove_web_push_subscription(user_id, endpoint):
+    endpoint=str(endpoint or "").strip()
+    with _lock,_connect() as conn:
+        row=conn.execute("SELECT id FROM web_push_subscriptions WHERE user_id=? AND endpoint=?",(int(user_id),endpoint)).fetchone()
+        if not row:
+            return False
+        sid=int(row["id"])
+        conn.execute("DELETE FROM web_push_deliveries WHERE subscription_id=?",(sid,))
+        conn.execute("DELETE FROM web_push_subscriptions WHERE id=?",(sid,))
+        conn.commit()
+        return True
+
+
+def remove_web_push_subscription_by_id(subscription_id):
+    with _lock,_connect() as conn:
+        sid=int(subscription_id)
+        conn.execute("DELETE FROM web_push_deliveries WHERE subscription_id=?",(sid,))
+        cur=conn.execute("DELETE FROM web_push_subscriptions WHERE id=?",(sid,))
+        conn.commit()
+        return int(cur.rowcount or 0)>0
+
+
+def web_push_subscriptions_for_user(user_id):
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute("""SELECT id,endpoint,min_severity,created_at,updated_at,
+            last_success_at,last_error FROM web_push_subscriptions WHERE user_id=? ORDER BY updated_at DESC""",
+            (int(user_id),)).fetchall()]
+
+
+def web_push_subscription_for_user_endpoint(user_id, endpoint):
+    with _connect() as conn:
+        row=conn.execute("""SELECT * FROM web_push_subscriptions WHERE user_id=? AND endpoint=?""",
+            (int(user_id),str(endpoint or "").strip())).fetchone()
+        return dict(row) if row else None
+
+
+def pending_web_push_deliveries(limit=50):
+    try: limit=max(1,min(250,int(limit or 50)))
+    except (TypeError,ValueError): limit=50
+    try:
+        sync_notifications()
+    except Exception:
+        pass
+    with _connect() as conn:
+        rows=conn.execute("""SELECT s.id AS subscription_id,s.user_id,s.endpoint,s.p256dh,s.auth,
+                   s.min_severity,s.user_agent,u.role,
+                   n.id AS notification_id,n.revision,n.severity,n.title,n.message,n.link,n.last_seen_at
+            FROM web_push_subscriptions s
+            JOIN system_users u ON u.id=s.user_id AND u.active=1
+            JOIN notifications n ON n.active=1 AND n.audience IN ('all',u.role)
+            LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=s.user_id
+            LEFT JOIN web_push_deliveries d ON d.subscription_id=s.id AND d.notification_id=n.id AND d.revision=n.revision
+            WHERE r.notification_id IS NULL AND d.subscription_id IS NULL
+              AND CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END >=
+                  CASE s.min_severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END
+            ORDER BY CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,
+                     n.last_seen_at ASC LIMIT ?""",(limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_web_push_delivery(subscription_id, notification_id, revision):
+    now=utc_now()
+    with _lock,_connect() as conn:
+        conn.execute("""INSERT OR REPLACE INTO web_push_deliveries(
+            subscription_id,notification_id,revision,delivered_at
+        ) VALUES(?,?,?,?)""",(int(subscription_id),int(notification_id),int(revision or 1),now))
+        conn.execute("""UPDATE web_push_subscriptions SET last_success_at=?,last_error=NULL,updated_at=?
+            WHERE id=?""",(now,now,int(subscription_id)))
+        conn.commit()
+
+
+def mark_web_push_success(subscription_id):
+    now=utc_now()
+    with _lock,_connect() as conn:
+        conn.execute("""UPDATE web_push_subscriptions SET last_success_at=?,last_error=NULL,updated_at=?
+            WHERE id=?""",(now,now,int(subscription_id)))
+        conn.commit()
+
+
+def mark_web_push_error(subscription_id, error):
+    with _lock,_connect() as conn:
+        conn.execute("UPDATE web_push_subscriptions SET last_error=?,updated_at=? WHERE id=?",
+            (str(error or "")[:600],utc_now(),int(subscription_id)))
+        conn.commit()
+
+
+def mark_all_notifications_read(user_id):
+    with _lock, _connect() as conn:
+        role=_notification_role_conn(conn,user_id)
+        rows=conn.execute("SELECT id FROM notifications WHERE active=1 AND audience IN ('all',?)",(role,)).fetchall()
+        now=utc_now()
+        conn.executemany("INSERT OR REPLACE INTO notification_reads(notification_id,user_id,read_at) VALUES(?,?,?)",
+                         [(r[0],user_id,now) for r in rows])
+        conn.commit(); return len(rows)

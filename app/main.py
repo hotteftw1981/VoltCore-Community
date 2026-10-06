@@ -565,7 +565,7 @@ async def first_run_submit(request: Request):
         db.add_activity(
             system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
             action="Community-Ersteinrichtung abgeschlossen",category="System",target=display_name,
-            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatsguthaben: {'aktiv' if credit_enabled else 'aus'} · Einladung: {'gesendet' if invite_email else 'übersprungen'}",
+            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatslimit: {'aktiv' if default_limit_enabled else 'aus'} · Einladung: {'gesendet' if invite_email else 'übersprungen'}",
         )
     except (ValueError,TypeError) as exc:
         return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error=str(exc))
