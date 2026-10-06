@@ -43,9 +43,9 @@ VoltCore Community unterstützt zwei offizielle Installationswege:
 
 Dort findest du Schritt für Schritt Voraussetzungen, Start, Ports, Datenhaltung, Updates, Backup-Hinweise und Troubleshooting. 📚🔧
 
-## ⚡ Geplanter Community-Umfang
+## ⚡ Community-Umfang
 
-Die erste Community Edition soll enthalten:
+Die Community Edition enthält unter anderem:
 
 - 🔌 OCPP 1.6J
 - 🛰️ Ladepunkte erkennen und onboarden
