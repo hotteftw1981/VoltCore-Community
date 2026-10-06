@@ -23,12 +23,16 @@ All notable changes to VoltCore Community are documented here.
 - The optional first-run default monthly kWh limit is now actually applied to newly created charging users while explicit unlimited users remain possible.
 - Offline RFID LocalList authorization is re-evaluated once on month change so block-mode monthly limits do not remain stale across billing months.
 - Removed orphaned registration-signature code, unused runtime imports and unreferenced database helper functions left behind by the Community scope reduction.
+- Community billing now uses metered kWh multiplied by the transaction's stored tariff. Unlimited charging is not implicitly free; monthly limits do not subtract free credit.
+- Missing or invalid energy/tariff values remain unknown instead of being reported as free charging. An explicitly configured zero tariff still produces zero cost.
+- Billing rounding uses decimal half-up cents. No bulk recalculation of historical transactions is introduced.
 
 ### Release readiness
 - Existing Community databases clean up obsolete portal, registration, gamification, bonus, load-management, cost-center and integration state on startup.
 - The short-lived `community_free_credit_enabled` setting is migrated to the neutral default-limit setting name.
 - Regression coverage locks the backend-only edition boundary and runtime cleanup.
 - Documentation and smoke tests now describe the actual Community runtime instead of the temporary 0.9.7.74 restoration state.
+- Block 3D: 20 isolated SQLite billing regression tests passed locally and on GitHub Actions; Python compilation of app and tests passed on GitHub. This is not a full application-startup or end-to-end certification.
 
 ## 0.9.7.75 — Community scope correction
 
