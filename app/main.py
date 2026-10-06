@@ -1,6 +1,4 @@
 import logging
-import base64
-import binascii
 import asyncio
 import csv
 import io
@@ -18,7 +16,7 @@ import html
 from urllib.parse import unquote, urlparse
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,7 +27,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import HRFlowable, Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from PIL import Image as PILImage
 import qrcode
 
 from . import db
@@ -345,39 +342,6 @@ def _activity_descriptor(method: str, path: str):
     return f"Änderung {verb}", "System", path
 
 
-def _normalize_signature_png(data: bytes) -> bytes:
-    try:
-        with PILImage.open(io.BytesIO(data)) as source:
-            image=source.convert("RGBA")
-            alpha=image.getchannel("A")
-            normalized=PILImage.new("RGBA",image.size,(17,24,39,0))
-            normalized.putalpha(alpha)
-            out=io.BytesIO(); normalized.save(out,format="PNG",optimize=True)
-            return out.getvalue()
-    except Exception as exc:
-        raise ValueError("Die digitale Unterschrift ist ungültig.") from exc
-
-
-def _save_access_signature(data_url: str, request_id_hint: str = "new"):
-    raw=str(data_url or "")
-    prefix="data:image/png;base64,"
-    if not raw.startswith(prefix):
-        raise ValueError("Bitte unterschreiben Sie den Antrag im Signaturfeld.")
-    try:
-        data=base64.b64decode(raw[len(prefix):],validate=True)
-    except (ValueError,binascii.Error):
-        raise ValueError("Die digitale Unterschrift ist ungültig.")
-    if len(data)<100 or len(data)>300*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Die digitale Unterschrift ist ungültig oder zu groß.")
-    data=_normalize_signature_png(data)
-    name=f"signature-{request_id_hint}-{secrets.token_hex(12)}.png"
-    target=ACCESS_SIGNATURE_DIR/name
-    target.write_bytes(data)
-    try: os.chmod(target,0o600)
-    except OSError: pass
-    return name
-
-
 def _login_redirect(request: Request, reason: str | None = None):
     target = request.url.path
     if request.url.query: target += "?" + request.url.query
@@ -504,7 +468,7 @@ async def setup_submit(request: Request, username: str = Form(...), display_name
     token=secrets.token_urlsafe(32); expires=datetime.now(timezone.utc)+timedelta(hours=SESSION_HOURS)
     db.create_system_session(_session_hash(token), user_id, expires.isoformat()); db.mark_system_login(user_id)
     db.set_setting("community_first_run_completed","0")
-    db.set_setting("community_free_credit_enabled","0")
+    db.set_setting("community_default_monthly_limit_enabled","0")
     db.set_setting("community_default_monthly_kwh","0")
     db.add_activity(system_user_id=user_id, username=username, display_name=display_name, action="Administrator angelegt", category="Zugriff", target="Community-Ersteinrichtung")
     response=RedirectResponse(url="/first-run", status_code=303)
@@ -530,7 +494,7 @@ async def first_run_submit(request: Request):
     form=await request.form()
     values={k:str(v) for k,v in form.items()}
     values["smtp_enabled"]=form.get("smtp_enabled")=="1"
-    values["free_credit_enabled"]=form.get("free_credit_enabled")=="1"
+    values["default_monthly_limit_enabled"]=form.get("default_monthly_limit_enabled")=="1"
     organization=str(form.get("organization_name") or "").strip()
     display_name=str(form.get("display_name") or "").strip()
     if not organization or not display_name:
@@ -569,12 +533,12 @@ async def first_run_submit(request: Request):
                     datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
                 )
 
-        credit_enabled=form.get("free_credit_enabled")=="1"
+        default_limit_enabled=form.get("default_monthly_limit_enabled")=="1"
         default_kwh=float(str(form.get("default_monthly_kwh") or "0").replace(",","."))
         if default_kwh < 0 or default_kwh > 100000:
-            raise ValueError("Das Standard-Ladeguthaben ist ungültig.")
-        db.set_setting("community_free_credit_enabled","1" if credit_enabled else "0")
-        db.set_setting("community_default_monthly_kwh",str(round(default_kwh,3) if credit_enabled else 0))
+            raise ValueError("Das Standard-Monatslimit ist ungültig.")
+        db.set_setting("community_default_monthly_limit_enabled","1" if default_limit_enabled else "0")
+        db.set_setting("community_default_monthly_kwh",str(round(default_kwh,3) if default_limit_enabled else 0))
 
         invite_email=str(form.get("invite_email") or "").strip()
         if invite_email:
@@ -2368,9 +2332,20 @@ class RFIDReplacePayload(BaseModel):
     expires_at: str | None = None
     notes: str | None = None
 
+def _community_default_monthly_limit():
+    if not db.setting_bool("community_default_monthly_limit_enabled",False):
+        return None
+    try:
+        value=float(db.get_setting("community_default_monthly_kwh","0") or 0)
+    except (TypeError,ValueError):
+        return None
+    return max(0.0,value)
+
+
 @app.get("/api/users")
 async def api_users():
-    return {"users": db.list_users_rich()}
+    default_limit=_community_default_monthly_limit()
+    return {"users": db.list_users_rich(),"defaults":{"monthly_kwh_limit":default_limit,"monthly_limit_mode":"warn"}}
 
 @app.get("/api/users/{user_id}")
 async def api_user(user_id: int, tx_page: int = 1, tx_page_size: int = 10):
@@ -2383,6 +2358,10 @@ async def create_user(payload: UserPayload):
     if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
     if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
     data=payload.model_dump()
+    if "monthly_kwh_limit" not in payload.model_fields_set:
+        default_limit=_community_default_monthly_limit()
+        if default_limit is not None:
+            data["monthly_kwh_limit"]=default_limit
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     user=db.get_user(uid) or {}; return {"ok":True,"user":user}
