@@ -1542,6 +1542,74 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
 
 
+IMPORT_DIR = db.DATA_DIR / "imports"
+IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+MAX_IMPORT_BYTES = 20 * 1024 * 1024
+
+
+def _import_file(token: str):
+    token=str(token or "").strip()
+    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
+        raise HTTPException(400,"Ungültiger Import-Token")
+    path=IMPORT_DIR / f"ladecloud-{token}.xlsx"
+    if not path.exists(): raise HTTPException(404,"Importdatei nicht mehr verfügbar. Bitte erneut hochladen.")
+    return path
+
+
+def _suggest_import_users(parsed_users):
+    backend=db.list_users_rich(); cards={str(c.get("uid")):c for c in db.list_rfid_cards()}
+    result=[]
+    for src in parsed_users:
+        tag=str(src["rfid_tag"]); source_name=str(src.get("source_user_name") or "").strip(); suggestion=None; reason=None
+        card=cards.get(tag)
+        if card and card.get("user_id"):
+            suggestion=int(card["user_id"]); reason="RFID bereits zugeordnet"
+        else:
+            key=source_name.casefold(); scored=[]
+            for u in backend:
+                name=str(u.get("name") or "").strip(); cf=name.casefold(); tokens=[x for x in cf.replace("-"," ").split() if x]
+                score=100 if cf==key else 90 if tokens and tokens[-1]==key else 80 if key and key in tokens else 50 if key and key in cf else 0
+                if score: scored.append((score,int(u["id"]),name))
+            scored.sort(reverse=True)
+            if scored and (len(scored)==1 or scored[0][0] > scored[1][0]): suggestion=scored[0][1]; reason="Name automatisch erkannt"
+        item=dict(src); item["suggested_user_id"]=suggestion; item["suggestion_reason"]=reason; result.append(item)
+    return result
+
+
+@app.post("/api/import/ladecloud/preview")
+async def ladecloud_import_preview(file: UploadFile = File(...)):
+    if not str(file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(400,"Bitte einen XLSX-Export aus lade.cloud auswählen.")
+    data=await file.read(MAX_IMPORT_BYTES+1)
+    if len(data)>MAX_IMPORT_BYTES: raise HTTPException(413,"Die Importdatei darf maximal 20 MB groß sein.")
+    try: parsed=parse_ladecloud_xlsx(data)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    token=secrets.token_hex(16); (IMPORT_DIR/f"ladecloud-{token}.xlsx").write_bytes(data)
+    return {
+        "token":token,"sessions":parsed["sessions"],"energy_kwh":parsed["energy_kwh"],"first_at":parsed["first_at"],"last_at":parsed["last_at"],
+        "users":_suggest_import_users(parsed["users"]),"charge_points":parsed["charge_points"],"backend_users":[{"id":u["id"],"name":u["name"],"status":u["status"]} for u in db.list_users_rich()],
+        "backend_charge_points":[{"id":c["id"],"vendor":c.get("vendor"),"model":c.get("model"),"location":c.get("location")} for c in db.list_charge_points() if int(c.get("ignored") or 0)==0],
+        "warnings":parsed["warnings"],"existing_import":db.import_history_stats("lade.cloud"),
+    }
+
+
+@app.post("/api/import/ladecloud/execute")
+async def ladecloud_import_execute(payload: dict):
+    path=_import_file(payload.get("token"))
+    try: parsed=parse_ladecloud_xlsx(path.read_bytes())
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    user_mapping=payload.get("user_mapping") or {}; cp_mapping=payload.get("charge_point_mapping") or {}
+    missing_users=[u["rfid_tag"] for u in parsed["users"] if str(u["rfid_tag"]) not in user_mapping]
+    missing_cps=[c["source_charge_point"] for c in parsed["charge_points"] if str(c["source_charge_point"]) not in cp_mapping]
+    if missing_users: raise HTTPException(400,"Nicht alle RFID-Benutzer wurden zugeordnet.")
+    if missing_cps: raise HTTPException(400,"Nicht alle lade.cloud-Ladepunkte wurden zugeordnet.")
+    try: result=db.import_ladecloud_rows(parsed["rows"],user_mapping,cp_mapping)
+    except ValueError as exc: raise HTTPException(409,str(exc))
+    try: path.unlink()
+    except OSError: pass
+    return {"ok":True,**result,"history":db.import_history_stats("lade.cloud")}
+
+
 @app.get("/api/settings/portal-leaderboard-names")
 async def portal_leaderboard_names_setting():
     return {"show_names":db.setting_bool("portal_leaderboard_show_names",False)}
