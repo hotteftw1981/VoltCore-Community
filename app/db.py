@@ -1189,8 +1189,8 @@ def init_db():
         for key,value in (("smart_charging_enabled","0"),("smart_charging_site_limit_kw","132"),("smart_charging_reserve_kw","0"),("smart_charging_rebalance_seconds","15"),("smart_charging_min_change_kw","0.5"),
                           ("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
                           ("rfid_local_list_version","1"),
-                          ("registration_enabled","1"),("registration_reference_hours","39"),("registration_reference_kwh","150"),
-                          ("registration_limit_mode","warn"),("registration_budget_mode","hours")):
+                          ("registration_enabled","0"),("registration_reference_hours","39"),("registration_reference_kwh","0"),
+                          ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
             conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
         current_local_version=int((conn.execute("SELECT value FROM app_settings WHERE key='rfid_local_list_version'").fetchone() or [1])[0] or 1)
 
@@ -6372,10 +6372,10 @@ def gamification_event_detail(event_id):
         return d
 
 BRANDING_DEFAULTS = {
-    "product_name":"VoltCore",
+    "product_name":"VoltCore Community",
     "organization_name":"Ihre Organisation",
-    "display_name":"VoltCore",
-    "product_subtitle":"OCPP Charging Management",
+    "display_name":"VoltCore Community",
+    "product_subtitle":"Community Edition · OCPP Charging Management",
     "voucher_prefix":"VOLT",
     "primary_color":"#2563eb",
     "logo_light_url":"",
@@ -7192,7 +7192,6 @@ def portal_dashboard(user_id, period=None, include_inactive=False, ranking_metri
 # V0.9.7.21 - Registration & Onboarding rules
 _REGISTRATION_BUILTIN_FIELDS = [
     {"id":"name","type":"text","label":"Name","enabled":True,"required":True,"system":True,"order":10,"help":"Vor- und Nachname"},
-    {"id":"weekly_hours","type":"number","label":"Wochenarbeitsstunden","enabled":True,"required":True,"system":False,"order":20,"help":"Vertragliche Wochenarbeitszeit, z. B. 39 oder 19,5"},
     {"id":"phone","type":"tel","label":"Telefonnummer","enabled":True,"required":True,"system":False,"order":30,"help":"Für Rückfragen"},
     {"id":"street","type":"text","label":"Straße und Hausnummer","enabled":True,"required":True,"system":False,"order":40,"help":""},
     {"id":"postal_code","type":"text","label":"PLZ","enabled":True,"required":True,"system":False,"order":50,"help":""},
@@ -7209,11 +7208,11 @@ def registration_settings():
         try: value=float(get_setting(key,str(default)))
         except (TypeError,ValueError): value=float(default)
         return max(float(minimum),min(float(maximum),value))
-    enabled=setting_bool("registration_enabled",True)
+    enabled=setting_bool("registration_enabled",False)
     ref_hours=fnum("registration_reference_hours",39,1,100)
-    ref_kwh=fnum("registration_reference_kwh",150,0,10000)
+    ref_kwh=fnum("registration_reference_kwh",0,0,10000)
     limit_mode="block" if str(get_setting("registration_limit_mode","warn")).lower()=="block" else "warn"
-    budget_mode=str(get_setting("registration_budget_mode","hours") or "hours").lower()
+    budget_mode=str(get_setting("registration_budget_mode","fixed") or "fixed").lower()
     if budget_mode not in {"hours","fixed"}: budget_mode="hours"
     raw=get_setting("registration_form_fields",None)
     try:
@@ -7226,7 +7225,7 @@ def registration_settings():
     for item in fields:
         if not isinstance(item,dict): continue
         fid=str(item.get("id") or "").strip()
-        if not fid or fid in seen: continue
+        if not fid or fid in seen or fid=="weekly_hours": continue
         base=defaults.get(fid,{})
         typ=str(item.get("type") or base.get("type") or "text").lower()
         if typ not in {"text","tel","number","date","textarea","select","checkbox"}: typ="text"
@@ -7234,7 +7233,6 @@ def registration_settings():
         entry={"id":fid,"type":typ,"label":str(item.get("label") or base.get("label") or fid)[:80],"enabled":bool(item.get("enabled",base.get("enabled",True))),"required":bool(item.get("required",base.get("required",False))),"system":system,"order":int(item.get("order",base.get("order",100)) or 100),"help":str(item.get("help") or base.get("help") or "")[:240]}
         if typ=="select": entry["options"]=[str(x)[:80] for x in (item.get("options") or []) if str(x).strip()][:30]
         if system: entry["enabled"]=True; entry["required"]=True
-        if fid=="weekly_hours" and budget_mode=="hours": entry["enabled"]=True; entry["required"]=True
         clean.append(entry); seen.add(fid)
     for fid,base in defaults.items():
         if fid not in seen:
