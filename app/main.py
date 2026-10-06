@@ -1437,8 +1437,7 @@ async def pwa_manifest():
         "background_color":"#111827",
         "theme_color":branding.get('primary_color') or '#2563eb',
         "icons":[
-            {"src":"/static/pwa-icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
-            {"src":"/static/pwa-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"},
+            {"src":"/static/branding/voltcore-community-app-icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"},
         ],
     }
     return Response(json.dumps(payload,ensure_ascii=False),media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
