@@ -117,46 +117,25 @@ def _purge_legacy_demo_data(conn):
 
 
 LEGACY_PRODUCT_NAME_V50 = "DRK OCPP Backend"
-LEGACY_DRK_BRANDING_V50 = {
-    "organization_name":"DRK Ortsverein Schwelm e. V.",
-    "display_name":"DRK Ladeinfrastruktur",
-    "product_subtitle":"OCPP Backend",
-    "voucher_prefix":"DRK",
-    "primary_color":"#e30613",
-}
 
 
 def _migrate_branding_identity_v51_conn(conn, existing_settings_count):
-    """Preserve the previous DRK appearance on upgrades while fresh installs use VoltCore.
-
-    V0.9.7.50 and older derived their DRK installation appearance from code
-    defaults unless an administrator had already stored explicit branding_* values.
-    VoltCore becomes the product identity on upgrade, while organization/display
-    branding, color and voucher prefix stay untouched. A deliberately customized
-    product name is preserved; only the former default product name is upgraded.
-    New databases are marked as migrated without seeding DRK installation values.
-    """
+    """Community compatibility migration without organization-specific defaults."""
     marker=conn.execute("SELECT value FROM app_settings WHERE key='branding_identity_v51_migrated'").fetchone()
     if marker:
         return False
     now=utc_now()
-    if int(existing_settings_count or 0)>0:
-        product_row=conn.execute("SELECT value FROM app_settings WHERE key='branding_product_name'").fetchone()
-        if product_row and str(product_row[0] or "").strip()==LEGACY_PRODUCT_NAME_V50:
-            conn.execute(
-                "UPDATE app_settings SET value='VoltCore',updated_at=? WHERE key='branding_product_name'",
-                (now,),
-            )
-        for name,value in LEGACY_DRK_BRANDING_V50.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",
-                (f"branding_{name}",str(value),now),
-            )
+    product_row=conn.execute("SELECT value FROM app_settings WHERE key='branding_product_name'").fetchone()
+    if product_row and str(product_row[0] or "").strip()==LEGACY_PRODUCT_NAME_V50:
+        conn.execute(
+            "UPDATE app_settings SET value='VoltCore Community',updated_at=? WHERE key='branding_product_name'",
+            (now,),
+        )
     conn.execute(
         "INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",
         ("branding_identity_v51_migrated","1",now),
     )
-    return int(existing_settings_count or 0)>0
+    return False
 
 def init_db():
     with _lock, _connect() as conn:
