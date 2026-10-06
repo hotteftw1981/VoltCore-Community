@@ -18,7 +18,7 @@ from . import db
 from . import ocpp_diagnostics
 from .security import connection_security_decision, transport_is_secure, normalize_charge_point_id
 
-log = logging.getLogger("drk.ocpp")
+log = logging.getLogger("voltcore.community.ocpp")
 
 ACTIVE_CONNECTIONS = {}
 SMART_CHARGING_TRIGGER = None
