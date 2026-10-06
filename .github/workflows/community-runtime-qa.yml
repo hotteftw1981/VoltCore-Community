@@ -1,0 +1,121 @@
+name: Community Runtime QA
+
+on:
+  push:
+    branches:
+      - 'test/community-3e-*'
+      - 'cleanup/community-backend-only-0.9.7.76'
+  pull_request:
+    branches:
+      - 'cleanup/community-backend-only-0.9.7.76'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      VOLTCORE_QA_ALLOW_EMPTY_SETUP: '1'
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare evidence
+        run: |
+          mkdir -p qa-evidence
+          git rev-parse HEAD > qa-evidence/source-commit.txt
+          python -m compileall -q app tests scripts
+      - name: Audit DB references
+        run: |
+          python - <<'PY' | tee qa-evidence/db-references.txt
+          import ast
+          from pathlib import Path
+          db = ast.parse(Path('app/db.py').read_text())
+          symbols = {n.name for n in db.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+          for n in db.body:
+              if isinstance(n, ast.Assign):
+                  symbols.update(t.id for t in n.targets if isinstance(t, ast.Name))
+              elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                  symbols.update(a.asname or a.name.split('.')[0] for a in n.names)
+          missing = set()
+          for path in Path('app').glob('*.py'):
+              for node in ast.walk(ast.parse(path.read_text())):
+                  if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == 'db' and node.attr not in symbols:
+                      missing.add((str(path), node.lineno, node.attr))
+          for path, line, name in sorted(missing):
+              print(f'{path}:{line}: unresolved db.{name}')
+          print(f'Unresolved DB references: {len(missing)} (diagnostic only)')
+          PY
+      - name: Build application image
+        run: docker build -t community-runtime-qa:${{ github.sha }} .
+      - name: Full existing unit suite
+        id: unit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          docker run --rm --entrypoint python -e DATA_DIR=/tmp/unit-data \
+            -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -v "$PWD:/work:ro" -w /work \
+            community-runtime-qa:${{ github.sha }} \
+            -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee qa-evidence/unit-tests.txt
+      - name: Start disposable application
+        run: |
+          docker run -d --name community-runtime-qa \
+            -p 127.0.0.1:18010:8000 -p 127.0.0.1:19010:9000 \
+            -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -e COOKIE_SECURE=0 \
+            community-runtime-qa:${{ github.sha }}
+      - name: Full first-run and backend HTTP smoke
+        id: http
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/smoke_community_http.py --phase initial 2>&1 | tee qa-evidence/http-initial.txt
+      - name: Restart same test installation and verify persistence
+        id: restart
+        if: steps.http.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          docker restart community-runtime-qa
+          python scripts/smoke_community_http.py --phase restart 2>&1 | tee qa-evidence/http-restart.txt
+      - name: Capture application logs and health
+        if: always()
+        run: |
+          docker logs community-runtime-qa > qa-evidence/container.log 2>&1 || true
+          docker inspect --format '{{json .State}}' community-runtime-qa > qa-evidence/container-state.json 2>/dev/null || true
+      - name: Fail on any incomplete or failed validation
+        if: always()
+        env:
+          UNIT_OUTCOME: ${{ steps.unit.outcome }}
+          HTTP_OUTCOME: ${{ steps.http.outcome }}
+          RESTART_OUTCOME: ${{ steps.restart.outcome }}
+        run: |
+          test "$UNIT_OUTCOME" = success
+          test "$HTTP_OUTCOME" = success
+          test "$RESTART_OUTCOME" = success
+          if grep -Eq 'Traceback \(most recent call last\)|Application startup failed|Task exception was never retrieved' qa-evidence/container.log; then
+            echo 'Unexpected runtime exception; inspect container.log'
+            exit 1
+          fi
+      - name: Retain non-production test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-runtime-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-evidence/
+          retention-days: 7
+      - name: Remove disposable instance and temporary credentials
+        if: always()
+        run: |
+          docker rm -f community-runtime-qa >/dev/null 2>&1 || true
+          rm -f /tmp/community-http-qa-state.json
