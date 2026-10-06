@@ -3345,7 +3345,7 @@ async def export_reports_csv(period: str="current_month", date_from: str|None=No
             row.get("user_name") or "Nicht zugeordnet",row.get("vehicle_name") or "Nicht zugeordnet",row.get("vehicle_plate") or "",
             row.get("charge_point_id") or "",row.get("connector_id") or "",f"{float(row.get('energy_kwh') or 0):.3f}".replace('.',','),
             row.get("tariff_name") or "",("" if row.get("price_cents_per_kwh") is None else str(row.get("price_cents_per_kwh")).replace('.',',')),
-            ("" if row.get("cost_cents") is None else f"{int(row['cost_cents'])/100:.2f}".replace('.',')),
+            ("" if row.get("cost_cents") is None else f"{int(row['cost_cents'])/100:.2f}".replace('.',',')),
         ])
     payload=output.getvalue().encode("utf-8-sig")
     return StreamingResponse(iter([payload]),media_type="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=ocpp-abrechnungsnachweis.csv"})
