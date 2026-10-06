@@ -43,9 +43,9 @@ VoltCore Community supports two official deployment methods:
 
 It covers requirements, startup, ports, persistent data, updates, backup notes and troubleshooting step by step. 📚🔧
 
-## ⚡ Planned Community scope
+## ⚡ Community scope
 
-The first Community edition is planned to include:
+The Community edition includes, among other things:
 
 - 🔌 OCPP 1.6J
 - 🛰️ charge point discovery and onboarding
