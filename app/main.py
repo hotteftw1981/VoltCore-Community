@@ -1224,6 +1224,26 @@ async def users_page(request: Request):
     return render(request, "users.html", page="users")
 
 
+@app.get("/engagement", response_class=HTMLResponse)
+async def engagement_page(request: Request):
+    return render(request,"engagement.html",page="engagement")
+
+
+@app.get("/imports", response_class=HTMLResponse)
+async def imports_page(request: Request):
+    return render(request,"imports.html",page="imports")
+
+
+@app.get("/load-management", response_class=HTMLResponse)
+async def load_page(request: Request):
+    return render(request,"load_management.html",page="load-management")
+
+
+@app.get("/cost-centers", response_class=HTMLResponse)
+async def cost_centers_page(request: Request):
+    return render(request,"cost_centers.html",page="cost-centers")
+
+
 @app.get("/reports", response_class=HTMLResponse)
 async def reports_page(request: Request):
     return render(request, "reports.html", page="reports")
