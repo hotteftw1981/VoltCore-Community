@@ -385,7 +385,7 @@ async def web_access_control(request: Request, call_next):
     request.state.auth_user=auth
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/welcome","/settings","/security","/tariffs","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
+    admin_only = path in {"/welcome","/settings","/security","/tariffs","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -1854,11 +1854,10 @@ async def api_charge_point(cp_id: str):
 async def api_tariffs():
     return {
         "tariffs":db.list_tariffs(),
-        "groups":db.list_billing_groups(),
         "users":db.list_tariff_users(),
         "charge_points":db.list_tariff_charge_points(),
-        "cost_centers":db.list_cost_centers(True),
     }
+
 
 class TariffPayload(BaseModel):
     name: str
@@ -1867,61 +1866,46 @@ class TariffPayload(BaseModel):
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
-    billing_group_id: int | None = None
+
 
 class TariffVersionPayload(BaseModel):
     name: str
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
-    billing_group_id: int | None = None
+
 
 @app.post("/api/tariffs")
 async def create_tariff(payload: TariffPayload):
-    try: return {"id":db.create_tariff(**payload.model_dump())}
-    except ValueError as exc: raise HTTPException(400,str(exc))
+    if payload.scope not in {"global","charge_point","user"}:
+        raise HTTPException(400,"Community unterstützt Tarife global, pro Ladepunkt oder pro Benutzer.")
+    try:
+        return {"id":db.create_tariff(
+            payload.name,payload.scope,payload.target_id,payload.price_cents_per_kwh,
+            payload.valid_from,payload.valid_until,None,None
+        )}
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+
 
 @app.post("/api/tariffs/{tariff_id}/versions")
 async def create_tariff_version(tariff_id:int,payload:TariffVersionPayload):
-    try: return {"id":db.create_tariff_version(tariff_id,**payload.model_dump())}
+    try:
+        return {"id":db.create_tariff_version(
+            tariff_id,payload.name,payload.price_cents_per_kwh,payload.valid_from,
+            payload.valid_until,None,None
+        )}
     except ValueError as exc:
         detail=str(exc)
         raise HTTPException(404 if detail=="Tarif nicht gefunden" else 400,detail)
 
+
 @app.delete("/api/tariffs/{tariff_id}")
 async def remove_tariff(tariff_id:int):
-    if not db.delete_tariff(tariff_id): raise HTTPException(404,"Tarif nicht gefunden")
+    if not db.delete_tariff(tariff_id):
+        raise HTTPException(404,"Tarif nicht gefunden")
     return {"ok":True}
 
-class BillingGroupPayload(BaseModel):
-    name: str
-    cost_center: str | None = None
-    active: bool = True
-
-@app.post("/api/billing-groups")
-async def create_group(payload: BillingGroupPayload):
-    try: return {"id":db.create_billing_group(payload.name,payload.cost_center)}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/billing-groups/{group_id}")
-async def update_group(group_id:int,payload:BillingGroupPayload):
-    active=bool(getattr(payload,"active",True))
-    try: ok=db.update_billing_group(group_id,payload.name,payload.cost_center,active)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Abrechnungsgruppe nicht gefunden")
-    return {"ok":True}
-
-@app.post("/api/billing-groups/{group_id}/users/{user_id}")
-async def add_group_user(group_id:int,user_id:int):
-    try: db.assign_user_billing_group(user_id,group_id); return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/billing-groups/{group_id}/users/{user_id}")
-async def remove_group_user(group_id:int,user_id:int):
-    if not db.unassign_user_billing_group(user_id,group_id): raise HTTPException(404,"Zuordnung nicht gefunden")
-    return {"ok":True}
 
 @app.get("/api/charge-points/{cp_id}/diagnostics")
 async def api_charge_point_diagnostics(cp_id: str, severity: str | None = None, category: str | None = None, limit: int = 100):
