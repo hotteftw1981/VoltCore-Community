@@ -77,12 +77,6 @@ OPERATIONAL_STARTUP_GRACE_SECONDS = 90
 # lifecycle events. The periodic worker remains as a safety net.
 SMART_REBALANCE_EVENT = None
 SMART_REBALANCE_REASON = "Start"
-SMART_CHARGING_RUNTIME = {
-    "last_rebalance_at": None, "last_trigger": "Noch nicht ausgeführt",
-    "available_kw": 0.0, "fixed_load_kw": 0.0, "allocations": [],
-}
-LIVEVIEW_PEOPLE_CACHE = {}
-LIVEVIEW_PEOPLE_CACHE_SECONDS = 30
 
 def _local_dt(value):
     if not value:
@@ -678,11 +672,6 @@ class RFIDEnrollmentConfirmPayload(BaseModel):
     accepted: bool
 
 
-class PortalGamificationRevealAck(BaseModel):
-    award_id: int | None = None
-    level: int | None = None
-
-
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
@@ -1069,14 +1058,6 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
 
 
-class RegistrationSettingsPayload(BaseModel):
-    enabled: bool = True
-    budget_mode: str = "hours"
-    reference_hours: float = 39
-    reference_kwh: float = 150
-    limit_mode: str = "warn"
-    fields: list[dict] = []
-
 @app.get("/api/settings/branding")
 async def api_branding_settings():
     return db.branding_settings()
@@ -1287,16 +1268,6 @@ def _ocpp_transport_status():
     if cert or key:
         return {"level":"bad","label":"TLS unvollständig","detail":"OCPP_TLS_CERTFILE und OCPP_TLS_KEYFILE müssen gemeinsam gesetzt sein","affects_overall":True}
     return {"level":"neutral","label":"WS / Proxy","detail":"Direktes WSS deaktiviert · TLS kann am Reverse Proxy terminiert werden","affects_overall":False}
-
-
-def _fleet_integration_status():
-    enabled=bool(str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip())
-    return {
-        "level":"ok" if enabled else "neutral",
-        "label":"Bereit" if enabled else "Deaktiviert",
-        "detail":"Read-only Fleet API v1 mit Bearer-Token aktiv" if enabled else "Vorbereitete Fuhrpark-Schnittstelle · kein Token gesetzt",
-        "affects_overall":False,
-    }
 
 
 def _system_status_payload(auth=None):
@@ -1681,89 +1652,9 @@ def _liveview_snapshot():
             "heartbeat_age_seconds":diagnostic.get("heartbeat_age_seconds"),
             "subprotocol":connection.get("subprotocol") or "ocpp1.6",
         })
-    station_by_id={str(x.get("id")):x for x in stations}
-    profile_cache={}
-    people_sessions=[]
-    for tx in active:
-        user_id=tx.get("user_id")
-        profile=None
-        if user_id not in (None,""):
-            try:
-                uid=int(user_id)
-                if uid not in profile_cache:
-                    cached=LIVEVIEW_PEOPLE_CACHE.get(uid) or {}
-                    cached_at=cached.get("cached_at")
-                    if isinstance(cached_at,datetime) and (now-cached_at).total_seconds()<LIVEVIEW_PEOPLE_CACHE_SECONDS:
-                        profile_cache[uid]=cached.get("profile") or {}
-                    else:
-                        user=db.get_user(uid) or {}
-                        analytics=db.user_analytics(uid) or {}
-                        budget=db.user_monthly_budget(uid) or {}
-                        earned=db.earned_achievements_for_user(uid,8)
-                        achievement_count=db.earned_achievement_count(uid)
-                        gamification=db.user_gamification_profile(uid)
-                        fallback_vehicle=db.primary_vehicle_for_user(uid) or {}
-                        built={
-                            "user":{
-                                "id":uid,"name":user.get("name"),"role":user.get("role"),"department":user.get("department"),
-                                "image_path":user.get("image_path"),"gamification_enabled":bool(user.get("gamification_enabled",1)),
-                            },
-                            "analytics":{
-                                "current_month":analytics.get("current_month") or {},
-                                "current_year":analytics.get("current_year") or {},
-                                "all_time":analytics.get("all_time") or {},
-                            },
-                            "budget":budget,
-                            "achievement_count":achievement_count,
-                            "gamification":gamification,
-                            "fallback_vehicle":{
-                                "id":fallback_vehicle.get("id"),"name":fallback_vehicle.get("name"),"make":fallback_vehicle.get("make"),
-                                "model":fallback_vehicle.get("model"),"plate":fallback_vehicle.get("plate"),"image_path":fallback_vehicle.get("image_path"),
-                            },
-                            "achievements":[{
-                                "name":a.get("display_name") or a.get("name"),"description":a.get("display_description") or a.get("description"),
-                                "icon":a.get("display_icon") or a.get("icon") or "🏅","awarded_at":a.get("awarded_at"),
-                                "event_badge":bool(a.get("event_badge")),"rarity":a.get("rarity") or "common",
-                                "xp":int(a.get("xp") or 0),"tier_name":a.get("tier_name"),"category":a.get("category") or "Allgemein",
-                            } for a in earned],
-                        }
-                        LIVEVIEW_PEOPLE_CACHE[uid]={"cached_at":now,"profile":built}
-                        profile_cache[uid]=built
-                profile=profile_cache.get(uid)
-            except (TypeError,ValueError):
-                profile=None
-        cp_id=str(tx.get("charge_point_id") or "")
-        connector_id=int(tx.get("connector_id") or 0)
-        station=station_by_id.get(cp_id) or {}
-        connector=next((x for x in (station.get("connectors") or []) if int(x.get("connector_id") or 0)==connector_id),{})
-        fallback_vehicle=(profile or {}).get("fallback_vehicle") or {}
-        session_has_vehicle=bool(tx.get("vehicle_id") or tx.get("vehicle_name"))
-        people_vehicle={
-            "id":tx.get("vehicle_id"),"name":tx.get("vehicle_name"),"make":tx.get("vehicle_make"),"model":tx.get("vehicle_model"),
-            "plate":tx.get("vehicle_plate"),"image_path":tx.get("vehicle_image_path"),
-        } if session_has_vehicle else fallback_vehicle
-        people_sessions.append({
-            "transaction_id":tx.get("id"),"charge_point_id":cp_id,"location":station.get("location") or cp_id,
-            "connector_id":connector_id,"started_at":tx.get("started_at"),"energy_kwh":tx.get("energy_kwh"),
-            "power_kw":connector.get("power_kw"),"last_power_kw":connector.get("last_power_kw"),
-            "soc_percent":connector.get("soc_percent") if connector.get("soc_percent") is not None else connector.get("last_soc_percent"),
-            "status":connector.get("status") or station.get("status") or "Unknown",
-            "telemetry_freshness":connector.get("freshness"),"meter_age_seconds":connector.get("meter_age_seconds"),
-            "user":(profile or {}).get("user") or {
-                "id":user_id,"name":tx.get("user_name") or tx.get("id_tag") or "Unbekannter Ladebenutzer",
-                "role":tx.get("user_role"),"department":tx.get("user_department"),"image_path":tx.get("user_image_path"),
-                "gamification_enabled":False,
-            },
-            "vehicle":people_vehicle,
-            "analytics":(profile or {}).get("analytics") or {},
-            "budget":(profile or {}).get("budget") or {},
-            "achievement_count":int((profile or {}).get("achievement_count") or 0),
-            "gamification":(profile or {}).get("gamification") or {"xp":0,"level":1,"title":"Stecker-Neuling","progress_pct":0,"level_xp":0,"next_level_xp":125},
-            "achievements":(profile or {}).get("achievements") or [],
-        })
     available_count=sum(1 for station in stations if station.get("connected") and str(station.get("status") or "")=="Available")
     return {
-        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,"people_sessions":people_sessions,"settings":db.liveview_settings(),
+        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,"settings":db.liveview_settings(),
         "summary":{"stations":len(stations),"online":online_count,"offline":max(0,len(stations)-online_count),
                    "available":available_count,"active_sessions":len(active),
                    "charging_connectors":charging_count,"total_power_kw":round(total_power,2) if has_power else None,
@@ -2330,45 +2221,6 @@ async def set_transaction_vehicle(transaction_id: int, payload: dict):
     return {"ok": True, "transaction": db.get_transaction(transaction_id)}
 
 
-def _require_fleet_integration(request: Request):
-    expected=str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip()
-    if not expected:
-        raise HTTPException(503,"Fuhrpark-Schnittstelle ist deaktiviert")
-    auth=str(request.headers.get("authorization") or "")
-    supplied=auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied or not secrets.compare_digest(supplied,expected):
-        try:
-            db.add_security_event("Fleet API authentication failed",severity="warning",category="fleet_api",remote=_client_text(request),success=False,detail=request.url.path)
-        except Exception:
-            pass
-        raise HTTPException(401,"Ungültiger Fuhrpark-Integrationstoken",headers={"WWW-Authenticate":"Bearer"})
-    return True
-
-
-def _fleet_no_store(response: Response):
-    response.headers["Cache-Control"]="no-store"
-    response.headers["Pragma"]="no-cache"
-    response.headers["X-Content-Type-Options"]="nosniff"
-
-
-@app.get("/api/integrations/fleet/v1/health")
-async def fleet_integration_health(request: Request, response: Response):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    return {"ok":True,"api":"fleet-v1","backend_version":APP_VERSION,"mode":"read-only"}
-
-
-@app.get("/api/integrations/fleet/v1/sessions")
-async def fleet_integration_sessions(request: Request, response: Response, since: str | None = None, limit: int = 200):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    try:
-        rows=db.fleet_integration_sessions(since=since,limit=limit)
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    return {"api":"fleet-v1","count":len(rows),"sessions":rows}
-
-
 @app.get("/api/vehicles")
 async def api_vehicles():
     vehicles = db.list_vehicles()
@@ -2518,13 +2370,6 @@ async def delete_vehicle_image(vehicle_id: int):
     return {"ok": True}
 
 
-class AccessRequestDecisionPayload(BaseModel):
-    note: str | None = None
-    monthly_kwh_limit: float | None = None
-    monthly_limit_mode: str = "warn"
-    budget_source: str = "auto"
-
-
 class UserPayload(BaseModel):
     name: str
     role: str = "Fahrer"
@@ -2534,9 +2379,6 @@ class UserPayload(BaseModel):
     status: str = "Aktiv"
     monthly_kwh_limit: float | None = None
     monthly_limit_mode: str = "warn"
-    gamification_enabled: bool = True
-    weekly_hours: float | None = None
-    budget_source: str = "manual"
     charge_access_mode: str | None = None
     allowed_charge_point_ids: list[str] | None = None
 
@@ -2567,15 +2409,15 @@ async def api_users():
 async def api_user(user_id: int, tx_page: int = 1, tx_page_size: int = 10):
     details=db.user_details(user_id, transaction_page=tx_page, transaction_page_size=tx_page_size)
     if not details: raise HTTPException(404,"Benutzer nicht gefunden")
-    details["achievements"]=db.achievements_for_user(user_id)
     return details
 
 @app.post("/api/users")
 async def create_user(payload: UserPayload):
     if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
     if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
-    if str(payload.budget_source or "manual").lower()=="auto" and db.registration_settings().get("budget_mode")=="hours" and payload.weekly_hours is None: raise HTTPException(400,"Für ein automatisches Budget sind Wochenarbeitsstunden erforderlich.")
-    try: uid=db.create_user(**payload.model_dump())
+    data=payload.model_dump()
+    data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
+    try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
 
@@ -2583,22 +2425,22 @@ async def create_user(payload: UserPayload):
 async def update_user(request:Request,user_id: int,payload: UserPayload):
     if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
     if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
-    if str(payload.budget_source or "manual").lower()=="auto" and db.registration_settings().get("budget_mode")=="hours" and payload.weekly_hours is None: raise HTTPException(400,"Für ein automatisches Budget sind Wochenarbeitsstunden erforderlich.")
     before=db.get_user(user_id)
     if not before: raise HTTPException(404,"Benutzer nicht gefunden")
     before_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
-    try: updated=db.update_user(user_id,**payload.model_dump())
+    data=payload.model_dump()
+    data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
+    try: updated=db.update_user(user_id,**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     if not updated: raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     _schedule_local_list_sync("Benutzerdaten / Ladebudget geändert")
     user=db.get_user(user_id) or {}
-    old_hours=before.get("weekly_hours"); new_hours=user.get("weekly_hours"); old_budget=before.get("monthly_kwh_limit"); new_budget=user.get("monthly_kwh_limit")
-    if old_hours!=new_hours or old_budget!=new_budget or before.get("budget_source")!=user.get("budget_source"):
+    old_budget=before.get("monthly_kwh_limit"); new_budget=user.get("monthly_kwh_limit")
+    if old_budget!=new_budget:
         auth=getattr(request.state,"auth_user",None) or {}
         def n(v,suffix=""):
             return "—" if v is None else f"{float(v):g}{suffix}"
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Wochenarbeitszeit / Ladebudget geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Wochenarbeitsstunden: {n(old_hours,' h')} → {n(new_hours,' h')} · Monatsbudget: {n(old_budget,' kWh')} → {n(new_budget,' kWh')} · Budgetquelle: {before.get('budget_source') or 'manual'} → {user.get('budget_source') or 'manual'}")
+        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebudget geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Monatsbudget: {n(old_budget,' kWh')} → {n(new_budget,' kWh')}")
     after_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     if before_access!=after_access:
         auth=getattr(request.state,"auth_user",None) or {}
@@ -2612,7 +2454,6 @@ async def upload_user_image(user_id:int, image:UploadFile=File(...)):
     if not db.get_user(user_id):
         raise HTTPException(404,"Benutzer nicht gefunden")
     image_path=await _store_user_image(user_id,image)
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     return {"ok":True,"image_path":image_path}
 
 
@@ -2623,7 +2464,6 @@ async def delete_user_image(user_id:int):
         raise HTTPException(404,"Benutzer nicht gefunden")
     image_path=user.get("image_path")
     db.set_user_image(user_id,None)
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
@@ -2646,7 +2486,6 @@ async def delete_user(request:Request,user_id: int):
         raise HTTPException(404,"Benutzer nicht gefunden")
     if not db.deactivate_user(user_id):
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     _schedule_local_list_sync("Benutzer deaktiviert")
     auth=getattr(request.state,"auth_user",None) or {}
     db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebenutzer deaktiviert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details="Benutzer und zugeordnete RFID-Karten deaktiviert; Historie bleibt erhalten")
@@ -2667,7 +2506,6 @@ async def delete_user_permanent(request:Request,user_id:int):
                 detail+=" "+" · ".join(check["reasons"])
             raise HTTPException(409,detail)
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
@@ -2700,7 +2538,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
                 detail+=" "+" · ".join(check["purge_reasons"])
             raise HTTPException(409,detail)
         raise HTTPException(404,"Benutzer nicht gefunden")
-    LIVEVIEW_PEOPLE_CACHE.pop(int(user_id),None)
     if image_path:
         target=MEDIA_DIR/Path(image_path).name
         if target.exists() and target.is_file():
@@ -2718,60 +2555,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     )
     return {"ok":True,"mode":"purged","removed":removed}
 
-
-class PortalPinPayload(BaseModel):
-    pin: str | None = None
-    enabled: bool = True
-    send_email: bool = False
-
-class AchievementPayload(BaseModel):
-    name:str
-    description:str|None=None
-    icon:str|None="🏅"
-    metric:str="manual"
-    threshold:float|None=None
-    hidden:bool=False
-    system_secret:bool=False
-    active:bool=True
-    category:str="Allgemein"
-    rarity:str="common"
-    xp:int=50
-    tier_group:str|None=None
-    tier_name:str|None=None
-    tier_rank:int=0
-    leaderboard_enabled:bool=False
-
-class EventPayload(BaseModel):
-    name:str
-    description:str|None=None
-    metric:str="energy_kwh"
-    starts_at:str
-    ends_at:str
-    active:bool=True
-    min_sessions:int=0
-    min_session_kwh:float=0
-    reward_bonus_kwh:float=0
-    reward_valid_days:int|None=None
-    reward_bonus_enabled:bool|None=None
-    winner_badge_enabled:bool=False
-    winner_badge_name:str|None=None
-    winner_badge_icon:str|None=None
-    winner_badge_description:str|None=None
-
-class BonusGrantPayload(BaseModel):
-    user_id:int
-    amount_kwh:float
-    expires_at:str
-    note:str|None=None
-
-class BonusVoucherPayload(BaseModel):
-    code:str|None=None
-    amount_kwh:float
-    redeem_until:str|None=None
-    bonus_valid_days:int|None=None
-    max_redemptions:int=1
-    note:str|None=None
-    active:bool=True
 
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
@@ -3533,28 +3316,9 @@ async def api_security_clear_secret(cp_id: str, request: Request):
     return {"ok":True}
 
 
-class CostCenterPayload(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-    active: bool = True
-
 @app.get("/api/search")
 async def api_global_search(q: str=""):
     return db.global_search(q,6)
-
-class SmartChargingSettingsPayload(BaseModel):
-    enabled: bool = False
-    site_limit_kw: float = 132
-    reserve_kw: float = 0
-    rebalance_seconds: int = 15
-    min_change_kw: float = 0.5
-
-class SmartConnectorPayload(BaseModel):
-    enabled: bool = True
-    priority: int = 3
-    min_kw: float = 1.4
-    max_kw: float | None = None
 
 def _report_period(period: str = "current_month", date_from: str | None = None, date_to: str | None = None):
     now=datetime.now(timezone.utc).astimezone(BERLIN_TZ)
