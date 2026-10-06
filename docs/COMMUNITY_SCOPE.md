@@ -30,6 +30,27 @@ This document records the agreed initial feature scope for VoltCore Community.
 - Basic notifications
 - PWA baseline
 
+## First-run onboarding
+
+VoltCore Community should guide a new installation through a neutral first-run setup instead of inheriting organization-specific defaults.
+
+Planned first-login wizard:
+
+1. organization / installation name and basic branding;
+2. administrator basics and preferred language;
+3. optional SMTP / email setup;
+4. invite first users by email;
+5. basic tariff / price configuration;
+6. basic charging defaults;
+7. explicit choice whether free charging credit / charging budgets should be enabled.
+
+Community defaults:
+
+- weekly working hours are **not** part of the Community user profile;
+- free charging credit / monthly charging budgets are **disabled by default**;
+- no DRK- or employer-specific assumptions;
+- optional features must be deliberately enabled during first-run setup or later in settings.
+
 ## Update model
 
 VoltCore Community checks GitHub Releases in this repository for newer stable releases.
