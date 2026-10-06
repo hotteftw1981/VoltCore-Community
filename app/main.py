@@ -739,14 +739,6 @@ async def logout(request: Request):
     return response
 
 
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
 @app.get("/public/access-request", response_class=HTMLResponse)
 async def public_access_request_start_page(request:Request, sent:str|None=None):
     cfg=db.registration_settings()
