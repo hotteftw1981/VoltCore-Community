@@ -7102,12 +7102,12 @@ def portal_dashboard(user_id, period=None, include_inactive=False, ranking_metri
 # V0.9.7.21 - Registration & Onboarding rules
 _REGISTRATION_BUILTIN_FIELDS = [
     {"id":"name","type":"text","label":"Name","enabled":True,"required":True,"system":True,"order":10,"help":"Vor- und Nachname"},
-    {"id":"phone","type":"tel","label":"Telefonnummer","enabled":True,"required":True,"system":False,"order":30,"help":"Für Rückfragen"},
-    {"id":"street","type":"text","label":"Straße und Hausnummer","enabled":True,"required":True,"system":False,"order":40,"help":""},
-    {"id":"postal_code","type":"text","label":"PLZ","enabled":True,"required":True,"system":False,"order":50,"help":""},
-    {"id":"city","type":"text","label":"Ort","enabled":True,"required":True,"system":False,"order":60,"help":""},
+    {"id":"phone","type":"tel","label":"Telefonnummer","enabled":True,"required":False,"system":False,"order":30,"help":"Optional für Rückfragen"},
+    {"id":"street","type":"text","label":"Straße und Hausnummer","enabled":True,"required":False,"system":False,"order":40,"help":"optional"},
+    {"id":"postal_code","type":"text","label":"PLZ","enabled":True,"required":False,"system":False,"order":50,"help":"optional"},
+    {"id":"city","type":"text","label":"Ort","enabled":True,"required":False,"system":False,"order":60,"help":"optional"},
     {"id":"vehicle_make_model","type":"text","label":"Hersteller / Modell","enabled":True,"required":False,"system":False,"order":70,"help":"Optional, z. B. VW ID.4"},
-    {"id":"vehicle_plate","type":"text","label":"Kennzeichen","enabled":True,"required":True,"system":False,"order":80,"help":"z. B. EN-AB 123"},
+    {"id":"vehicle_plate","type":"text","label":"Kennzeichen","enabled":True,"required":False,"system":False,"order":80,"help":"optional, z. B. B-AB 123"},
 ]
 
 def _registration_default_fields():
