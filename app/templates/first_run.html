@@ -38,7 +38,7 @@
     </section>
 
     <section class="first-run-section">
-      <h3>👤 Ersten Benutzer einladen</h3>
+      <h3>👤 Ersten Systembenutzer einladen</h3>
       <div class="form-grid">
         <label>Anzeigename<input name="invite_display_name" value="{{ values.invite_display_name if values else '' }}" maxlength="120" placeholder="optional"></label>
         <label>E-Mail-Adresse<input name="invite_email" type="email" value="{{ values.invite_email if values else '' }}" placeholder="name@example.org"></label>
@@ -62,12 +62,12 @@
     </section>
 
     <section class="first-run-section">
-      <h3>⚡ Freies Ladeguthaben / Monatslimit</h3>
-      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Standard-Ladeguthaben verwenden</span></label>
+      <h3>⚡ Optionales Monatslimit</h3>
+      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Standardlimit verwenden</span></label>
       <div class="form-grid">
         <label>Standardwert (kWh / Monat)<input name="default_monthly_kwh" type="number" min="0" step="1" value="{{ values.default_monthly_kwh if values else '0' }}"></label>
       </div>
-      <small>Standardmäßig ist diese Funktion <strong>aus</strong>. Keine Wochenarbeitszeit, keine Arbeitgeberlogik – nur ein optionales neutrales Monatslimit.</small>
+      <small>Standardmäßig ist diese Funktion <strong>aus</strong>. Das Limit ist rein optional und wird manuell in kWh pro Monat festgelegt.</small>
     </section>
 
     <div class="form-actions">
