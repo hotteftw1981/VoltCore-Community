@@ -3653,9 +3653,6 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
         raise ValueError("Maximale Leistung muss eine Zahl sein")
     if maxkw < 0 or maxkw > 1000:
         raise ValueError("Maximale Leistung muss zwischen 0 und 1000 kW liegen")
-    enroll_mode=str(rfid_self_enroll_mode or "auto").strip().lower()
-    if enroll_mode not in {"auto","enabled","disabled"}:
-        raise ValueError("RFID Self-Service muss Automatisch, Aktiviert oder Deaktiviert sein")
     with _lock, _connect() as conn:
         if conn.execute("SELECT 1 FROM charge_points WHERE id=?", (cp_id,)).fetchone():
             return False
@@ -3663,8 +3660,8 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
             """INSERT INTO charge_points(
                 id,vendor,model,serial_number,firmware,status,last_seen,power_kw,energy_kwh,
                 connector_count,max_power_kw,simulated,location,connector_type,ocpp_version,notes,retired,source_type
-            ) VALUES(?,?,?,?,?,'Unknown',NULL,0,0,?,?,0,?,?,?,?,?,0,?)""",
-            (cp_id, vendor, model, serial_number, firmware, count, maxkw, location, connector_type or "Type 2", ocpp_version or "1.6J", notes, enroll_mode, 'manual')
+            ) VALUES(?,?,?,?,?,'Unknown',NULL,0,0,?,?,0,?,?,?,?,0,?)""",
+            (cp_id, vendor, model, serial_number, firmware, count, maxkw, location, connector_type or "Type 2", ocpp_version or "1.6J", notes, 'manual')
         )
         for cid in range(1, count + 1):
             conn.execute(
@@ -3676,10 +3673,6 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
 
 def update_charge_point(cp_id, **fields):
     allowed={"vendor","model","serial_number","firmware","ocpp_version","location","connector_type","max_power_kw","connector_count","notes"}
-    if "rfid_self_enroll_mode" in fields:
-        mode=str(fields.get("rfid_self_enroll_mode") or "auto").strip().lower()
-        if mode not in {"auto","enabled","disabled"}: raise ValueError("Ungültiger RFID-Self-Service-Modus")
-        fields["rfid_self_enroll_mode"]=mode
     updates=[(k,fields[k]) for k in allowed if k in fields]
     if not updates: return False
     with _lock,_connect() as conn:
