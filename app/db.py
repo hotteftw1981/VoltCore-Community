@@ -3918,44 +3918,35 @@ def _apply_tariff_to_tx_conn(conn, tx_id, user_id, cp_id, started_at):
     conn.execute("UPDATE transactions SET tariff_id=?,tariff_name=?,tariff_source=?,price_cents_per_kwh=?,billing_group_id=?,billing_group_name=? WHERE id=?",(tariff["id"],tariff["name"],tariff["source"],tariff["price_cents_per_kwh"],tariff.get("billing_group_id"),tariff.get("billing_group_name"),tx_id))
 
 def _update_tx_cost_conn(conn, tx_id):
-    """Freeze the chargeable session cost after the configured monthly allowance."""
-    row=conn.execute("SELECT id,energy_kwh,price_cents_per_kwh,user_id,id_tag,started_at FROM transactions WHERE id=?",(tx_id,)).fetchone()
-    if not row or row["energy_kwh"] is None:
-        return
-    energy=max(0.0,float(row["energy_kwh"] or 0))
-    user_id=row["user_id"]
-    if user_id is None and row["id_tag"]:
-        card=conn.execute("SELECT user_id FROM rfid_cards WHERE uid=?",(row["id_tag"],)).fetchone()
-        if card and card[0] is not None:
-            user_id=int(card[0])
-        else:
-            legacy=conn.execute("SELECT id FROM users WHERE rfid=?",(row["id_tag"],)).fetchone()
-            user_id=int(legacy[0]) if legacy else None
+    """Price metered energy using this transaction's tariff snapshot only.
 
-    chargeable_energy=energy
-    if user_id is not None:
-        user=conn.execute("SELECT monthly_kwh_limit FROM users WHERE id=?",(user_id,)).fetchone()
-        if user:
-            if user["monthly_kwh_limit"] is None:
-                chargeable_energy=0.0
-            else:
-                started=_parse_iso_utc(row["started_at"]) or datetime.now(timezone.utc)
-                start_utc,end_utc,_=_month_bounds_utc(started)
-                prior=conn.execute("""SELECT COALESCE(SUM(energy_kwh),0) FROM transactions
-                    WHERE id<>? AND (user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?))))
-                      AND started_at>=? AND started_at<? AND (ended_at IS NOT NULL OR status<>'Active')""",
-                    (tx_id,user_id,user_id,user_id,start_utc,end_utc)).fetchone()[0]
-                base_remaining=max(0.0,max(0.0,float(user["monthly_kwh_limit"]))-float(prior or 0))
-                chargeable_energy=max(0.0,energy-base_remaining)
+    A monthly kWh limit controls authorization and warnings, not free credit.
+    Missing/invalid energy or tariff data is unknown, never implicitly free.
+    Only this transaction is updated; historical rows are not recalculated.
+    """
+    from decimal import InvalidOperation
 
-    if chargeable_energy<=1e-9:
-        conn.execute("UPDATE transactions SET cost_cents=0 WHERE id=?",(tx_id,))
+    row = conn.execute(
+        "SELECT energy_kwh,price_cents_per_kwh FROM transactions WHERE id=?",
+        (tx_id,),
+    ).fetchone()
+    if row is None:
         return
-    if row["price_cents_per_kwh"] is None:
-        conn.execute("UPDATE transactions SET cost_cents=NULL WHERE id=?",(tx_id,))
-        return
-    cents=(Decimal(str(chargeable_energy))*Decimal(int(row["price_cents_per_kwh"]))).quantize(Decimal("1"),rounding=ROUND_HALF_UP)
-    conn.execute("UPDATE transactions SET cost_cents=? WHERE id=?",(int(cents),tx_id))
+
+    cost_cents = None
+    try:
+        energy = Decimal(str(row["energy_kwh"]))
+        price = Decimal(str(row["price_cents_per_kwh"]))
+        if (energy.is_finite() and price.is_finite()
+                and energy >= 0 and price >= 0
+                and price == price.to_integral_value()):
+            amount = (energy * price).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            # SQLite INTEGER is signed 64-bit; reject unusable meter/tariff data.
+            if amount <= 9223372036854775807:
+                cost_cents = int(amount)
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
+        pass
+    conn.execute("UPDATE transactions SET cost_cents=? WHERE id=?", (cost_cents, tx_id))
 
 def diagnostic_summary(cp_id):
     caps=meter_capabilities_for_charge_point(cp_id)
