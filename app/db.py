@@ -685,21 +685,6 @@ def init_db():
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS smart_charging_connectors (
-                charge_point_id TEXT NOT NULL,
-                connector_id INTEGER NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                priority INTEGER NOT NULL DEFAULT 3,
-                min_kw REAL NOT NULL DEFAULT 1.4,
-                max_kw REAL,
-                allocated_kw REAL,
-                last_status TEXT NOT NULL DEFAULT 'Noch nicht angewendet',
-                last_response TEXT,
-                last_attempt_at TEXT,
-                last_applied_at TEXT,
-                profile_id INTEGER,
-                PRIMARY KEY(charge_point_id, connector_id)
-            );
             CREATE TABLE IF NOT EXISTS diagnostic_states (
                 state_key TEXT PRIMARY KEY,
                 charge_point_id TEXT NOT NULL,
@@ -1184,10 +1169,8 @@ def init_db():
         # newest row and repair only impossible duplicates.
         _reconcile_duplicate_active_transactions_conn(conn)
 
-        # V0.9.7.6: Smart Charging is opt-in on upgrade.
         now_setting=utc_now()
-        for key,value in (("smart_charging_enabled","0"),("smart_charging_site_limit_kw","132"),("smart_charging_reserve_kw","0"),("smart_charging_rebalance_seconds","15"),("smart_charging_min_change_kw","0.5"),
-                          ("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
+        for key,value in (("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
                           ("rfid_local_list_version","1"),
                           ("registration_enabled","0"),("registration_reference_hours","39"),("registration_reference_kwh","0"),
                           ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
@@ -1210,10 +1193,6 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_ip_ts ON web_login_attempts(ip_hash,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_user_ts ON web_login_attempts(username_key,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ocpp_auth_attempts_key_ts ON ocpp_auth_attempts(client_key,ts DESC)")
-        for cp in cp_rows:
-            count=max(1,int(cp[1] or 1))
-            for connector_id in range(1,count+1):
-                conn.execute("INSERT OR IGNORE INTO smart_charging_connectors(charge_point_id,connector_id,max_kw) VALUES(?,?,?)",(cp[0],connector_id,float(cp[2] or 22)))
 
         # Import already-used free-text cost centers into the new master-data table.
         # Historical transaction snapshots remain untouched; this only gives existing
@@ -4692,9 +4671,6 @@ def _event_diagnostic_row(row):
     elif event_type=="StatusNotification":
         category="connector"; title="Connector-Status geändert"
         if "status=faulted" in low or ("error=" in low and "error=noerror" not in low): severity="critical"; title="Connector meldet Fehler"
-    elif event_type in ("SetChargingProfile","ClearChargingProfile"):
-        category="smart_charging"; title="ChargingProfile angewendet" if event_type=="SetChargingProfile" else "ChargingProfile entfernt"
-        if "response=accepted" not in low: severity="warning"; title="ChargingProfile nicht bestätigt"
     elif event_type in ("RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset"):
         category="remote"; title=event_type
         if "error=" in low or ("response=" in low and not any(x in low for x in ("response=accepted","response=unlocked","response=scheduled"))): severity="warning"
@@ -4710,7 +4686,7 @@ def diagnostic_history(cp_id, severity=None, category=None, limit=100):
     limit=max(1,min(int(limit or 100),250)); cp_id=str(cp_id)
     with _connect() as conn:
         synthetic=[dict(r) for r in conn.execute("SELECT * FROM diagnostic_events WHERE charge_point_id=? ORDER BY id DESC LIMIT 250",(cp_id,)).fetchall()]
-        event_types=("Connected","Disconnected","StatusNotification","SetChargingProfile","ClearChargingProfile","RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset","BudgetLimitReached","ZeroFlowAutoStop","Reconciled")
+        event_types=("Connected","Disconnected","StatusNotification","RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset","BudgetLimitReached","ZeroFlowAutoStop","Reconciled")
         marks=','.join('?' for _ in event_types)
         raw=[dict(r) for r in conn.execute(f"SELECT * FROM events WHERE charge_point_id=? AND event_type IN ({marks}) ORDER BY id DESC LIMIT 250",(cp_id,*event_types)).fetchall()]
     items=synthetic+[x for x in (_event_diagnostic_row(r) for r in raw) if x]
@@ -4836,22 +4812,6 @@ def sync_notifications():
                     dkey=f"meter:{tx['id']}"; diagnostic_keys.append(dkey)
                     _sync_diagnostic_state_conn(conn,dkey,tx['charge_point_id'],sev,'telemetry','meter_values_stale',title,msg,int(tx['connector_id'] or 0),int(tx['id']))
 
-        smart_setting=conn.execute("SELECT value FROM app_settings WHERE key='smart_charging_enabled'").fetchone()
-        smart_enabled=bool(smart_setting and str(smart_setting[0]) in ('1','true','True'))
-        if smart_enabled:
-            smart_rows=conn.execute("""SELECT s.*,cp.status AS cp_status,t.id AS active_transaction_id FROM smart_charging_connectors s JOIN charge_points cp ON cp.id=s.charge_point_id
-                LEFT JOIN transactions t ON t.charge_point_id=s.charge_point_id AND t.connector_id=s.connector_id AND t.status='Active' AND t.ended_at IS NULL
-                WHERE COALESCE(s.last_attempt_at,'')<>'' AND (t.id IS NOT NULL OR s.profile_id IS NOT NULL)""").fetchall()
-            for sm in smart_rows:
-                status=str(sm['last_status'] or '')
-                bad=any(x in status.casefold() for x in ('abgelehnt','nicht unterstützt','fehler','konnte nicht'))
-                if not bad: continue
-                sev='critical' if 'fehler' in status.casefold() or 'konnte nicht' in status.casefold() else 'warning'
-                msg=f"{sm['charge_point_id']} · Connector {sm['connector_id']} · {status}"
-                key=f"smart:{sm['charge_point_id']}:{sm['connector_id']}"; state_keys.append(key)
-                _upsert_notification_conn(conn,key,'state',sev,'Smart Charging nicht wirksam',msg,'/load-management')
-                dkey=f"smart:{sm['charge_point_id']}:{sm['connector_id']}"; diagnostic_keys.append(dkey)
-                _sync_diagnostic_state_conn(conn,dkey,sm['charge_point_id'],sev,'smart_charging','charging_profile_failed','Smart Charging nicht wirksam',msg,int(sm['connector_id']))
 
         if state_keys:
             marks=','.join('?' for _ in state_keys)
@@ -8082,74 +8042,6 @@ def record_ocpp_auth_attempt(client_key, cp_id, success):
             conn.execute("INSERT INTO ocpp_auth_attempts(client_key,charge_point_id,ts,success) VALUES(?,?,?,0)",(str(client_key),str(cp_id or '') or None,utc_now()))
         conn.commit()
 
-
-def smart_charging_settings():
-    def f(key,default):
-        try:return float(get_setting(key,default))
-        except (TypeError,ValueError):return float(default)
-    return {"enabled":setting_bool("smart_charging_enabled",False),"site_limit_kw":max(0.1,f("smart_charging_site_limit_kw",132)),"reserve_kw":max(0.0,f("smart_charging_reserve_kw",0)),"rebalance_seconds":max(5,min(300,int(f("smart_charging_rebalance_seconds",15)))),"min_change_kw":max(0.1,min(10.0,f("smart_charging_min_change_kw",0.5)))}
-
-def set_smart_charging_settings(enabled,site_limit_kw,reserve_kw=0,rebalance_seconds=15,min_change_kw=0.5):
-    try:
-        limit=float(site_limit_kw); reserve=float(reserve_kw); interval=int(rebalance_seconds); min_change=float(min_change_kw)
-    except (TypeError,ValueError): raise ValueError("Ungültige Lastmanagement-Einstellung")
-    if limit<=0 or limit>5000: raise ValueError("Standortlimit muss zwischen 0 und 5000 kW liegen")
-    if reserve<0 or reserve>=limit: raise ValueError("Reserve muss kleiner als das Standortlimit sein")
-    if interval<5 or interval>300: raise ValueError("Regelintervall muss zwischen 5 und 300 Sekunden liegen")
-    if min_change<0.1 or min_change>10: raise ValueError("Regeldämpfung muss zwischen 0,1 und 10 kW liegen")
-    set_setting("smart_charging_enabled","1" if enabled else "0"); set_setting("smart_charging_site_limit_kw",str(limit)); set_setting("smart_charging_reserve_kw",str(reserve)); set_setting("smart_charging_rebalance_seconds",str(interval)); set_setting("smart_charging_min_change_kw",str(min_change))
-    return smart_charging_settings()
-
-def list_smart_charging_connectors():
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT c.charge_point_id,c.connector_id,
-                             COALESCE(s.enabled,1) AS enabled,COALESCE(s.priority,3) AS priority,COALESCE(s.min_kw,1.4) AS min_kw,s.max_kw,s.allocated_kw,
-                             COALESCE(s.last_status,'Noch nicht angewendet') AS last_status,s.last_response,s.last_attempt_at,s.last_applied_at,s.profile_id,
-                             c.status AS connector_status,c.max_power_kw AS connector_max_kw,c.power_kw AS live_power_kw,c.last_meter_at,
-                             cp.max_power_kw AS station_max_kw,cp.vendor,cp.model,cp.location
-                             FROM connectors c LEFT JOIN smart_charging_connectors s ON s.charge_point_id=c.charge_point_id AND s.connector_id=c.connector_id
-                             JOIN charge_points cp ON cp.id=c.charge_point_id
-                             WHERE COALESCE(cp.retired,0)=0 AND COALESCE(cp.archived,0)=0 AND COALESCE(cp.ignored,0)=0
-                             ORDER BY c.charge_point_id,c.connector_id""").fetchall()
-        return [dict(r) for r in rows]
-
-def set_smart_connector_policy(cp_id,connector_id,enabled=True,priority=3,min_kw=1.4,max_kw=None):
-    try: connector_id=int(connector_id); priority=int(priority); min_kw=float(min_kw); max_kw=None if max_kw in (None,"") else float(max_kw)
-    except (TypeError,ValueError): raise ValueError("Ungültige Connector-Regel")
-    if priority<1 or priority>5: raise ValueError("Priorität muss zwischen 1 und 5 liegen")
-    if min_kw<0 or min_kw>500: raise ValueError("Mindestleistung ist ungültig")
-    if max_kw is not None and (max_kw<=0 or max_kw>1000 or max_kw<min_kw): raise ValueError("Maximalleistung ist ungültig")
-    with _lock,_connect() as conn:
-        c=conn.execute("SELECT max_power_kw FROM connectors WHERE charge_point_id=? AND connector_id=?",(cp_id,connector_id)).fetchone()
-        if not c: raise ValueError("Connector nicht gefunden")
-        conn.execute("""INSERT INTO smart_charging_connectors(charge_point_id,connector_id,enabled,priority,min_kw,max_kw) VALUES(?,?,?,?,?,?)
-                        ON CONFLICT(charge_point_id,connector_id) DO UPDATE SET enabled=excluded.enabled,priority=excluded.priority,min_kw=excluded.min_kw,max_kw=excluded.max_kw""",(cp_id,connector_id,1 if enabled else 0,priority,min_kw,max_kw))
-        conn.commit()
-    return True
-
-def update_smart_connector_result(cp_id,connector_id,allocated_kw,status,response=None,profile_id=None,applied=False):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("""INSERT INTO smart_charging_connectors(charge_point_id,connector_id,allocated_kw,last_status,last_response,last_attempt_at,last_applied_at,profile_id) VALUES(?,?,?,?,?,?,?,?)
-                        ON CONFLICT(charge_point_id,connector_id) DO UPDATE SET allocated_kw=excluded.allocated_kw,last_status=excluded.last_status,last_response=excluded.last_response,last_attempt_at=excluded.last_attempt_at,last_applied_at=CASE WHEN ? THEN excluded.last_applied_at ELSE smart_charging_connectors.last_applied_at END,profile_id=excluded.profile_id""",
-                     (cp_id,int(connector_id),allocated_kw,status,response,now,now if applied else None,profile_id,1 if applied else 0)); conn.commit()
-
-def clear_smart_connector_result(cp_id,connector_id,status="Bereit",response=None):
-    with _lock,_connect() as conn:
-        conn.execute("""UPDATE smart_charging_connectors SET allocated_kw=NULL,last_status=?,last_response=?,last_attempt_at=?,profile_id=NULL
-                        WHERE charge_point_id=? AND connector_id=?""",(status,response,utc_now(),str(cp_id),int(connector_id)))
-        conn.commit()
-
-def smart_charging_inputs():
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT t.id AS local_transaction_id,t.transaction_id AS ocpp_transaction_id,t.charge_point_id,t.connector_id,t.user_id,t.vehicle_id,u.name AS user_name,v.name AS vehicle_name,v.plate AS vehicle_plate,v.ac_power_kw,
-                                    c.max_power_kw AS connector_max_kw,c.power_kw AS live_power_kw,c.last_meter_at,cp.location,cp.vendor,cp.model,s.enabled,s.priority,s.min_kw,s.max_kw,s.allocated_kw,s.last_status,s.last_response,s.last_attempt_at,s.last_applied_at,s.profile_id
-                             FROM transactions t JOIN connectors c ON c.charge_point_id=t.charge_point_id AND c.connector_id=t.connector_id
-                             JOIN charge_points cp ON cp.id=t.charge_point_id
-                             LEFT JOIN smart_charging_connectors s ON s.charge_point_id=t.charge_point_id AND s.connector_id=t.connector_id
-                             LEFT JOIN users u ON u.id=t.user_id LEFT JOIN vehicles v ON v.id=t.vehicle_id
-                             WHERE t.status='Active' AND t.ended_at IS NULL ORDER BY t.charge_point_id,t.connector_id""").fetchall()
-        return [dict(r) for r in rows]
 
 def global_search(query,limit_per_group=6):
     q=str(query or "").strip(); limit=max(1,min(int(limit_per_group or 6),10))
