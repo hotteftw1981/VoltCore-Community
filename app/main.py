@@ -3027,6 +3027,175 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     return {"ok":True,"mode":"purged","removed":removed}
 
 
+class AchievementPayload(BaseModel):
+    name:str
+    description:str|None=None
+    icon:str|None="🏅"
+    metric:str="manual"
+    threshold:float|None=None
+    hidden:bool=False
+    system_secret:bool=False
+    active:bool=True
+    category:str="Allgemein"
+    rarity:str="common"
+    xp:int=50
+    tier_group:str|None=None
+    tier_name:str|None=None
+    tier_rank:int=0
+    leaderboard_enabled:bool=False
+
+class EventPayload(BaseModel):
+    name:str
+    description:str|None=None
+    metric:str="energy_kwh"
+    starts_at:str
+    ends_at:str
+    active:bool=True
+    min_sessions:int=0
+    min_session_kwh:float=0
+    reward_bonus_kwh:float=0
+    reward_valid_days:int|None=None
+    reward_bonus_enabled:bool|None=None
+    winner_badge_enabled:bool=False
+    winner_badge_name:str|None=None
+    winner_badge_icon:str|None=None
+    winner_badge_description:str|None=None
+
+class BonusGrantPayload(BaseModel):
+    user_id:int
+    amount_kwh:float
+    expires_at:str
+    note:str|None=None
+
+class BonusVoucherPayload(BaseModel):
+    code:str|None=None
+    amount_kwh:float
+    redeem_until:str|None=None
+    bonus_valid_days:int|None=None
+    max_redemptions:int=1
+    note:str|None=None
+    active:bool=True
+
+@app.get("/api/engagement")
+async def api_engagement():
+    return {
+        "achievements":db.list_achievements(),
+        "events":db.list_gamification_events(),
+        "users":[{"id":u["id"],"name":u["name"],"gamification_enabled":bool(u.get("gamification_enabled",1))} for u in db.list_users_rich() if u.get("status")=="Aktiv"],
+        "bonus_grants":db.list_bonus_grants(),
+        "vouchers":db.list_bonus_vouchers(),
+        "bonus_policy":db.bonus_policy_settings(),
+        "leaderboard_metrics":db.leaderboard_metric_catalog(),
+        "gamification_overview":db.gamification_overview(),
+    }
+
+@app.get("/api/engagement/leaderboards")
+async def api_general_leaderboard(period:str="month",metric:str="energy_kwh"):
+    try: return db.general_leaderboard(period,metric)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.post("/api/engagement/bonus")
+async def api_grant_bonus(payload:BonusGrantPayload):
+    try:
+        gid=db.grant_bonus_kwh(payload.user_id,payload.amount_kwh,payload.expires_at,"admin",payload.note)
+        db.refresh_local_list_for_user(payload.user_id)
+        _schedule_local_list_sync("Bonusguthaben geändert")
+        return {"ok":True,"grant_id":gid}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.delete("/api/engagement/bonus/{grant_id}")
+async def api_revoke_bonus(grant_id:int):
+    try:
+        grant=next((g for g in db.list_bonus_grants(limit=1000) if int(g.get("id") or 0)==int(grant_id)),None)
+        if not db.revoke_bonus_grant(grant_id): raise HTTPException(404,"Bonusguthaben nicht gefunden")
+        if grant and grant.get("user_id") is not None:
+            db.refresh_local_list_for_user(int(grant["user_id"]))
+            _schedule_local_list_sync("Bonusguthaben widerrufen")
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    return {"ok":True}
+
+@app.post("/api/engagement/vouchers")
+async def api_create_voucher(payload:BonusVoucherPayload):
+    code=(payload.code or f"{db.branding_settings()['voucher_prefix']}-{secrets.token_hex(4).upper()}").strip().upper()
+    try:
+        vid=db.create_bonus_voucher(code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
+        return {"ok":True,"voucher_id":vid,"code":code}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.post("/api/engagement/vouchers/{voucher_id}/active")
+async def api_voucher_active(voucher_id:int,payload:dict):
+    if not db.set_bonus_voucher_active(voucher_id,bool(payload.get("active"))): raise HTTPException(404,"Gutschein nicht gefunden")
+    return {"ok":True}
+
+@app.put("/api/engagement/vouchers/{voucher_id}")
+async def api_update_voucher(voucher_id:int,payload:BonusVoucherPayload):
+    try:
+        ok=db.update_bonus_voucher(voucher_id,payload.code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
+    except ValueError as exc: raise HTTPException(409,str(exc))
+    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
+    return {"ok":True}
+
+
+@app.delete("/api/engagement/vouchers/{voucher_id}")
+async def api_delete_voucher(voucher_id:int):
+    try: ok=db.delete_bonus_voucher(voucher_id)
+    except ValueError as exc: raise HTTPException(409,str(exc))
+    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
+    return {"ok":True}
+
+
+@app.post("/api/engagement/achievements")
+async def api_create_achievement(payload:AchievementPayload):
+    try: aid=db.create_achievement(**payload.model_dump()); return {"id":aid}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.put("/api/engagement/achievements/{achievement_id}")
+async def api_update_achievement(achievement_id:int,payload:AchievementPayload):
+    try:
+        if not db.update_achievement(achievement_id,**payload.model_dump()): raise HTTPException(404,"Achievement nicht gefunden")
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    return {"ok":True}
+
+@app.post("/api/engagement/achievements/{achievement_id}/award/{user_id}")
+async def api_award_achievement(achievement_id:int,user_id:int):
+    try: db.award_achievement(user_id,achievement_id,"manual"); return {"ok":True}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.delete("/api/engagement/achievements/{achievement_id}/award/{user_id}")
+async def api_revoke_achievement(achievement_id:int,user_id:int):
+    if not db.revoke_achievement(user_id,achievement_id): raise HTTPException(404,"Auszeichnung nicht gefunden")
+    return {"ok":True}
+
+@app.post("/api/engagement/events/preview")
+async def api_preview_event(payload:EventPayload):
+    try: return db.preview_gamification_event(**payload.model_dump())
+    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
+
+@app.post("/api/engagement/events")
+async def api_create_event(payload:EventPayload):
+    try: eid=db.create_gamification_event(**payload.model_dump()); return {"id":eid}
+    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
+
+@app.put("/api/engagement/events/{event_id}")
+async def api_update_event(event_id:int,payload:EventPayload):
+    try:
+        if not db.update_gamification_event(event_id,**payload.model_dump()): raise HTTPException(404,"Event nicht gefunden")
+        return {"ok":True}
+    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
+
+@app.post("/api/engagement/events/{event_id}/active")
+async def api_event_active(event_id:int,payload:dict):
+    try:
+        if not db.set_gamification_event_active(event_id,bool(payload.get("active"))): raise HTTPException(404,"Event nicht gefunden")
+        return {"ok":True}
+    except ValueError as exc: raise HTTPException(400,str(exc))
+
+@app.get("/api/engagement/events/{event_id}")
+async def api_event_detail(event_id:int):
+    data=db.gamification_event_detail(event_id)
+    if not data: raise HTTPException(404,"Event nicht gefunden")
+    return data
+
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
     if not db.assign_user_vehicle(user_id, vehicle_id): raise HTTPException(400,"Fahrzeug konnte nicht zugeordnet werden")
