@@ -59,7 +59,6 @@ The Community edition includes, among other things:
 - 🧾 charging session history
 - 🔗 basic user / vehicle / RFID assignment
 - 📊 dashboard
-- 🖥️ basic LiveView
 - 📈 basic reports
 - 📄 CSV export
 - 💾 backup / restore
