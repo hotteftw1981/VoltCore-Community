@@ -37,5 +37,26 @@ jobs:
           mkdir -p "$DATA_DIR"
           python -c "import app.main; print('VoltCore Community import OK:', app.main.APP_VERSION)"
 
+      - name: Check route and template integrity
+        run: |
+          python - <<'PY'
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          main = Path("app/main.py").read_text(encoding="utf-8")
+          routes = re.findall(r'@app\.(get|post|put|delete|patch)\("([^"]+)"', main)
+          duplicates = [f"{method.upper()} {path}" for (method, path), count in Counter(routes).items() if count > 1]
+          if duplicates:
+              raise SystemExit("Duplicate routes: " + ", ".join(duplicates))
+
+          templates = set(re.findall(r'render\(request,\s*"([^"]+\.html)"', main))
+          missing = sorted(name for name in templates if not (Path("app/templates") / name).is_file())
+          if missing:
+              raise SystemExit("Missing templates: " + ", ".join(missing))
+
+          print(f"Route/template integrity OK: {len(routes)} routes, {len(templates)} rendered templates")
+          PY
+
       - name: Run tests
         run: python -m unittest discover -s tests -p 'test_*.py'
