@@ -38,17 +38,7 @@ from . import mailer
 from . import totp
 from . import updates
 from . import web_push
-from .ladecloud_import import parse_ladecloud_xlsx
-from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
-try:
-    from .ocpp_server import register_smart_charging_trigger, sync_local_list, sync_pending_local_lists
-except ImportError:  # compatibility for isolated legacy test stubs
-    def register_smart_charging_trigger(callback):
-        return None
-    async def sync_local_list(*args,**kwargs):
-        return {"ok":False,"status":"Nicht verfügbar"}
-    async def sync_pending_local_lists(*args,**kwargs):
-        return []
+from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization, sync_local_list, sync_pending_local_lists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
@@ -76,23 +66,8 @@ BERLIN_TZ = ZoneInfo("Europe/Berlin")
 APP_STARTED_AT = datetime.now(timezone.utc)
 OPERATIONAL_STARTUP_GRACE_SECONDS = 90
 
-# V0.9.7.16: Smart Charging can rebalance immediately after relevant OCPP
-# lifecycle events. The periodic worker remains as a safety net.
-SMART_REBALANCE_EVENT = None
-SMART_REBALANCE_REASON = "Start"
-SMART_CHARGING_RUNTIME = {
-    "last_rebalance_at": None, "last_trigger": "Noch nicht ausgeführt",
-    "available_kw": 0.0, "fixed_load_kw": 0.0, "allocations": [],
-}
 LIVEVIEW_PEOPLE_CACHE = {}
 LIVEVIEW_PEOPLE_CACHE_SECONDS = 30
-
-def _request_smart_rebalance(reason="OCPP-Ereignis"):
-    global SMART_REBALANCE_REASON
-    SMART_REBALANCE_REASON = str(reason or "OCPP-Ereignis")[:180]
-    event = SMART_REBALANCE_EVENT
-    if event is not None:
-        event.set()
 
 def _local_dt(value):
     if not value:
@@ -136,234 +111,6 @@ async def _send_admin_mail(template_key, event_key, context=None, cooldown_minut
         logging.exception("Admin mail failed: %s",template_key)
         return {"ok":False,"error":f"{type(exc).__name__}: {exc}"}
 
-
-
-async def _deliver_portal_pin_reset_mails(user, request_id, reset_url, base_url):
-    mail_ok=False
-    try:
-        await asyncio.to_thread(mailer.send_template,"pin_reset",user["email"],{"name":user["name"],"reset_url":reset_url},base_url)
-        db.mark_portal_pin_reset_mail_sent(request_id); mail_ok=True
-    except Exception as exc:
-        logging.warning("Portal PIN reset mail failed for user %s: %s: %s",user["id"],type(exc).__name__,exc)
-    db.create_notification(
-        f"pin-reset:{request_id}","info" if mail_ok else "warning","PIN-Reset angefordert",
-        f"{user['name']} · {'Reset-Mail versendet' if mail_ok else 'E-Mail konnte nicht versendet werden'}",
-        "/users",audience="admin",source="event")
-    await _send_admin_mail("pin_reset_admin","pin_reset_admin",{
-        "name":user["name"],
-        "detail":"Reset-Mail wurde versendet. Die bisherige PIN bleibt bis zur erfolgreichen Änderung gültig." if mail_ok else "Die Anfrage ist gültig, aber die Reset-Mail konnte nicht versendet werden. Bitte SMTP prüfen.",
-        "admin_url":base_url+"/users"
-    },base_url=base_url)
-
-
-async def _event_reward_worker():
-    while True:
-        try:
-            db.finalize_ended_gamification_events()
-            if db.refresh_local_list_for_month():
-                _schedule_local_list_sync("Monatswechsel / Ladebudget aktualisiert")
-        except Exception:
-            logging.exception("Event reward / LocalList month refresh failed")
-        await asyncio.sleep(60)
-
-
-def _smart_allocations(rows, available_kw):
-    """Weighted, bounded allocation for active connectors. Priority 5 is highest."""
-    items=[]
-    for raw in rows:
-        r=dict(raw)
-        connector_cap=float(r.get("connector_max_kw") or 22)
-        vehicle_cap=float(r.get("ac_power_kw") or 0)
-        configured_cap=float(r.get("max_kw") or 0)
-        cap=connector_cap
-        if vehicle_cap>0: cap=min(cap,vehicle_cap)
-        if configured_cap>0: cap=min(cap,configured_cap)
-        cap=max(0.0,cap)
-        minimum=max(0.0,min(float(r.get("min_kw") or 0),cap))
-        priority=max(1,min(5,int(r.get("priority") or 3)))
-        r.update({"cap_kw":cap,"minimum_kw":minimum,"priority":priority,"desired_kw":0.0})
-        items.append(r)
-    remaining=max(0.0,float(available_kw or 0))
-    # Reserve requested minimums by priority class. If there is not enough site
-    # capacity, the affected class shares what remains proportionally.
-    for priority in range(5,0,-1):
-        group=[x for x in items if x["priority"]==priority and x["cap_kw"]>0]
-        need=sum(x["minimum_kw"] for x in group)
-        if not group or need<=0: continue
-        if remaining>=need:
-            for x in group: x["desired_kw"]=x["minimum_kw"]
-            remaining-=need
-        else:
-            ratio=(remaining/need) if need else 0
-            for x in group: x["desired_kw"]=x["minimum_kw"]*ratio
-            remaining=0.0
-            break
-    # Weighted fair share for all remaining headroom.
-    for _ in range(12):
-        open_items=[x for x in items if x["cap_kw"]-x["desired_kw"]>0.01]
-        if remaining<=0.01 or not open_items: break
-        total_weight=sum(x["priority"] for x in open_items) or 1
-        before=remaining
-        grants=[]
-        for x in open_items:
-            share=before*(x["priority"]/total_weight)
-            grant=min(share,x["cap_kw"]-x["desired_kw"]); grants.append((x,grant))
-        used=sum(g for _,g in grants)
-        if used<=0.001: break
-        for x,g in grants: x["desired_kw"]+=g
-        remaining=max(0.0,remaining-used)
-    for x in items:
-        x["desired_kw"]=round(max(0.0,min(x["desired_kw"],x["cap_kw"])),2)
-        desired=x["desired_kw"]; cap=x["cap_kw"]; minimum=x["minimum_kw"]; priority=x["priority"]
-        x["curtailed_kw"]=round(max(0.0,cap-desired),2)
-        if cap <= 0.01:
-            reason="Keine regelbare Leistung verfügbar"
-        elif desired >= cap-0.05:
-            reason="Volle freigegebene Leistung"
-        elif desired < minimum-0.05:
-            reason="Standortlimit knapp – Mindestleistung anteilig reduziert"
-        elif priority >= 4:
-            reason=f"Priorität {priority} – bei Standortlimit bevorzugt verteilt"
-        elif priority <= 2:
-            reason=f"Priorität {priority} – Restleistung nach höherer Priorität"
-        else:
-            reason="Standortlimit aktiv – Leistung fair verteilt"
-        x["allocation_reason"]=reason
-    return items
-
-
-async def _rebalance_smart_charging(force=False, trigger="Intervall"):
-    global SMART_CHARGING_RUNTIME
-    settings=db.smart_charging_settings()
-    policies=db.list_smart_charging_connectors()
-    active=db.smart_charging_inputs()
-    active_keys={(str(x["charge_point_id"]),int(x["connector_id"])) for x in active}
-    # Smart Charging is opt-in. When disabled, remove only profiles previously
-    # created by this backend and never touch unrelated charger profiles.
-    if not settings["enabled"]:
-        for p in policies:
-            if p.get("profile_id") is None and p.get("allocated_kw") is None:
-                continue
-            try:
-                if is_connected(p["charge_point_id"]) and p.get("profile_id") is not None:
-                    await remote_command(p["charge_point_id"],"clear_charging_profile",profile_id=int(p["profile_id"]))
-                db.clear_smart_connector_result(p["charge_point_id"],p["connector_id"],"Lastmanagement deaktiviert")
-            except Exception as exc:
-                db.update_smart_connector_result(p["charge_point_id"],p["connector_id"],None,"Profil konnte nicht entfernt werden",str(exc),p.get("profile_id"),False)
-        SMART_CHARGING_RUNTIME={"last_rebalance_at":datetime.now(timezone.utc).isoformat(),"last_trigger":trigger,"available_kw":0.0,"fixed_load_kw":0.0,"allocations":[],"enabled":False}
-        return {"enabled":False,"active":len(active),"available_kw":0.0,"fixed_load_kw":0.0,"allocations":[],"trigger":trigger}
-
-    site_limit=max(0.0,float(settings["site_limit_kw"]))
-    reserve=max(0.0,float(settings["reserve_kw"]))
-    controllable=[]
-    fixed_load=0.0
-
-    # Sessions that cannot currently be controlled must still reserve capacity.
-    # Prefer a fresh measured load; otherwise reserve the conservative connector /
-    # vehicle / configured cap so an offline or excluded session cannot make the
-    # allocator promise more power than the configured site limit.
-    for row in active:
-        enabled=int(row.get("enabled") if row.get("enabled") is not None else 1)==1
-        online=is_connected(str(row["charge_point_id"]))
-        if enabled and online:
-            controllable.append(row)
-            continue
-        caps=[float(row.get("connector_max_kw") or 22.0)]
-        if float(row.get("ac_power_kw") or 0)>0:
-            caps.append(float(row["ac_power_kw"]))
-        if float(row.get("max_kw") or 0)>0:
-            caps.append(float(row["max_kw"]))
-        conservative=max(0.0,min(caps))
-        age=_live_age_seconds(row.get("last_meter_at"))
-        measured=float(row.get("live_power_kw") or 0)
-        fixed_load += measured if measured>=0 and age is not None and age<=90 else conservative
-
-    available=max(0.0,site_limit-reserve-fixed_load)
-    allocations=_smart_allocations(controllable,available)
-    allocation_by_key={(str(x["charge_point_id"]),int(x["connector_id"])):x for x in allocations}
-    active_by_key={(str(x["charge_point_id"]),int(x["connector_id"])):x for x in active}
-
-    # Clean up ended sessions and explicitly unmanaged online connectors. Offline
-    # connectors retain the profile id because we cannot confirm profile removal.
-    for p in policies:
-        key=(str(p["charge_point_id"]),int(p["connector_id"]))
-        row=active_by_key.get(key)
-        if key in allocation_by_key:
-            continue
-        if row is None:
-            if p.get("profile_id") is None and p.get("allocated_kw") is None:
-                continue
-            try:
-                if is_connected(p["charge_point_id"]) and p.get("profile_id") is not None:
-                    await remote_command(p["charge_point_id"],"clear_charging_profile",profile_id=int(p["profile_id"]))
-                db.clear_smart_connector_result(p["charge_point_id"],p["connector_id"],"Bereit")
-            except Exception as exc:
-                db.update_smart_connector_result(p["charge_point_id"],p["connector_id"],None,"Profil konnte nicht entfernt werden",str(exc),p.get("profile_id"),False)
-            continue
-
-        enabled=int(row.get("enabled") if row.get("enabled") is not None else 1)==1
-        online=is_connected(str(row["charge_point_id"]))
-        if not online:
-            db.update_smart_connector_result(row["charge_point_id"],row["connector_id"],None,"Offline – nicht regelbar","Kapazität konservativ im Standortlimit reserviert",p.get("profile_id"),False)
-            continue
-        if not enabled:
-            try:
-                if p.get("profile_id") is not None:
-                    await remote_command(p["charge_point_id"],"clear_charging_profile",profile_id=int(p["profile_id"]))
-                db.clear_smart_connector_result(p["charge_point_id"],p["connector_id"],"Manuell – nicht geregelt")
-            except Exception as exc:
-                db.update_smart_connector_result(p["charge_point_id"],p["connector_id"],None,"Profil konnte nicht entfernt werden",str(exc),p.get("profile_id"),False)
-
-    for item in allocations:
-        cp_id=str(item["charge_point_id"]); connector=int(item["connector_id"]); desired=float(item["desired_kw"])
-        previous=item.get("allocated_kw"); previous=float(previous) if previous is not None else None
-        profile_id=int(item.get("profile_id") or (700000+int(item["local_transaction_id"])))
-        if not force and previous is not None and abs(previous-desired)<float(settings.get("min_change_kw") or 0.5) and str(item.get("last_status") or "").startswith("Aktiv"):
-            continue
-        try:
-            response=await remote_command(cp_id,"set_charging_profile",connector_id=connector,limit_kw=desired,transaction_id=item.get("ocpp_transaction_id"),profile_id=profile_id)
-            status=str(response.get("status") or "Unknown")
-            accepted=bool(response.get("accepted"))
-            label=(f"Aktiv · {desired:.1f} kW" if accepted else ("Nicht unterstützt" if status.casefold() in {"notsupported","not_supported"} else f"Abgelehnt · {status}"))
-            db.update_smart_connector_result(cp_id,connector,desired if accepted else None,label,status,profile_id,accepted)
-        except Exception as exc:
-            logging.warning("Smart Charging %s/C%s failed: %s",cp_id,connector,exc)
-            db.update_smart_connector_result(cp_id,connector,None,"Fehler – nicht angewendet",str(exc),profile_id,False)
-    SMART_CHARGING_RUNTIME={
-        "last_rebalance_at":datetime.now(timezone.utc).isoformat(),"last_trigger":trigger,
-        "available_kw":round(available,2),"fixed_load_kw":round(fixed_load,2),
-        "allocations":allocations,"enabled":True,
-    }
-    return {"enabled":True,"active":len(active),"available_kw":round(available,2),"fixed_load_kw":round(fixed_load,2),"allocations":allocations,"trigger":trigger}
-
-
-async def _smart_charging_worker(event):
-    global SMART_REBALANCE_REASON
-    first=True
-    while True:
-        try:
-            settings=db.smart_charging_settings()
-            delay=max(5,int(settings.get("rebalance_seconds") or 15))
-            if first:
-                first=False
-                trigger="Start"
-            else:
-                try:
-                    await asyncio.wait_for(event.wait(),timeout=delay)
-                    event.clear()
-                    # Short debounce: StartTransaction is commonly followed by a
-                    # StatusNotification. One profile update is enough.
-                    await asyncio.sleep(0.35)
-                    event.clear()
-                    trigger=SMART_REBALANCE_REASON or "OCPP-Ereignis"
-                except asyncio.TimeoutError:
-                    trigger="Intervall"
-            await _rebalance_smart_charging(trigger=trigger)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logging.exception("Smart Charging rebalance failed")
-            await asyncio.sleep(5)
 
 
 async def _diagnostic_worker():
@@ -455,32 +202,26 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 def render(request: Request, template_name: str, status_code: int = 200, **context):
     context.setdefault("app_version", APP_VERSION)
     context.setdefault("branding", db.branding_settings())
-    context.setdefault("registration", db.registration_settings())
     auth_user=getattr(request.state, "auth_user", None)
     context.setdefault("auth_user", auth_user)
-    if auth_user and auth_user.get("role")=="admin":
-        counts=db.access_request_counts()
-        context.setdefault("access_request_open_count",int(counts.get("new",0))+int(counts.get("review",0)))
-    else:
-        context.setdefault("access_request_open_count",0)
     return templates.TemplateResponse(request=request, name=template_name, context=context, status_code=status_code)
 
 
-SESSION_COOKIE = "drk_ocpp_session"
-TWO_FACTOR_COOKIE = "drk_ocpp_2fa"
+SESSION_COOKIE = "voltcore_community_session"
+TWO_FACTOR_COOKIE = "voltcore_community_2fa"
 SESSION_HOURS = int(os.getenv("SESSION_HOURS", "12"))
 TWO_FACTOR_CHALLENGE_MINUTES = max(2, int(os.getenv("TWO_FACTOR_CHALLENGE_MINUTES", "5")))
 TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "drk_charge_portal"
+PORTAL_COOKIE = "voltcore_community_portal"
 PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
 PORTAL_PIN_ITERATIONS = 180000
 PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal", "/api/public/portal/gamification-reveals/ack", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -583,7 +324,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/") or path.startswith("/api/integrations/fleet/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -594,12 +335,6 @@ def _activity_descriptor(method: str, path: str):
         return f"Systembenutzer {verb}", "Systembenutzer", path
     if path.startswith("/api/users") or path.startswith("/api/rfid") or path.startswith("/api/portal-admin"):
         return f"Ladebenutzer/RFID {verb}", "Ladebenutzer", path
-    if path.startswith("/api/access-requests"):
-        return f"Zugangsantrag {verb}", "Zugangsanträge", path
-    if path.startswith("/api/engagement"):
-        return f"Achievements/Events {verb}", "Engagement", path
-    if path.startswith("/api/import/"):
-        return f"Historienimport {verb}", "Datenimport", path
     if path.startswith("/api/remote-control/"):
         return f"OCPP-Fernsteuerung {verb}", "Remote-Steuerung", path
     if path.startswith("/api/security"):
@@ -617,10 +352,6 @@ def _activity_descriptor(method: str, path: str):
         return f"Update-Center {verb}", "Updates", path
     if path.startswith("/api/settings/"):
         return f"Systemeinstellung {verb}", "Einstellungen", path
-    if path.startswith("/api/cost-centers"):
-        return f"Kostenstelle {verb}", "Abrechnung", path
-    if path.startswith("/api/smart-charging/"):
-        return f"Lastmanagement {verb}", "Smart Charging", path
     if path.startswith("/api/vehicles"):
         return f"Fahrzeug {verb}", "Fahrzeuge", path
     if path.startswith("/api/charge-points"):
@@ -939,352 +670,6 @@ def _save_access_signature(data_url: str, request_id_hint: str = "new"):
 
 
 
-@app.get("/public/access-request", response_class=HTMLResponse)
-async def public_access_request_start_page(request:Request, sent:str|None=None):
-    cfg=db.registration_settings()
-    step="start" if cfg.get("enabled") else "disabled"
-    return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.post("/public/access-request/start", response_class=HTMLResponse)
-async def public_access_request_start(request:Request, email:str=Form(...)):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    email_key=str(email or "").strip().casefold()
-    if len(email_key)>254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+",email_key):
-        return render(request,"access_request.html",status_code=400,page="public",step="start",error="Bitte geben Sie eine gültige E-Mail-Adresse ein.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION)
-    mail_cfg=mailer.settings(False)
-    if not mail_cfg.get("enabled"):
-        configured=bool(mail_cfg.get("host") and mail_cfg.get("from_email"))
-        reason="Der E-Mail-Versand ist momentan deaktiviert." if configured else "Der E-Mail-Versand ist noch nicht vollständig eingerichtet."
-        return render(request,"access_request.html",status_code=503,page="public",step="start",error=f"Der Online-Antrag ist momentan nicht verfügbar. {reason} Bitte wenden Sie sich an die Administration.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION)
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest(); ip_hash=_client_hash(request)
-    if db.access_request_start_allowed(email_hash,ip_hash,10,5):
-        raw=secrets.token_urlsafe(32); token_hash=_session_hash(raw); expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-        db.create_access_request_verification(email_key,email_hash,ip_hash,token_hash,expires)
-        base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-        verify_url=f"{base}/public/access-request/form?token={raw}"
-        try:
-            await asyncio.to_thread(mailer.send_template,"access_verify",email_key,{"verify_url":verify_url},base)
-        except Exception as exc:
-            logging.exception("Access request verification mail failed")
-            return render(request,"access_request.html",status_code=502,page="public",step="start",error=f"Die Bestätigungs-E-Mail konnte nicht versendet werden. Bitte versuchen Sie es später erneut.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION)
-    return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
-
-
-@app.get("/public/access-request/form", response_class=HTMLResponse)
-async def public_access_request_form(request:Request, token:str=""):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    existing=db.get_user_by_email(record["email"])
-    return render(request,"access_request.html",page="public",step="form",token=token,verified_email=record["email"],existing_user=existing,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=[f for f in cfg.get("fields",[]) if f.get("enabled")])
-
-
-@app.post("/public/access-request/submit", response_class=HTMLResponse)
-async def public_access_request_submit(request:Request):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    form=await request.form(); token=str(form.get("token") or "")
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    active_fields=[f for f in cfg.get("fields",[]) if f.get("enabled")]
-    if not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    if db.get_user_by_email(record["email"]):
-        return render(request,"access_request.html",status_code=409,page="public",step="form",token=token,verified_email=record["email"],existing_user=db.get_user_by_email(record["email"]),error="Für diese bestätigte E-Mail-Adresse besteht bereits ein Ladebenutzer. Nutzen Sie bitte den bestehenden Ladeguthaben-Zugang bzw. „PIN vergessen?“.",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    values={}
-    for field in active_fields:
-        fid=str(field.get("id") or "")
-        if field.get("type")=="checkbox": value="1" if str(form.get(fid) or "").lower() in {"1","true","on","yes"} else ""
-        else: value=str(form.get(fid) or "").strip()
-        values[fid]=value
-        if field.get("required") and not value:
-            return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error=f"Bitte füllen Sie das Pflichtfeld „{field.get('label') or fid}“ aus.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    weekly_hours=values.get("weekly_hours")
-    if weekly_hours not in (None,""):
-        try:
-            weekly_hours=float(str(weekly_hours).replace(",","."))
-            if weekly_hours<0 or weekly_hours>168: raise ValueError()
-        except (TypeError,ValueError):
-            return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error="Bitte geben Sie gültige Wochenarbeitsstunden zwischen 0 und 168 an.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    if str(form.get("terms_accept") or "")!="1":
-        return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error="Bitte bestätigen Sie die Nutzungsbedingungen.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    signature_name=None
-    try:
-        signature_name=_save_access_signature(str(form.get("signature_data") or ""))
-        request_id=db.create_access_request(_session_hash(token),name=values.get("name",record["email"]),street=values.get("street",""),postal_code=values.get("postal_code",""),city=values.get("city",""),phone=values.get("phone",""),vehicle_make_model=values.get("vehicle_make_model",""),vehicle_plate=values.get("vehicle_plate",""),weekly_hours=weekly_hours,field_values_json=json.dumps(values,ensure_ascii=False),field_schema_json=json.dumps(active_fields,ensure_ascii=False),terms_version=ACCESS_TERMS_VERSION,terms_snapshot=json.dumps(ACCESS_TERMS,ensure_ascii=False),signature_path=signature_name,ip_hash=_client_hash(request))
-    except ValueError as exc:
-        if signature_name: (ACCESS_SIGNATURE_DIR/signature_name).unlink(missing_ok=True)
-        return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error=str(exc),form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    db.create_notification(f"access-request:{request_id}","info","Neuer Zugangsantrag",f"{str(values.get('name') or record['email']).strip()} · {record['email']}",f"/access-requests?open={request_id}",audience="admin",source="event")
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    try: await asyncio.to_thread(mailer.send_template,"access_received",record["email"],{"name":str(values.get("name") or record["email"]).strip()},base)
-    except Exception: logging.exception("Access request receipt mail failed")
-    detail=f"Wochenarbeitsstunden: {weekly_hours if weekly_hours is not None else 'nicht angegeben'} · Fahrzeug: {str(values.get('vehicle_make_model') or '').strip() or 'nicht angegeben'} · Kennzeichen: {str(values.get('vehicle_plate') or '').strip().upper() or 'nicht angegeben'}"
-    await _send_admin_mail("access_admin","access_requests",{"name":str(values.get("name") or record["email"]).strip(),"detail":detail,"admin_url":base+f"/access-requests?open={request_id}"},base_url=base)
-    return render(request,"access_request.html",page="public",step="done",request_id=request_id,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.get("/public/ladeguthaben", response_class=HTMLResponse)
-async def public_charging_budget_page(request: Request, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None, pin_reset: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        return render(request, "public_budgets.html", page="public", portal_user=None, portal_data=None, pin_reset_requested=(pin_reset=="requested"))
-    user_id=int(portal_user["id"])
-    data=db.portal_dashboard(user_id,period=period,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    active_rfid_count=db.active_rfid_count(user_id)
-    enrollment_points=db.rfid_enrollment_charge_points() if active_rfid_count < 2 else []
-    for cp in enrollment_points:
-        cp["connected"]=bool(is_connected(cp["id"]))
-        mode=str(cp.get("rfid_self_enroll_mode") or "auto")
-        cp["enrollment_available"]=mode!="disabled"
-        cp["enrollment_support_label"]="Deaktiviert · bitte Administration kontaktieren" if mode=="disabled" else ("RFID-Erkennung bestätigt" if cp.get("authorize_seen") or mode=="enabled" else "RFID-Erkennung noch nicht bestätigt")
-    enrollment_state=db.rfid_enrollment_status(user_id) if enrollment_points else None
-    return render(request, "public_budgets.html", page="public", portal_user=portal_user, portal_data=data, admin_preview=False, enrollment_points=enrollment_points, enrollment_state=enrollment_state, active_rfid_count=active_rfid_count, self_service_rfid_limit=2)
-
-
-@app.get("/admin/ladeguthaben/{user_id}", response_class=HTMLResponse)
-async def admin_charging_budget_page(request: Request, user_id: int, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None):
-    data=db.portal_dashboard(user_id,period=period,include_inactive=True,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    if not data: raise HTTPException(404,"Ladebenutzer nicht gefunden")
-    return render(request,"public_budgets.html",page="users",portal_user=data["user"],portal_data=data,admin_preview=True)
-
-
-@app.post("/public/ladeguthaben/login", response_class=HTMLResponse)
-async def public_charging_budget_login(request: Request, pin: str = Form(...)):
-    ip_hash=_portal_client_hash(request)
-    if db.portal_login_failures(ip_hash,10) >= PORTAL_MAX_FAILURES:
-        return render(request,"public_budgets.html",status_code=429,page="public",portal_user=None,portal_data=None,error="Zu viele Fehlversuche. Bitte in einigen Minuten erneut versuchen.")
-    pin=str(pin or "").strip()
-    matched=None
-    if len(pin)==6 and pin.isdigit():
-        for record in db.portal_pin_records():
-            if _portal_pin_ok(pin,record.get("portal_pin_hash") or ""):
-                matched=record; break
-    if not matched:
-        db.record_portal_login_attempt(ip_hash,False)
-        return render(request,"public_budgets.html",page="public",portal_user=None,portal_data=None,error="PIN nicht korrekt oder Portalzugang nicht aktiv.")
-    db.record_portal_login_attempt(ip_hash,True)
-    token=secrets.token_urlsafe(32); expires=datetime.now(timezone.utc)+timedelta(hours=PORTAL_SESSION_HOURS)
-    db.create_portal_session(_session_hash(token),int(matched["id"]),expires.isoformat())
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    response.set_cookie(PORTAL_COOKIE,token,max_age=PORTAL_SESSION_HOURS*3600,httponly=True,samesite="lax",secure=_cookie_secure(request),path="/")
-    return response
-
-
-@app.post("/public/ladeguthaben/pin-forgot")
-async def public_portal_pin_forgot(request:Request, background_tasks:BackgroundTasks, email:str=Form(...)):
-    email_key=str(email or "").strip().casefold()
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
-    ip_hash=_client_hash(request)
-    if db.portal_pin_reset_allowed(email_hash,ip_hash,60,5):
-        user=db.portal_user_for_reset_email(email_key)
-        req_id=db.record_portal_pin_reset_request(email_hash,ip_hash,int(user["id"]) if user else None,False)
-        if user:
-            raw_token=secrets.token_urlsafe(32)
-            token_hash=_session_hash(raw_token)
-            expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-            db.create_portal_pin_reset_token(int(user["id"]),token_hash,expires)
-            cfg=mailer.settings(False)
-            base=str(cfg.get("public_base_url") or str(request.base_url).rstrip("/"))
-            reset_url=f"{base}/public/ladeguthaben/pin-reset?token={raw_token}"
-            db.create_notification(f"pin-reset:{req_id}","info","PIN-Reset angefordert",f"{user['name']} · Reset-Mail wird verarbeitet","/users",audience="admin",source="event")
-            background_tasks.add_task(_deliver_portal_pin_reset_mails,dict(user),req_id,reset_url,base)
-    return RedirectResponse(url="/public/ladeguthaben?pin_reset=requested",status_code=303)
-
-
-@app.get("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_page(request:Request, token:str=""):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    return render(request,"portal_pin_reset.html",page="public",token=token if record else "",token_valid=bool(record),reset_done=False)
-
-
-@app.post("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_submit(request:Request, token:str=Form(...), pin:str=Form(...), pin_repeat:str=Form(...)):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist ungültig, abgelaufen oder wurde bereits verwendet.")
-    pin=str(pin or "").strip(); pin_repeat=str(pin_repeat or "").strip()
-    if pin!=pin_repeat:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die beiden PIN-Eingaben stimmen nicht überein.")
-    if len(pin)!=6 or not pin.isdigit():
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die neue PIN muss genau 6 Ziffern enthalten.")
-    for r in db.portal_pin_records(include_disabled=True):
-        if int(r["id"])!=int(record["user_id"]) and _portal_pin_ok(pin,r.get("portal_pin_hash") or ""):
-            return render(request,"portal_pin_reset.html",status_code=409,page="public",token=token,token_valid=True,reset_done=False,error="Diese PIN kann nicht verwendet werden. Bitte wählen Sie eine andere 6-stellige PIN.")
-    user_id=db.consume_portal_pin_reset_token(_session_hash(token),_portal_pin_hash(pin))
-    if not user_id:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist nicht mehr gültig.")
-    db.create_notification(f"pin-reset-complete:{user_id}:{int(datetime.now(timezone.utc).timestamp())}","info","Ladeguthaben-PIN geändert",f"{record['name']} hat die PIN über den Self-Service geändert.","/users",audience="admin",source="event")
-    return render(request,"portal_pin_reset.html",page="public",token="",token_valid=False,reset_done=True)
-
-
-@app.post("/public/ladeguthaben/voucher", response_class=HTMLResponse)
-async def public_redeem_voucher(request: Request, code: str = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        user_id=int(portal_user["id"])
-        result=db.redeem_bonus_voucher(user_id,code)
-        db.refresh_local_list_for_user(user_id)
-        _schedule_local_list_sync("Bonusgutschein eingelöst")
-        data=db.portal_dashboard(user_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden gutgeschrieben.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/bonus-transfer", response_class=HTMLResponse)
-async def public_transfer_bonus(request: Request, recipient_id: int = Form(...), amount_kwh: float = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        sender_id=int(portal_user["id"]); recipient_id=int(recipient_id)
-        result=db.transfer_bonus_kwh(sender_id,recipient_id,float(amount_kwh))
-        db.refresh_local_list_for_user(sender_id)
-        db.refresh_local_list_for_user(recipient_id)
-        _schedule_local_list_sync("Bonusguthaben übertragen")
-        data=db.portal_dashboard(sender_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden an {result['to_name']} übertragen.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/rfid/request")
-async def public_rfid_replacement_request(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        req_id=db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"replacement",note,False)
-        base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-        await _send_admin_mail("rfid_request","rfid_requests",{"name":portal_user.get("name"),"reason":"Neue RFID-Ersatzanfrage","detail":str(note or "Bitte Anfrage in der Benutzerverwaltung prüfen."),"admin_url":base+"/users#rfid-self-service"},base_url=base)
-        return RedirectResponse(url="/public/ladeguthaben?rfid=requested",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-@app.post("/public/ladeguthaben/rfid/lost")
-async def public_rfid_lost(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        req_id=db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"lost",note,True)
-        _schedule_local_list_sync("RFID als verloren gemeldet")
-        base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-        await _send_admin_mail("rfid_request","rfid_requests",{"name":portal_user.get("name"),"reason":"RFID-Karte als verloren gemeldet","detail":str(note or "Die Karte wurde sofort gesperrt. Bitte Ersatzanfrage prüfen."),"admin_url":base+"/users#rfid-self-service"},base_url=base)
-        return RedirectResponse(url="/public/ladeguthaben?rfid=lost",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/start")
-async def public_rfid_enroll_start(request:Request,payload:RFIDEnrollmentStartPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    cp_id=str(payload.charge_point_id or "").strip()
-    if not cp_id: raise HTTPException(400,"Bitte wählen Sie eine Ladesäule aus.")
-    if not is_connected(cp_id): raise HTTPException(409,"Diese Ladesäule ist aktuell nicht mit dem Backend verbunden. Bitte wählen Sie eine andere Säule oder wenden Sie sich an die Administration.")
-    try:
-        sid=db.start_rfid_enrollment(int(portal_user["id"]),cp_id,60)
-        state=db.rfid_enrollment_status(int(portal_user["id"]),sid) or {}
-        safe={k:v for k,v in state.items() if k!="candidate_uid"}
-        return {"ok":True,"session":safe,"seconds":60}
-    except ValueError as exc: raise HTTPException(409,str(exc))
-
-
-@app.get("/public/ladeguthaben/rfid/enroll/status")
-async def public_rfid_enroll_status(request:Request,session_id:int):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    state=db.rfid_enrollment_status(int(portal_user["id"]),session_id)
-    if not state: raise HTTPException(404,"Einlernvorgang nicht gefunden.")
-    safe={k:v for k,v in state.items() if k!="candidate_uid"}
-    cp=db.get_charge_point(state["charge_point_id"]) or {}
-    safe["charge_point_label"]=(cp.get("location") or cp.get("id") or state["charge_point_id"])
-    return {"ok":True,"session":safe}
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/confirm")
-async def public_rfid_enroll_confirm(request:Request,payload:RFIDEnrollmentConfirmPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try:
-        result=db.confirm_rfid_enrollment(int(portal_user["id"]),payload.session_id,bool(payload.accepted))
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if result.get("accepted"):
-        _schedule_local_list_sync("RFID-Chip per Self-Service angelernt")
-        db.create_notification(f"rfid-enrolled:{result['card_id']}","info","RFID-Chip selbst angelernt",f"{portal_user.get('name')} · {result.get('charge_point_id')}","/users",audience="admin",source="event")
-    result.pop("uid",None)
-    return result
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/cancel")
-async def public_rfid_enroll_cancel(request:Request,payload:dict):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try: sid=int(payload.get("session_id"))
-    except Exception: raise HTTPException(400,"Ungültiger Einlernvorgang.")
-    return {"ok":db.cancel_rfid_enrollment(int(portal_user["id"]),sid)}
-
-
-@app.post("/public/ladeguthaben/logout")
-async def public_charging_budget_logout(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    if token: db.delete_portal_session(_session_hash(token))
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303); response.delete_cookie(PORTAL_COOKIE,path="/"); return response
-
-
-@app.get("/api/public/charging-budgets")
-async def public_charging_budgets(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    data=db.portal_dashboard(int(portal_user["id"]),period=period)
-    return {"portal":data,"updated_at":datetime.now(timezone.utc).isoformat()}
-
-
-@app.get("/api/public/portal")
-async def api_public_portal(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    return db.portal_dashboard(int(portal_user["id"]),period=period)
-
-
-class PortalGamificationRevealAck(BaseModel):
-    award_id: int | None = None
-    level: int | None = None
-
-
-@app.post("/api/public/portal/gamification-reveals/ack")
-async def api_public_portal_gamification_reveals_ack(request: Request, payload: PortalGamificationRevealAck):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    ok=db.acknowledge_portal_gamification_reveals(
-        int(portal_user["id"]),award_id=payload.award_id,level=payload.level
-    )
-    if not ok:
-        raise HTTPException(404,"Ladebenutzer nicht gefunden")
-    return {"ok":True}
-
-
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
@@ -1349,34 +734,9 @@ async def vehicles_page(request: Request):
     return render(request, "vehicles.html", page="vehicles")
 
 
-@app.get("/access-requests", response_class=HTMLResponse)
-async def access_requests_page(request:Request):
-    return render(request,"access_requests.html",page="access-requests",counts=db.access_request_counts())
-
-
-@app.get("/registration-onboarding", response_class=HTMLResponse)
-async def registration_onboarding_page(request:Request):
-    return render(request,"registration_onboarding.html",page="registration-onboarding")
-
-
 @app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request):
     return render(request, "users.html", page="users")
-
-
-@app.get("/engagement", response_class=HTMLResponse)
-async def engagement_page(request: Request):
-    return render(request,"engagement.html",page="engagement")
-
-
-@app.get("/imports", response_class=HTMLResponse)
-async def imports_page(request: Request):
-    return render(request, "imports.html", page="imports")
-
-
-@app.get("/load-management", response_class=HTMLResponse)
-async def load_page(request: Request):
-    return render(request, "load_management.html", page="load-management")
 
 
 @app.get("/reports", response_class=HTMLResponse)
@@ -1808,11 +1168,6 @@ async def security_page(request: Request):
 @app.get("/tariffs", response_class=HTMLResponse)
 async def tariffs_page(request: Request):
     return render(request, "tariffs.html", page="tariffs")
-
-
-@app.get("/cost-centers", response_class=HTMLResponse)
-async def cost_centers_page(request: Request):
-    return render(request, "cost_centers.html", page="cost-centers")
 
 
 @app.get("/health")
@@ -3555,175 +2910,6 @@ async def portal_admin_enabled(user_id:int,payload:dict):
     if not db.set_user_portal_enabled(user_id,bool(payload.get("enabled"))): raise HTTPException(404,"Benutzer nicht gefunden")
     return {"ok":True}
 
-class AchievementPayload(BaseModel):
-    name:str
-    description:str|None=None
-    icon:str|None="🏅"
-    metric:str="manual"
-    threshold:float|None=None
-    hidden:bool=False
-    system_secret:bool=False
-    active:bool=True
-    category:str="Allgemein"
-    rarity:str="common"
-    xp:int=50
-    tier_group:str|None=None
-    tier_name:str|None=None
-    tier_rank:int=0
-    leaderboard_enabled:bool=False
-
-class EventPayload(BaseModel):
-    name:str
-    description:str|None=None
-    metric:str="energy_kwh"
-    starts_at:str
-    ends_at:str
-    active:bool=True
-    min_sessions:int=0
-    min_session_kwh:float=0
-    reward_bonus_kwh:float=0
-    reward_valid_days:int|None=None
-    reward_bonus_enabled:bool|None=None
-    winner_badge_enabled:bool=False
-    winner_badge_name:str|None=None
-    winner_badge_icon:str|None=None
-    winner_badge_description:str|None=None
-
-class BonusGrantPayload(BaseModel):
-    user_id:int
-    amount_kwh:float
-    expires_at:str
-    note:str|None=None
-
-class BonusVoucherPayload(BaseModel):
-    code:str|None=None
-    amount_kwh:float
-    redeem_until:str|None=None
-    bonus_valid_days:int|None=None
-    max_redemptions:int=1
-    note:str|None=None
-    active:bool=True
-
-@app.get("/api/engagement")
-async def api_engagement():
-    return {
-        "achievements":db.list_achievements(),
-        "events":db.list_gamification_events(),
-        "users":[{"id":u["id"],"name":u["name"],"gamification_enabled":bool(u.get("gamification_enabled",1))} for u in db.list_users_rich() if u.get("status")=="Aktiv"],
-        "bonus_grants":db.list_bonus_grants(),
-        "vouchers":db.list_bonus_vouchers(),
-        "bonus_policy":db.bonus_policy_settings(),
-        "leaderboard_metrics":db.leaderboard_metric_catalog(),
-        "gamification_overview":db.gamification_overview(),
-    }
-
-@app.get("/api/engagement/leaderboards")
-async def api_general_leaderboard(period:str="month",metric:str="energy_kwh"):
-    try: return db.general_leaderboard(period,metric)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/bonus")
-async def api_grant_bonus(payload:BonusGrantPayload):
-    try:
-        gid=db.grant_bonus_kwh(payload.user_id,payload.amount_kwh,payload.expires_at,"admin",payload.note)
-        db.refresh_local_list_for_user(payload.user_id)
-        _schedule_local_list_sync("Bonusguthaben geändert")
-        return {"ok":True,"grant_id":gid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/bonus/{grant_id}")
-async def api_revoke_bonus(grant_id:int):
-    try:
-        grant=next((g for g in db.list_bonus_grants(limit=1000) if int(g.get("id") or 0)==int(grant_id)),None)
-        if not db.revoke_bonus_grant(grant_id): raise HTTPException(404,"Bonusguthaben nicht gefunden")
-        if grant and grant.get("user_id") is not None:
-            db.refresh_local_list_for_user(int(grant["user_id"]))
-            _schedule_local_list_sync("Bonusguthaben widerrufen")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/vouchers")
-async def api_create_voucher(payload:BonusVoucherPayload):
-    code=(payload.code or f"{db.branding_settings()['voucher_prefix']}-{secrets.token_hex(4).upper()}").strip().upper()
-    try:
-        vid=db.create_bonus_voucher(code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-        return {"ok":True,"voucher_id":vid,"code":code}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/vouchers/{voucher_id}/active")
-async def api_voucher_active(voucher_id:int,payload:dict):
-    if not db.set_bonus_voucher_active(voucher_id,bool(payload.get("active"))): raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-@app.put("/api/engagement/vouchers/{voucher_id}")
-async def api_update_voucher(voucher_id:int,payload:BonusVoucherPayload):
-    try:
-        ok=db.update_bonus_voucher(voucher_id,payload.code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.delete("/api/engagement/vouchers/{voucher_id}")
-async def api_delete_voucher(voucher_id:int):
-    try: ok=db.delete_bonus_voucher(voucher_id)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.post("/api/engagement/achievements")
-async def api_create_achievement(payload:AchievementPayload):
-    try: aid=db.create_achievement(**payload.model_dump()); return {"id":aid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/achievements/{achievement_id}")
-async def api_update_achievement(achievement_id:int,payload:AchievementPayload):
-    try:
-        if not db.update_achievement(achievement_id,**payload.model_dump()): raise HTTPException(404,"Achievement nicht gefunden")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_award_achievement(achievement_id:int,user_id:int):
-    try: db.award_achievement(user_id,achievement_id,"manual"); return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_revoke_achievement(achievement_id:int,user_id:int):
-    if not db.revoke_achievement(user_id,achievement_id): raise HTTPException(404,"Auszeichnung nicht gefunden")
-    return {"ok":True}
-
-@app.post("/api/engagement/events/preview")
-async def api_preview_event(payload:EventPayload):
-    try: return db.preview_gamification_event(**payload.model_dump())
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events")
-async def api_create_event(payload:EventPayload):
-    try: eid=db.create_gamification_event(**payload.model_dump()); return {"id":eid}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/events/{event_id}")
-async def api_update_event(event_id:int,payload:EventPayload):
-    try:
-        if not db.update_gamification_event(event_id,**payload.model_dump()): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events/{event_id}/active")
-async def api_event_active(event_id:int,payload:dict):
-    try:
-        if not db.set_gamification_event_active(event_id,bool(payload.get("active"))): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.get("/api/engagement/events/{event_id}")
-async def api_event_detail(event_id:int):
-    data=db.gamification_event_detail(event_id)
-    if not data: raise HTTPException(404,"Event nicht gefunden")
-    return data
-
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
     if not db.assign_user_vehicle(user_id, vehicle_id): raise HTTPException(400,"Fahrzeug konnte nicht zugeordnet werden")
@@ -3823,100 +3009,6 @@ async def api_rfid_local_list_offline_auth(payload: dict):
     if result.get("offline"):
         raise HTTPException(409,result.get("detail") or "Ladepunkt ist offline")
     return {"ok":bool(result.get("ok")),"result":result}
-
-
-IMPORT_DIR = db.DATA_DIR / "imports"
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_IMPORT_BYTES = 20 * 1024 * 1024
-
-
-def _import_file(token: str):
-    token=str(token or "").strip()
-    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
-        raise HTTPException(400,"Ungültiger Import-Token")
-    path=IMPORT_DIR / f"ladecloud-{token}.xlsx"
-    if not path.exists(): raise HTTPException(404,"Importdatei nicht mehr verfügbar. Bitte erneut hochladen.")
-    return path
-
-
-def _suggest_import_users(parsed_users):
-    backend=db.list_users_rich(); cards={str(c.get("uid")):c for c in db.list_rfid_cards()}
-    result=[]
-    for src in parsed_users:
-        tag=str(src["rfid_tag"]); source_name=str(src.get("source_user_name") or "").strip(); suggestion=None; reason=None
-        card=cards.get(tag)
-        if card and card.get("user_id"):
-            suggestion=int(card["user_id"]); reason="RFID bereits zugeordnet"
-        else:
-            key=source_name.casefold(); scored=[]
-            for u in backend:
-                name=str(u.get("name") or "").strip(); cf=name.casefold(); tokens=[x for x in cf.replace("-"," ").split() if x]
-                score=100 if cf==key else 90 if tokens and tokens[-1]==key else 80 if key and key in tokens else 50 if key and key in cf else 0
-                if score: scored.append((score,int(u["id"]),name))
-            scored.sort(reverse=True)
-            if scored and (len(scored)==1 or scored[0][0] > scored[1][0]): suggestion=scored[0][1]; reason="Name automatisch erkannt"
-        item=dict(src); item["suggested_user_id"]=suggestion; item["suggestion_reason"]=reason; result.append(item)
-    return result
-
-
-@app.post("/api/import/ladecloud/preview")
-async def ladecloud_import_preview(file: UploadFile = File(...)):
-    if not str(file.filename or "").lower().endswith(".xlsx"):
-        raise HTTPException(400,"Bitte einen XLSX-Export aus lade.cloud auswählen.")
-    data=await file.read(MAX_IMPORT_BYTES+1)
-    if len(data)>MAX_IMPORT_BYTES: raise HTTPException(413,"Die Importdatei darf maximal 20 MB groß sein.")
-    try: parsed=parse_ladecloud_xlsx(data)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    token=secrets.token_hex(16); (IMPORT_DIR/f"ladecloud-{token}.xlsx").write_bytes(data)
-    return {
-        "token":token,"sessions":parsed["sessions"],"energy_kwh":parsed["energy_kwh"],"first_at":parsed["first_at"],"last_at":parsed["last_at"],
-        "users":_suggest_import_users(parsed["users"]),"charge_points":parsed["charge_points"],"backend_users":[{"id":u["id"],"name":u["name"],"status":u["status"]} for u in db.list_users_rich()],
-        "backend_charge_points":[{"id":c["id"],"vendor":c.get("vendor"),"model":c.get("model"),"location":c.get("location")} for c in db.list_charge_points() if int(c.get("ignored") or 0)==0],
-        "warnings":parsed["warnings"],"existing_import":db.import_history_stats("lade.cloud"),
-    }
-
-
-@app.post("/api/import/ladecloud/execute")
-async def ladecloud_import_execute(payload: dict):
-    path=_import_file(payload.get("token"))
-    try: parsed=parse_ladecloud_xlsx(path.read_bytes())
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    user_mapping=payload.get("user_mapping") or {}; cp_mapping=payload.get("charge_point_mapping") or {}
-    missing_users=[u["rfid_tag"] for u in parsed["users"] if str(u["rfid_tag"]) not in user_mapping]
-    missing_cps=[c["source_charge_point"] for c in parsed["charge_points"] if str(c["source_charge_point"]) not in cp_mapping]
-    if missing_users: raise HTTPException(400,"Nicht alle RFID-Benutzer wurden zugeordnet.")
-    if missing_cps: raise HTTPException(400,"Nicht alle lade.cloud-Ladepunkte wurden zugeordnet.")
-    try: result=db.import_ladecloud_rows(parsed["rows"],user_mapping,cp_mapping)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    try: path.unlink()
-    except OSError: pass
-    return {"ok":True,**result,"history":db.import_history_stats("lade.cloud")}
-
-
-@app.get("/api/settings/portal-leaderboard-names")
-async def portal_leaderboard_names_setting():
-    return {"show_names":db.setting_bool("portal_leaderboard_show_names",False)}
-
-
-@app.put("/api/settings/portal-leaderboard-names")
-async def set_portal_leaderboard_names_setting(payload: dict):
-    value=bool(payload.get("show_names")); db.set_setting("portal_leaderboard_show_names","1" if value else "0")
-    return {"ok":True,"show_names":value}
-
-
-@app.get("/api/settings/bonus-policy")
-async def bonus_policy_setting():
-    return db.bonus_policy_settings()
-
-
-@app.put("/api/settings/bonus-policy")
-async def set_bonus_policy_setting(payload: dict):
-    try:
-        return {"ok":True,**db.set_bonus_policy_settings(payload.get("default_valid_days",90),payload.get("transfer_after_days",30),bool(payload.get("transfer_enabled",True)))}
-    except (TypeError,ValueError) as exc:
-        raise HTTPException(400,str(exc))
-
-
 
 
 def _remote_audit(request: Request, cp_id: str, action: str, details: str = "", status_code: int = 200):
@@ -4573,96 +3665,9 @@ async def api_security_clear_secret(cp_id: str, request: Request):
     return {"ok":True}
 
 
-class CostCenterPayload(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-    active: bool = True
-
-@app.get("/api/cost-centers")
-async def api_cost_centers(include_inactive: bool=True):
-    return {"items":db.list_cost_centers(include_inactive)}
-
-@app.post("/api/cost-centers")
-async def api_create_cost_center(payload: CostCenterPayload):
-    try: return {"id":db.create_cost_center(payload.code,payload.name,payload.description)}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/cost-centers/{cost_center_id}")
-async def api_update_cost_center(cost_center_id:int,payload:CostCenterPayload):
-    try: ok=db.update_cost_center(cost_center_id,payload.code,payload.name,payload.description,payload.active)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Kostenstelle nicht gefunden")
-    return {"ok":True,"item":db.get_cost_center(cost_center_id)}
-
 @app.get("/api/search")
 async def api_global_search(q: str=""):
     return db.global_search(q,6)
-
-class SmartChargingSettingsPayload(BaseModel):
-    enabled: bool = False
-    site_limit_kw: float = 132
-    reserve_kw: float = 0
-    rebalance_seconds: int = 15
-    min_change_kw: float = 0.5
-
-class SmartConnectorPayload(BaseModel):
-    enabled: bool = True
-    priority: int = 3
-    min_kw: float = 1.4
-    max_kw: float | None = None
-
-@app.get("/api/load-management")
-async def api_load_management():
-    cps = _with_live_power(db.list_charge_points())
-    current_values=[float(c["power_kw"]) for c in cps if c.get("power_kw") is not None and c.get("status") == "Charging"]
-    settings=db.smart_charging_settings()
-    policies=db.list_smart_charging_connectors()
-    active=db.smart_charging_inputs()
-    runtime=dict(SMART_CHARGING_RUNTIME)
-    plan={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in runtime.get("allocations",[])}
-    active_keys={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)) for x in active}
-    for p in policies:
-        p["connected"]=is_connected(p["charge_point_id"])
-        key=(str(p["charge_point_id"]),int(p["connector_id"]))
-        planned=plan.get(key) or {}
-        p["active"]=key in active_keys
-        p["planned_kw"]=planned.get("desired_kw")
-        p["cap_kw"]=planned.get("cap_kw")
-        p["curtailed_kw"]=planned.get("curtailed_kw")
-        if planned.get("allocation_reason"):
-            p["allocation_reason"]=planned["allocation_reason"]
-        elif p["active"] and not p["connected"]:
-            p["allocation_reason"]="Offline – Kapazität wird konservativ reserviert"
-        elif p["active"] and int(p.get("enabled") or 0)==0:
-            p["allocation_reason"]="Manuell aus der automatischen Regelung genommen"
-        else:
-            p["allocation_reason"]="Keine aktive Session"
-    current=round(sum(current_values),2) if current_values else 0.0
-    usable=max(0.0,float(settings["site_limit_kw"])-float(settings["reserve_kw"]))
-    allocated=round(sum(float(p.get("allocated_kw") or 0) for p in policies),2)
-    fixed=float(runtime.get("fixed_load_kw") or 0)
-    headroom=round(max(0.0,usable-current),2)
-    return {"limit_kw":settings["site_limit_kw"],"reserve_kw":settings["reserve_kw"],"enabled":settings["enabled"],"rebalance_seconds":settings["rebalance_seconds"],"min_change_kw":settings["min_change_kw"],"current_kw":current,"usable_kw":round(usable,2),"headroom_kw":headroom,"allocated_kw":allocated,"fixed_load_kw":round(fixed,2),"runtime":runtime,"rules":db.list_load_rules(),"charge_points":cps,"connectors":policies,"active_sessions":active}
-
-@app.put("/api/smart-charging/settings")
-async def api_smart_charging_settings(payload:SmartChargingSettingsPayload):
-    try: settings=db.set_smart_charging_settings(payload.enabled,payload.site_limit_kw,payload.reserve_kw,payload.rebalance_seconds,payload.min_change_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Einstellungen geändert")
-    return {"ok":True,"settings":settings}
-
-@app.put("/api/smart-charging/connectors/{cp_id}/{connector_id}")
-async def api_smart_connector(cp_id:str,connector_id:int,payload:SmartConnectorPayload):
-    try: db.set_smart_connector_policy(unquote(cp_id),connector_id,payload.enabled,payload.priority,payload.min_kw,payload.max_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Connector-Regel geändert")
-    return {"ok":True}
-
-@app.post("/api/smart-charging/rebalance")
-async def api_smart_rebalance():
-    return {"ok":True,"result":await _rebalance_smart_charging(force=True,trigger="Manuell ausgelöst")}
-
 
 def _report_period(period: str = "current_month", date_from: str | None = None, date_to: str | None = None):
     now=datetime.now(timezone.utc).astimezone(BERLIN_TZ)
