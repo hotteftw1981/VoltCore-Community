@@ -793,6 +793,18 @@ async def public_access_request_start_page(request:Request, sent:str|None=None):
     return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
 
 
+@app.get("/public/access-request/form", response_class=HTMLResponse)
+async def public_access_request_form(request:Request, token:str=""):
+    cfg=db.registration_settings()
+    if not cfg.get("enabled"):
+        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+    record=db.access_request_verification(_session_hash(token)) if token else None
+    if not record:
+        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+    existing=db.get_user_by_email(record["email"])
+    return render(request,"access_request.html",page="public",step="form",token=token,verified_email=record["email"],existing_user=existing,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=[x for x in cfg.get("fields",[]) if x.get("enabled")])
+
+
 @app.get("/public/ladeguthaben", response_class=HTMLResponse)
 async def public_charging_portal_page(request: Request, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None, pin_reset: str | None = None):
     portal_user=_portal_request_user(request)
