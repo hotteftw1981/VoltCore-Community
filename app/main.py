@@ -1,6 +1,4 @@
 import logging
-import base64
-import binascii
 import asyncio
 import csv
 import io
@@ -18,7 +16,7 @@ import html
 from urllib.parse import unquote, urlparse
 
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -29,7 +27,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import HRFlowable, Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
-from PIL import Image as PILImage
 import qrcode
 
 from . import db
@@ -39,7 +36,6 @@ from . import invites
 from . import totp
 from . import updates
 from . import web_push
-from .ladecloud_import import parse_ladecloud_xlsx
 from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
 try:
     from .ocpp_server import sync_local_list, sync_pending_local_lists
@@ -51,7 +47,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.9.7.75"
+APP_VERSION = "0.9.7.76"
 APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
@@ -60,15 +56,6 @@ MEDIA_DIR = Path(os.getenv("DATA_DIR", "/data")) / "vehicle_images"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BRANDING_DIR = Path(os.getenv("DATA_DIR", "/data")) / "branding"
 BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_SIGNATURE_DIR = Path(os.getenv("DATA_DIR", "/data")) / "access_request_signatures"
-ACCESS_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_TERMS_VERSION = "2026-10-06"
-ACCESS_TERMS = [
-    "Der Ladezugang ist persoenlich und darf nur im Rahmen der von der Administration freigegebenen Nutzung verwendet werden.",
-    "RFID-Karten, PINs und Zugangsdaten sind sicher aufzubewahren. Verlust, Diebstahl oder Missbrauch muessen unverzueglich gemeldet werden.",
-    "Der Betreiber kann Ladezugaenge bei Missbrauch, Sicherheitsproblemen oder organisatorischer Notwendigkeit voruebergehend sperren oder dauerhaft entziehen.",
-    "Technische Verfuegbarkeit kann nicht jederzeit garantiert werden. Es gelten zusaetzlich die oertlichen Betriebs- und Sicherheitsregeln der jeweiligen Ladeinfrastruktur.",
-]
 MAX_VEHICLE_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
@@ -224,13 +211,9 @@ TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "voltcore_community_portal"
-PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
-PORTAL_PIN_ITERATIONS = 180000
-PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -267,25 +250,6 @@ def _password_needs_rehash(encoded: str) -> bool:
 _DUMMY_PASSWORD_SALT = bytes.fromhex("a93e62ad45fb76540fd0b944732b18bc")
 _DUMMY_PASSWORD_DIGEST = hashlib.pbkdf2_hmac("sha256", b"invalid-password", _DUMMY_PASSWORD_SALT, PBKDF2_ITERATIONS).hex()
 _DUMMY_PASSWORD_HASH = f"pbkdf2_sha256${PBKDF2_ITERATIONS}${_DUMMY_PASSWORD_SALT.hex()}${_DUMMY_PASSWORD_DIGEST}"
-
-
-def _portal_pin_hash(pin: str) -> str:
-    pin=str(pin or "").strip()
-    if len(pin) != 6 or not pin.isdigit():
-        raise ValueError("Der Portal-PIN muss genau 6 Ziffern haben.")
-    salt=secrets.token_bytes(16)
-    digest=hashlib.pbkdf2_hmac("sha256",pin.encode("utf-8"),salt,PORTAL_PIN_ITERATIONS)
-    return "pbkdf2_sha256$"+str(PORTAL_PIN_ITERATIONS)+"$"+salt.hex()+"$"+digest.hex()
-
-
-def _portal_pin_ok(pin: str, encoded: str) -> bool:
-    try:
-        scheme,iterations,salt_hex,digest_hex=encoded.split("$",3)
-        if scheme != "pbkdf2_sha256": return False
-        actual=hashlib.pbkdf2_hmac("sha256",str(pin).encode("utf-8"),bytes.fromhex(salt_hex),int(iterations)).hex()
-        return hmac.compare_digest(actual,digest_hex)
-    except Exception:
-        return False
 
 
 def _session_hash(token: str) -> str:
@@ -333,7 +297,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/integrations/fleet/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -376,58 +340,6 @@ def _activity_descriptor(method: str, path: str):
     if path.startswith("/api/account/2fa"):
         return f"Zwei-Faktor-Authentifizierung {verb}", "Zugriff", "Mein Konto"
     return f"Änderung {verb}", "System", path
-
-
-def _generate_unique_portal_pin():
-    records=db.portal_pin_records(include_disabled=True)
-    for _ in range(100):
-        pin=f"{secrets.randbelow(1000000):06d}"
-        if not any(_portal_pin_ok(pin,r.get("portal_pin_hash") or "") for r in records):
-            return pin
-    raise RuntimeError("Es konnte keine eindeutige Portal-PIN erzeugt werden.")
-
-
-def _normalize_signature_png(data: bytes) -> bytes:
-    try:
-        with PILImage.open(io.BytesIO(data)) as source:
-            image=source.convert("RGBA")
-            alpha=image.getchannel("A")
-            normalized=PILImage.new("RGBA",image.size,(17,24,39,0))
-            normalized.putalpha(alpha)
-            out=io.BytesIO(); normalized.save(out,format="PNG",optimize=True)
-            return out.getvalue()
-    except Exception as exc:
-        raise ValueError("Die digitale Unterschrift ist ungültig.") from exc
-
-
-def _save_access_signature(data_url: str, request_id_hint: str = "new"):
-    raw=str(data_url or "")
-    prefix="data:image/png;base64,"
-    if not raw.startswith(prefix):
-        raise ValueError("Bitte unterschreiben Sie den Antrag im Signaturfeld.")
-    try:
-        data=base64.b64decode(raw[len(prefix):],validate=True)
-    except (ValueError,binascii.Error):
-        raise ValueError("Die digitale Unterschrift ist ungültig.")
-    if len(data)<100 or len(data)>300*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Die digitale Unterschrift ist ungültig oder zu groß.")
-    data=_normalize_signature_png(data)
-    name=f"signature-{request_id_hint}-{secrets.token_hex(12)}.png"
-    target=ACCESS_SIGNATURE_DIR/name
-    target.write_bytes(data)
-    try: os.chmod(target,0o600)
-    except OSError: pass
-    return name
-
-
-def _portal_request_user(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    return db.portal_user_for_session(_session_hash(token)) if token else None
-
-
-def _portal_client_hash(request: Request):
-    host=(request.client.host if request.client else "unknown") or "unknown"
-    return hashlib.sha256(host.encode("utf-8")).hexdigest()
 
 
 def _login_redirect(request: Request, reason: str | None = None):
@@ -487,7 +399,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/cost-centers","/engagement","/imports","/load-management","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/registration-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests") or path.startswith("/api/engagement") or path.startswith("/api/import/") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/") or path.startswith("/api/portal-admin")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -529,7 +441,7 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; object-src 'none'; frame-src 'none'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         if _request_is_https(request):
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-        if request.url.path in {"/login","/setup","/first-run","/security"} or request.url.path.startswith("/api/") or request.url.path.startswith("/public/ladeguthaben") or not _is_public_path(request.url.path):
+        if request.url.path in {"/login","/setup","/first-run","/security"} or request.url.path.startswith("/api/") or not _is_public_path(request.url.path):
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Pragma", "no-cache")
             response.headers.setdefault("Expires", "0")
@@ -781,391 +693,6 @@ async def logout(request: Request):
     return response
 
 
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
-@app.get("/public/access-request", response_class=HTMLResponse)
-async def public_access_request_start_page(request:Request, sent:str|None=None):
-    cfg=db.registration_settings()
-    step="start" if cfg.get("enabled") else "disabled"
-    return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.post("/public/access-request/start", response_class=HTMLResponse)
-async def public_access_request_start(request:Request, email:str=Form(...)):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    email_key=str(email or "").strip().casefold()
-    if len(email_key)>254 or "@" not in email_key:
-        return render(request,"access_request.html",status_code=400,page="public",step="start",error="Bitte geben Sie eine gültige E-Mail-Adresse ein.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
-    ip_hash=_client_hash(request)
-    if not db.access_request_start_allowed(email_hash,ip_hash,10,5):
-        return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
-    raw=secrets.token_urlsafe(32)
-    expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-    db.create_access_request_verification(email_key,email_hash,ip_hash,_session_hash(raw),expires)
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    await asyncio.to_thread(mailer.send_template,"system",[email_key],{"subject":"VoltCore Community · E-Mail bestätigen","headline":"Registrierung bestätigen","body":"Bitte bestätigen Sie Ihre E-Mail-Adresse, um den Antrag fortzusetzen.","detail":"Der Link ist 30 Minuten gültig.","cta_label":"Registrierung fortsetzen","cta_url":f"{base}/public/access-request/form?token={raw}"},base)
-    return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
-
-
-@app.get("/public/access-request/form", response_class=HTMLResponse)
-async def public_access_request_form(request:Request, token:str=""):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    existing=db.get_user_by_email(record["email"])
-    return render(request,"access_request.html",page="public",step="form",token=token,verified_email=record["email"],existing_user=existing,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=[x for x in cfg.get("fields",[]) if x.get("enabled")])
-
-
-@app.post("/public/access-request/submit", response_class=HTMLResponse)
-async def public_access_request_submit(request:Request):
-    cfg=db.registration_settings()
-    form=await request.form()
-    token=str(form.get("token") or "")
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    if not cfg.get("enabled") or not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    active_fields=[x for x in cfg.get("fields",[]) if x.get("enabled")]
-    values={str(x.get("id")):str(form.get(str(x.get("id"))) or "").strip() for x in active_fields}
-    for field in active_fields:
-        fid=str(field.get("id") or "")
-        if field.get("required") and not values.get(fid):
-            return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error=f"Bitte füllen Sie das Pflichtfeld „{field.get('label') or fid}“ aus.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    if str(form.get("terms_accept") or "")!="1":
-        return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error="Bitte bestätigen Sie die Nutzungsbedingungen.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    proof=hashlib.sha256(str(form.get("signature_data") or "").encode("utf-8")).hexdigest()
-    request_id=db.create_access_request(_session_hash(token),name=values.get("name",record["email"]),street=values.get("street",""),postal_code=values.get("postal_code",""),city=values.get("city",""),phone=values.get("phone",""),vehicle_make_model=values.get("vehicle_make_model",""),vehicle_plate=values.get("vehicle_plate",""),weekly_hours=None,field_values_json=json.dumps(values,ensure_ascii=False),field_schema_json=json.dumps(active_fields,ensure_ascii=False),terms_version=ACCESS_TERMS_VERSION,terms_snapshot=json.dumps(ACCESS_TERMS,ensure_ascii=False),signature_path="sha256:"+proof,ip_hash=_client_hash(request))
-    db.create_notification(f"access-request:{request_id}","info","Neuer Zugangsantrag",str(values.get("name") or record["email"]),"/registration-requests",audience="admin",source="event")
-    return render(request,"access_request.html",page="public",step="done",request_id=request_id,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.get("/public/ladeguthaben", response_class=HTMLResponse)
-async def public_charging_portal_page(request: Request, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None, pin_reset: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        return render(request,"public_budgets.html",page="public",portal_user=None,portal_data=None,pin_reset_requested=(pin_reset=="requested"))
-    user_id=int(portal_user["id"])
-    data=db.portal_dashboard(user_id,period=period,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    active_rfid_count=db.active_rfid_count(user_id)
-    enrollment_points=db.rfid_enrollment_charge_points() if active_rfid_count < 2 else []
-    for cp in enrollment_points:
-        cp["connected"]=bool(is_connected(cp["id"]))
-        mode=str(cp.get("rfid_self_enroll_mode") or "auto")
-        cp["enrollment_available"]=mode!="disabled"
-        cp["enrollment_support_label"]="Deaktiviert · bitte Administration kontaktieren" if mode=="disabled" else ("RFID-Erkennung bestätigt" if cp.get("authorize_seen") or mode=="enabled" else "RFID-Erkennung noch nicht bestätigt")
-    enrollment_state=db.rfid_enrollment_status(user_id) if enrollment_points else None
-    return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,enrollment_points=enrollment_points,enrollment_state=enrollment_state,active_rfid_count=active_rfid_count,self_service_rfid_limit=2)
-
-
-@app.get("/admin/ladeguthaben/{user_id}", response_class=HTMLResponse)
-async def admin_charging_portal_page(request: Request, user_id: int, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None):
-    data=db.portal_dashboard(user_id,period=period,include_inactive=True,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    if not data: raise HTTPException(404,"Ladebenutzer nicht gefunden")
-    return render(request,"public_budgets.html",page="users",portal_user=data["user"],portal_data=data,admin_preview=True)
-
-
-@app.post("/public/ladeguthaben/login", response_class=HTMLResponse)
-async def public_charging_portal_login(request: Request, pin: str = Form(...)):
-    ip_hash=_portal_client_hash(request)
-    if db.portal_login_failures(ip_hash,10) >= PORTAL_MAX_FAILURES:
-        return render(request,"public_budgets.html",status_code=429,page="public",portal_user=None,portal_data=None,error="Zu viele Fehlversuche. Bitte in einigen Minuten erneut versuchen.")
-    pin=str(pin or "").strip()
-    matched=None
-    if len(pin)==6 and pin.isdigit():
-        for record in db.portal_pin_records():
-            if _portal_pin_ok(pin,record.get("portal_pin_hash") or ""):
-                matched=record; break
-    if not matched:
-        db.record_portal_login_attempt(ip_hash,False)
-        return render(request,"public_budgets.html",page="public",portal_user=None,portal_data=None,error="PIN nicht korrekt oder Portalzugang nicht aktiv.")
-    db.record_portal_login_attempt(ip_hash,True)
-    token=secrets.token_urlsafe(32)
-    expires=datetime.now(timezone.utc)+timedelta(hours=PORTAL_SESSION_HOURS)
-    db.create_portal_session(_session_hash(token),int(matched["id"]),expires.isoformat())
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    response.set_cookie(PORTAL_COOKIE,token,max_age=PORTAL_SESSION_HOURS*3600,httponly=True,samesite="lax",secure=_cookie_secure(request),path="/")
-    return response
-
-
-@app.post("/public/ladeguthaben/pin-forgot")
-async def public_portal_pin_forgot(request:Request, background_tasks:BackgroundTasks, email:str=Form(...)):
-    email_key=str(email or "").strip().casefold()
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
-    ip_hash=_client_hash(request)
-    if db.portal_pin_reset_allowed(email_hash,ip_hash,60,5):
-        user=db.portal_user_for_reset_email(email_key)
-        req_id=db.record_portal_pin_reset_request(email_hash,ip_hash,int(user["id"]) if user else None,False)
-        if user:
-            raw_token=secrets.token_urlsafe(32)
-            token_hash=_session_hash(raw_token)
-            expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-            db.create_portal_pin_reset_token(int(user["id"]),token_hash,expires)
-            base=str(mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/"))
-            reset_url=f"{base}/public/ladeguthaben/pin-reset?token={raw_token}"
-            async def send_reset():
-                try:
-                    await asyncio.to_thread(mailer.send_template,"system",[user["email"]],{
-                        "subject":"VoltCore Community · Ladeportal-PIN zurücksetzen",
-                        "headline":"Neue Ladeportal-PIN festlegen",
-                        "body":f"Hallo {user['name']}, für deinen Ladeportal-Zugang wurde ein PIN-Reset angefordert.",
-                        "detail":"Der Link ist 30 Minuten gültig. Die bisherige PIN bleibt bis zur erfolgreichen Änderung gültig.",
-                        "cta_label":"PIN zurücksetzen",
-                        "cta_url":reset_url,
-                    },base)
-                    db.mark_portal_pin_reset_mail_sent(req_id)
-                except Exception:
-                    logging.exception("Portal PIN reset mail failed")
-            background_tasks.add_task(send_reset)
-    return RedirectResponse(url="/public/ladeguthaben?pin_reset=requested",status_code=303)
-
-
-@app.get("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_page(request:Request, token:str=""):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    return render(request,"portal_pin_reset.html",page="public",token=token if record else "",token_valid=bool(record),reset_done=False)
-
-
-@app.post("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_submit(request:Request, token:str=Form(...), pin:str=Form(...), pin_repeat:str=Form(...)):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist ungültig, abgelaufen oder wurde bereits verwendet.")
-    pin=str(pin or "").strip(); pin_repeat=str(pin_repeat or "").strip()
-    if pin!=pin_repeat:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die beiden PIN-Eingaben stimmen nicht überein.")
-    if len(pin)!=6 or not pin.isdigit():
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die neue PIN muss genau 6 Ziffern enthalten.")
-    for item in db.portal_pin_records(include_disabled=True):
-        if int(item["id"])!=int(record["user_id"]) and _portal_pin_ok(pin,item.get("portal_pin_hash") or ""):
-            return render(request,"portal_pin_reset.html",status_code=409,page="public",token=token,token_valid=True,reset_done=False,error="Diese PIN kann nicht verwendet werden. Bitte wähle eine andere 6-stellige PIN.")
-    user_id=db.consume_portal_pin_reset_token(_session_hash(token),_portal_pin_hash(pin))
-    if not user_id:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist nicht mehr gültig.")
-    return render(request,"portal_pin_reset.html",page="public",token="",token_valid=False,reset_done=True)
-
-
-@app.post("/public/ladeguthaben/voucher", response_class=HTMLResponse)
-async def public_redeem_voucher(request: Request, code: str = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        user_id=int(portal_user["id"])
-        result=db.redeem_bonus_voucher(user_id,code)
-        db.refresh_local_list_for_user(user_id)
-        _schedule_local_list_sync("Bonusgutschein eingelöst")
-        data=db.portal_dashboard(user_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden gutgeschrieben.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/bonus-transfer", response_class=HTMLResponse)
-async def public_transfer_bonus(request: Request, recipient_id: int = Form(...), amount_kwh: float = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        sender_id=int(portal_user["id"]); recipient_id=int(recipient_id)
-        result=db.transfer_bonus_kwh(sender_id,recipient_id,float(amount_kwh))
-        db.refresh_local_list_for_user(sender_id); db.refresh_local_list_for_user(recipient_id)
-        _schedule_local_list_sync("Bonusguthaben übertragen")
-        data=db.portal_dashboard(sender_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden an {result['to_name']} übertragen.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/rfid/request")
-async def public_rfid_replacement_request(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"replacement",note,False)
-        return RedirectResponse(url="/public/ladeguthaben?rfid=requested",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-@app.post("/public/ladeguthaben/rfid/lost")
-async def public_rfid_lost(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"lost",note,True)
-        _schedule_local_list_sync("RFID als verloren gemeldet")
-        return RedirectResponse(url="/public/ladeguthaben?rfid=lost",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/start")
-async def public_rfid_enroll_start(request:Request,payload:RFIDEnrollmentStartPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    cp_id=str(payload.charge_point_id or "").strip()
-    if not cp_id: raise HTTPException(400,"Bitte wähle eine Ladesäule aus.")
-    if not is_connected(cp_id): raise HTTPException(409,"Diese Ladesäule ist aktuell nicht verbunden.")
-    try:
-        sid=db.start_rfid_enrollment(int(portal_user["id"]),cp_id,60)
-        state=db.rfid_enrollment_status(int(portal_user["id"]),sid) or {}
-        return {"ok":True,"session":{k:v for k,v in state.items() if k!="candidate_uid"},"seconds":60}
-    except ValueError as exc:
-        raise HTTPException(409,str(exc))
-
-
-@app.get("/public/ladeguthaben/rfid/enroll/status")
-async def public_rfid_enroll_status(request:Request,session_id:int):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    state=db.rfid_enrollment_status(int(portal_user["id"]),session_id)
-    if not state: raise HTTPException(404,"Einlernvorgang nicht gefunden.")
-    safe={k:v for k,v in state.items() if k!="candidate_uid"}
-    cp=db.get_charge_point(state["charge_point_id"]) or {}
-    safe["charge_point_label"]=(cp.get("location") or cp.get("id") or state["charge_point_id"])
-    return {"ok":True,"session":safe}
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/confirm")
-async def public_rfid_enroll_confirm(request:Request,payload:RFIDEnrollmentConfirmPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try:
-        result=db.confirm_rfid_enrollment(int(portal_user["id"]),payload.session_id,bool(payload.accepted))
-    except ValueError as exc:
-        raise HTTPException(409,str(exc))
-    if result.get("accepted"):
-        _schedule_local_list_sync("RFID-Chip per Self-Service angelernt")
-    result.pop("uid",None)
-    return result
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/cancel")
-async def public_rfid_enroll_cancel(request:Request,payload:dict):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try: sid=int(payload.get("session_id"))
-    except Exception: raise HTTPException(400,"Ungültiger Einlernvorgang.")
-    return {"ok":db.cancel_rfid_enrollment(int(portal_user["id"]),sid)}
-
-
-@app.post("/public/ladeguthaben/logout")
-async def public_charging_portal_logout(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    if token: db.delete_portal_session(_session_hash(token))
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    response.delete_cookie(PORTAL_COOKIE,path="/")
-    return response
-
-
-@app.get("/api/public/portal")
-async def api_public_portal(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    return db.portal_dashboard(int(portal_user["id"]),period=period)
-
-
-@app.get("/api/public/charging-budgets")
-async def public_charging_budgets(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    data=db.portal_dashboard(int(portal_user["id"]),period=period)
-    return {"portal":data,"updated_at":datetime.now(timezone.utc).isoformat()}
-
-
-@app.post("/api/public/portal/gamification-reveals/ack")
-async def public_portal_reveal_ack(request:Request,payload:dict):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    return db.acknowledge_portal_gamification_reveals(int(portal_user["id"]),payload.get("award_id"),payload.get("level"))
-
-
-@app.get("/registration-onboarding", response_class=HTMLResponse)
-async def registration_onboarding_page(request:Request,saved:str|None=None):
-    return render(request,"registration_settings.html",page="registration-onboarding",settings=db.registration_settings(),saved=(saved=="1"))
-
-
-@app.post("/settings/registration")
-async def registration_settings_save(request:Request):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        raise HTTPException(403,"Administratorrechte erforderlich")
-    form=await request.form()
-    current=db.registration_settings()
-    db.save_registration_settings({
-        "enabled":str(form.get("enabled") or "")=="1",
-        "budget_mode":"fixed",
-        "reference_kwh":float(str(form.get("reference_kwh") or "0").replace(",",".")),
-        "limit_mode":str(form.get("limit_mode") or "warn"),
-        "fields":current.get("fields",[]),
-    })
-    return RedirectResponse(url="/registration-onboarding?saved=1",status_code=303)
-
-
-@app.get("/registration-requests", response_class=HTMLResponse)
-async def registration_requests_page(request:Request):
-    return render(request,"access_requests.html",page="access-requests",requests=db.list_access_requests())
-
-
-@app.get("/registration-requests/{request_id}", response_class=HTMLResponse)
-async def registration_request_detail_page(request:Request,request_id:int,result:str|None=None):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
-    item=db.access_request_view(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    message={"approved":"Antrag genehmigt und Ladeportal-Zugang erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
-    return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
-
-
-@app.post("/registration-requests/{request_id}/decision")
-async def registration_request_decision(request:Request,request_id:int,action:str=Form(...),note:str=Form(""),monthly_kwh_limit:str=Form(""),monthly_limit_mode:str=Form("warn")):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        raise HTTPException(403,"Administratorrechte erforderlich")
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    auth=request.state.auth_user or {}
-    if action=="review":
-        db.set_access_request_in_review(request_id)
-        return RedirectResponse(url=f"/registration-requests/{request_id}?result=review",status_code=303)
-    if action=="reject":
-        db.decide_access_request(request_id,"Abgelehnt",auth.get("id"),note)
-        db.deactivate_notification(f"access-request:{request_id}")
-        return RedirectResponse(url=f"/registration-requests/{request_id}?result=rejected",status_code=303)
-    if action!="approve":
-        raise HTTPException(400,"Ungültige Aktion")
-    limit=None if str(monthly_kwh_limit or "").strip()=="" else max(0.0,float(str(monthly_kwh_limit).replace(",",".")))
-    pin=_generate_unique_portal_pin()
-    db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),limit,monthly_limit_mode,note,"manual",return_details=True)
-    db.deactivate_notification(f"access-request:{request_id}")
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    if mailer.settings(False).get("enabled"):
-        try:
-            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Öffnen Sie das Ladeportal und verwenden Sie „PIN vergessen?“, um Ihre persönliche PIN sicher festzulegen.","cta_label":"Ladeportal öffnen","cta_url":base+"/public/ladeguthaben"},base)
-        except Exception:
-            logging.exception("Registration approval notification failed")
-    return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
-
-
 @app.get("/system-users", response_class=HTMLResponse)
 async def system_users_page(request: Request):
     return render(request, "system_users.html", page="system-users")
@@ -1225,26 +752,6 @@ async def vehicles_page(request: Request):
 @app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request):
     return render(request, "users.html", page="users")
-
-
-@app.get("/engagement", response_class=HTMLResponse)
-async def engagement_page(request: Request):
-    return render(request,"engagement.html",page="engagement")
-
-
-@app.get("/imports", response_class=HTMLResponse)
-async def imports_page(request: Request):
-    return render(request,"imports.html",page="imports")
-
-
-@app.get("/load-management", response_class=HTMLResponse)
-async def load_page(request: Request):
-    return render(request,"load_management.html",page="load-management")
-
-
-@app.get("/cost-centers", response_class=HTMLResponse)
-async def cost_centers_page(request: Request):
-    return render(request,"cost_centers.html",page="cost-centers")
 
 
 @app.get("/reports", response_class=HTMLResponse)
@@ -1511,99 +1018,6 @@ async def api_mail_test(payload:MailTestPayload, request:Request):
         logging.exception("SMTP test mail failed")
         db.set_setting("mail_last_test_error",f"{type(exc).__name__}: {exc}"[:500])
         raise HTTPException(502,f"Testmail konnte nicht versendet werden: {type(exc).__name__}: {exc}")
-
-
-IMPORT_DIR = db.DATA_DIR / "imports"
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_IMPORT_BYTES = 20 * 1024 * 1024
-
-
-def _import_file(token: str):
-    token=str(token or "").strip()
-    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
-        raise HTTPException(400,"Ungültiger Import-Token")
-    path=IMPORT_DIR / f"ladecloud-{token}.xlsx"
-    if not path.exists(): raise HTTPException(404,"Importdatei nicht mehr verfügbar. Bitte erneut hochladen.")
-    return path
-
-
-def _suggest_import_users(parsed_users):
-    backend=db.list_users_rich(); cards={str(c.get("uid")):c for c in db.list_rfid_cards()}
-    result=[]
-    for src in parsed_users:
-        tag=str(src["rfid_tag"]); source_name=str(src.get("source_user_name") or "").strip(); suggestion=None; reason=None
-        card=cards.get(tag)
-        if card and card.get("user_id"):
-            suggestion=int(card["user_id"]); reason="RFID bereits zugeordnet"
-        else:
-            key=source_name.casefold(); scored=[]
-            for u in backend:
-                name=str(u.get("name") or "").strip(); cf=name.casefold(); tokens=[x for x in cf.replace("-"," ").split() if x]
-                score=100 if cf==key else 90 if tokens and tokens[-1]==key else 80 if key and key in tokens else 50 if key and key in cf else 0
-                if score: scored.append((score,int(u["id"]),name))
-            scored.sort(reverse=True)
-            if scored and (len(scored)==1 or scored[0][0] > scored[1][0]): suggestion=scored[0][1]; reason="Name automatisch erkannt"
-        item=dict(src); item["suggested_user_id"]=suggestion; item["suggestion_reason"]=reason; result.append(item)
-    return result
-
-
-@app.post("/api/import/ladecloud/preview")
-async def ladecloud_import_preview(file: UploadFile = File(...)):
-    if not str(file.filename or "").lower().endswith(".xlsx"):
-        raise HTTPException(400,"Bitte einen XLSX-Export aus lade.cloud auswählen.")
-    data=await file.read(MAX_IMPORT_BYTES+1)
-    if len(data)>MAX_IMPORT_BYTES: raise HTTPException(413,"Die Importdatei darf maximal 20 MB groß sein.")
-    try: parsed=parse_ladecloud_xlsx(data)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    token=secrets.token_hex(16); (IMPORT_DIR/f"ladecloud-{token}.xlsx").write_bytes(data)
-    return {
-        "token":token,"sessions":parsed["sessions"],"energy_kwh":parsed["energy_kwh"],"first_at":parsed["first_at"],"last_at":parsed["last_at"],
-        "users":_suggest_import_users(parsed["users"]),"charge_points":parsed["charge_points"],"backend_users":[{"id":u["id"],"name":u["name"],"status":u["status"]} for u in db.list_users_rich()],
-        "backend_charge_points":[{"id":c["id"],"vendor":c.get("vendor"),"model":c.get("model"),"location":c.get("location")} for c in db.list_charge_points() if int(c.get("ignored") or 0)==0],
-        "warnings":parsed["warnings"],"existing_import":db.import_history_stats("lade.cloud"),
-    }
-
-
-@app.post("/api/import/ladecloud/execute")
-async def ladecloud_import_execute(payload: dict):
-    path=_import_file(payload.get("token"))
-    try: parsed=parse_ladecloud_xlsx(path.read_bytes())
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    user_mapping=payload.get("user_mapping") or {}; cp_mapping=payload.get("charge_point_mapping") or {}
-    missing_users=[u["rfid_tag"] for u in parsed["users"] if str(u["rfid_tag"]) not in user_mapping]
-    missing_cps=[c["source_charge_point"] for c in parsed["charge_points"] if str(c["source_charge_point"]) not in cp_mapping]
-    if missing_users: raise HTTPException(400,"Nicht alle RFID-Benutzer wurden zugeordnet.")
-    if missing_cps: raise HTTPException(400,"Nicht alle lade.cloud-Ladepunkte wurden zugeordnet.")
-    try: result=db.import_ladecloud_rows(parsed["rows"],user_mapping,cp_mapping)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    try: path.unlink()
-    except OSError: pass
-    return {"ok":True,**result,"history":db.import_history_stats("lade.cloud")}
-
-
-@app.get("/api/settings/portal-leaderboard-names")
-async def portal_leaderboard_names_setting():
-    return {"show_names":db.setting_bool("portal_leaderboard_show_names",False)}
-
-
-@app.put("/api/settings/portal-leaderboard-names")
-async def set_portal_leaderboard_names_setting(payload: dict):
-    value=bool(payload.get("show_names")); db.set_setting("portal_leaderboard_show_names","1" if value else "0")
-    return {"ok":True,"show_names":value}
-
-
-@app.get("/api/settings/bonus-policy")
-async def bonus_policy_setting():
-    return db.bonus_policy_settings()
-
-
-@app.put("/api/settings/bonus-policy")
-async def set_bonus_policy_setting(payload: dict):
-    try:
-        return {"ok":True,**db.set_bonus_policy_settings(payload.get("default_valid_days",90),payload.get("transfer_after_days",30),bool(payload.get("transfer_enabled",True)))}
-    except (TypeError,ValueError) as exc:
-        raise HTTPException(400,str(exc))
-
 
 
 @app.get("/api/settings/branding")
@@ -2763,45 +2177,6 @@ async def set_transaction_vehicle(transaction_id: int, payload: dict):
     return {"ok": True, "transaction": db.get_transaction(transaction_id)}
 
 
-def _require_fleet_integration(request: Request):
-    expected=str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip()
-    if not expected:
-        raise HTTPException(503,"Fuhrpark-Schnittstelle ist deaktiviert")
-    auth=str(request.headers.get("authorization") or "")
-    supplied=auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    if not supplied or not secrets.compare_digest(supplied,expected):
-        try:
-            db.add_security_event("Fleet API authentication failed",severity="warning",category="fleet_api",remote=_client_text(request),success=False,detail=request.url.path)
-        except Exception:
-            pass
-        raise HTTPException(401,"Ungültiger Fuhrpark-Integrationstoken",headers={"WWW-Authenticate":"Bearer"})
-    return True
-
-
-def _fleet_no_store(response: Response):
-    response.headers["Cache-Control"]="no-store"
-    response.headers["Pragma"]="no-cache"
-    response.headers["X-Content-Type-Options"]="nosniff"
-
-
-@app.get("/api/integrations/fleet/v1/health")
-async def fleet_integration_health(request: Request, response: Response):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    return {"ok":True,"api":"fleet-v1","backend_version":APP_VERSION,"mode":"read-only"}
-
-
-@app.get("/api/integrations/fleet/v1/sessions")
-async def fleet_integration_sessions(request: Request, response: Response, since: str | None = None, limit: int = 200):
-    _require_fleet_integration(request)
-    _fleet_no_store(response)
-    try:
-        rows=db.fleet_integration_sessions(since=since,limit=limit)
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    return {"api":"fleet-v1","count":len(rows),"sessions":rows}
-
-
 @app.get("/api/vehicles")
 async def api_vehicles():
     vehicles = db.list_vehicles()
@@ -3000,7 +2375,7 @@ async def create_user(payload: UserPayload):
     data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
-    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); return {"ok":True,"user":user}
 
 @app.put("/api/users/{user_id}")
 async def update_user(request:Request,user_id: int,payload: UserPayload):
@@ -3028,7 +2403,7 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
         before_text="Alle Ladepunkte" if before_access["mode"]=="all" else (", ".join(before_access["charge_point_ids"]) or "Keine Ladepunkte")
         after_text="Alle Ladepunkte" if after_access["mode"]=="all" else (", ".join(after_access["charge_point_ids"]) or "Keine Ladepunkte")
         db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladeberechtigung geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"{before_text} → {after_text}")
-    user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    user.pop("portal_pin_hash",None); return {"ok":True,"user":user}
 
 @app.post("/api/users/{user_id}/image")
 async def upload_user_image(user_id:int, image:UploadFile=File(...)):
@@ -3137,218 +2512,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     return {"ok":True,"mode":"purged","removed":removed}
 
 
-class PortalPinPayload(BaseModel):
-    pin: str
-    enabled: bool = True
-
-
-@app.get("/api/portal-admin/users/{user_id}")
-async def portal_admin_user(user_id:int):
-    u=db.get_user(user_id)
-    if not u:
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    return {
-        "id":u["id"],
-        "name":u["name"],
-        "portal_enabled":bool(u.get("portal_enabled")),
-        "portal_pin_set":bool(u.get("portal_pin_set_at")),
-        "portal_pin_set_at":u.get("portal_pin_set_at"),
-        "portal_last_login_at":u.get("portal_last_login_at"),
-        "achievements":db.achievements_for_user(user_id),
-    }
-
-
-@app.post("/api/portal-admin/users/{user_id}/pin")
-async def portal_admin_set_pin(user_id:int,payload:PortalPinPayload):
-    user=db.get_user(user_id)
-    if not user:
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    pin=str(payload.pin or "").strip()
-    if len(pin)!=6 or not pin.isdigit():
-        raise HTTPException(400,"PIN muss genau 6 Ziffern enthalten")
-    for row in db.portal_pin_records(include_disabled=True):
-        if int(row["id"])!=user_id and _portal_pin_ok(pin,row.get("portal_pin_hash") or ""):
-            raise HTTPException(409,"Diese PIN wird bereits verwendet")
-    db.set_user_portal_pin(user_id,_portal_pin_hash(pin),payload.enabled)
-    return {"ok":True,"portal_enabled":payload.enabled}
-
-
-@app.post("/api/portal-admin/users/{user_id}/enabled")
-async def portal_admin_enabled(user_id:int,payload:dict):
-    if not db.set_user_portal_enabled(user_id,bool(payload.get("enabled"))):
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    return {"ok":True}
-
-
-class AchievementPayload(BaseModel):
-    name:str
-    description:str|None=None
-    icon:str|None="🏅"
-    metric:str="manual"
-    threshold:float|None=None
-    hidden:bool=False
-    system_secret:bool=False
-    active:bool=True
-    category:str="Allgemein"
-    rarity:str="common"
-    xp:int=50
-    tier_group:str|None=None
-    tier_name:str|None=None
-    tier_rank:int=0
-    leaderboard_enabled:bool=False
-
-class EventPayload(BaseModel):
-    name:str
-    description:str|None=None
-    metric:str="energy_kwh"
-    starts_at:str
-    ends_at:str
-    active:bool=True
-    min_sessions:int=0
-    min_session_kwh:float=0
-    reward_bonus_kwh:float=0
-    reward_valid_days:int|None=None
-    reward_bonus_enabled:bool|None=None
-    winner_badge_enabled:bool=False
-    winner_badge_name:str|None=None
-    winner_badge_icon:str|None=None
-    winner_badge_description:str|None=None
-
-class BonusGrantPayload(BaseModel):
-    user_id:int
-    amount_kwh:float
-    expires_at:str
-    note:str|None=None
-
-class BonusVoucherPayload(BaseModel):
-    code:str|None=None
-    amount_kwh:float
-    redeem_until:str|None=None
-    bonus_valid_days:int|None=None
-    max_redemptions:int=1
-    note:str|None=None
-    active:bool=True
-
-@app.get("/api/engagement")
-async def api_engagement():
-    return {
-        "achievements":db.list_achievements(),
-        "events":db.list_gamification_events(),
-        "users":[{"id":u["id"],"name":u["name"],"gamification_enabled":bool(u.get("gamification_enabled",1))} for u in db.list_users_rich() if u.get("status")=="Aktiv"],
-        "bonus_grants":db.list_bonus_grants(),
-        "vouchers":db.list_bonus_vouchers(),
-        "bonus_policy":db.bonus_policy_settings(),
-        "leaderboard_metrics":db.leaderboard_metric_catalog(),
-        "gamification_overview":db.gamification_overview(),
-    }
-
-@app.get("/api/engagement/leaderboards")
-async def api_general_leaderboard(period:str="month",metric:str="energy_kwh"):
-    try: return db.general_leaderboard(period,metric)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/bonus")
-async def api_grant_bonus(payload:BonusGrantPayload):
-    try:
-        gid=db.grant_bonus_kwh(payload.user_id,payload.amount_kwh,payload.expires_at,"admin",payload.note)
-        db.refresh_local_list_for_user(payload.user_id)
-        _schedule_local_list_sync("Bonusguthaben geändert")
-        return {"ok":True,"grant_id":gid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/bonus/{grant_id}")
-async def api_revoke_bonus(grant_id:int):
-    try:
-        grant=next((g for g in db.list_bonus_grants(limit=1000) if int(g.get("id") or 0)==int(grant_id)),None)
-        if not db.revoke_bonus_grant(grant_id): raise HTTPException(404,"Bonusguthaben nicht gefunden")
-        if grant and grant.get("user_id") is not None:
-            db.refresh_local_list_for_user(int(grant["user_id"]))
-            _schedule_local_list_sync("Bonusguthaben widerrufen")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/vouchers")
-async def api_create_voucher(payload:BonusVoucherPayload):
-    code=(payload.code or f"{db.branding_settings()['voucher_prefix']}-{secrets.token_hex(4).upper()}").strip().upper()
-    try:
-        vid=db.create_bonus_voucher(code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-        return {"ok":True,"voucher_id":vid,"code":code}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/vouchers/{voucher_id}/active")
-async def api_voucher_active(voucher_id:int,payload:dict):
-    if not db.set_bonus_voucher_active(voucher_id,bool(payload.get("active"))): raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-@app.put("/api/engagement/vouchers/{voucher_id}")
-async def api_update_voucher(voucher_id:int,payload:BonusVoucherPayload):
-    try:
-        ok=db.update_bonus_voucher(voucher_id,payload.code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.delete("/api/engagement/vouchers/{voucher_id}")
-async def api_delete_voucher(voucher_id:int):
-    try: ok=db.delete_bonus_voucher(voucher_id)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.post("/api/engagement/achievements")
-async def api_create_achievement(payload:AchievementPayload):
-    try: aid=db.create_achievement(**payload.model_dump()); return {"id":aid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/achievements/{achievement_id}")
-async def api_update_achievement(achievement_id:int,payload:AchievementPayload):
-    try:
-        if not db.update_achievement(achievement_id,**payload.model_dump()): raise HTTPException(404,"Achievement nicht gefunden")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_award_achievement(achievement_id:int,user_id:int):
-    try: db.award_achievement(user_id,achievement_id,"manual"); return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_revoke_achievement(achievement_id:int,user_id:int):
-    if not db.revoke_achievement(user_id,achievement_id): raise HTTPException(404,"Auszeichnung nicht gefunden")
-    return {"ok":True}
-
-@app.post("/api/engagement/events/preview")
-async def api_preview_event(payload:EventPayload):
-    try: return db.preview_gamification_event(**payload.model_dump())
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events")
-async def api_create_event(payload:EventPayload):
-    try: eid=db.create_gamification_event(**payload.model_dump()); return {"id":eid}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/events/{event_id}")
-async def api_update_event(event_id:int,payload:EventPayload):
-    try:
-        if not db.update_gamification_event(event_id,**payload.model_dump()): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events/{event_id}/active")
-async def api_event_active(event_id:int,payload:dict):
-    try:
-        if not db.set_gamification_event_active(event_id,bool(payload.get("active"))): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.get("/api/engagement/events/{event_id}")
-async def api_event_detail(event_id:int):
-    data=db.gamification_event_detail(event_id)
-    if not data: raise HTTPException(404,"Event nicht gefunden")
-    return data
-
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
     if not db.assign_user_vehicle(user_id, vehicle_id): raise HTTPException(400,"Fahrzeug konnte nicht zugeordnet werden")
@@ -3448,11 +2611,6 @@ async def api_rfid_local_list_offline_auth(payload: dict):
     if result.get("offline"):
         raise HTTPException(409,result.get("detail") or "Ladepunkt ist offline")
     return {"ok":bool(result.get("ok")),"result":result}
-
-
-IMPORT_DIR = db.DATA_DIR / "imports"
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
-MAX_IMPORT_BYTES = 20 * 1024 * 1024
 
 
 def _remote_audit(request: Request, cp_id: str, action: str, details: str = "", status_code: int = 200):
@@ -4190,92 +3348,6 @@ async def api_security_clear_secret(cp_id: str, request: Request):
     db.add_security_event("OCPP secret removed",severity="warning",category="admin",charge_point_id=cp_id,system_user_id=auth.get("id"),username=auth.get("username"),success=True)
     return {"ok":True}
 
-
-class CostCenterPayload(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-    active: bool = True
-
-@app.get("/api/cost-centers")
-async def api_cost_centers(include_inactive: bool=True):
-    return {"items":db.list_cost_centers(include_inactive)}
-
-@app.post("/api/cost-centers")
-async def api_create_cost_center(payload: CostCenterPayload):
-    try: return {"id":db.create_cost_center(payload.code,payload.name,payload.description)}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/cost-centers/{cost_center_id}")
-async def api_update_cost_center(cost_center_id:int,payload:CostCenterPayload):
-    try: ok=db.update_cost_center(cost_center_id,payload.code,payload.name,payload.description,payload.active)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Kostenstelle nicht gefunden")
-    return {"ok":True,"item":db.get_cost_center(cost_center_id)}
-
-class SmartChargingSettingsPayload(BaseModel):
-    enabled: bool = False
-    site_limit_kw: float = 132
-    reserve_kw: float = 0
-    rebalance_seconds: int = 15
-    min_change_kw: float = 0.5
-
-class SmartConnectorPayload(BaseModel):
-    enabled: bool = True
-    priority: int = 3
-    min_kw: float = 1.4
-    max_kw: float | None = None
-
-@app.get("/api/load-management")
-async def api_load_management():
-    cps = _with_live_power(db.list_charge_points())
-    current_values=[float(c["power_kw"]) for c in cps if c.get("power_kw") is not None and c.get("status") == "Charging"]
-    settings=db.smart_charging_settings()
-    policies=db.list_smart_charging_connectors()
-    active=db.smart_charging_inputs()
-    runtime=dict(SMART_CHARGING_RUNTIME)
-    plan={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in runtime.get("allocations",[])}
-    active_keys={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)) for x in active}
-    for p in policies:
-        p["connected"]=is_connected(p["charge_point_id"])
-        key=(str(p["charge_point_id"]),int(p["connector_id"]))
-        planned=plan.get(key) or {}
-        p["active"]=key in active_keys
-        p["planned_kw"]=planned.get("desired_kw")
-        p["cap_kw"]=planned.get("cap_kw")
-        p["curtailed_kw"]=planned.get("curtailed_kw")
-        if planned.get("allocation_reason"):
-            p["allocation_reason"]=planned["allocation_reason"]
-        elif p["active"] and not p["connected"]:
-            p["allocation_reason"]="Offline – Kapazität wird konservativ reserviert"
-        elif p["active"] and int(p.get("enabled") or 0)==0:
-            p["allocation_reason"]="Manuell aus der automatischen Regelung genommen"
-        else:
-            p["allocation_reason"]="Keine aktive Session"
-    current=round(sum(current_values),2) if current_values else 0.0
-    usable=max(0.0,float(settings["site_limit_kw"])-float(settings["reserve_kw"]))
-    allocated=round(sum(float(p.get("allocated_kw") or 0) for p in policies),2)
-    fixed=float(runtime.get("fixed_load_kw") or 0)
-    headroom=round(max(0.0,usable-current),2)
-    return {"limit_kw":settings["site_limit_kw"],"reserve_kw":settings["reserve_kw"],"enabled":settings["enabled"],"rebalance_seconds":settings["rebalance_seconds"],"min_change_kw":settings["min_change_kw"],"current_kw":current,"usable_kw":round(usable,2),"headroom_kw":headroom,"allocated_kw":allocated,"fixed_load_kw":round(fixed,2),"runtime":runtime,"rules":db.list_load_rules(),"charge_points":cps,"connectors":policies,"active_sessions":active}
-
-@app.put("/api/smart-charging/settings")
-async def api_smart_charging_settings(payload:SmartChargingSettingsPayload):
-    try: settings=db.set_smart_charging_settings(payload.enabled,payload.site_limit_kw,payload.reserve_kw,payload.rebalance_seconds,payload.min_change_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Einstellungen geändert")
-    return {"ok":True,"settings":settings}
-
-@app.put("/api/smart-charging/connectors/{cp_id}/{connector_id}")
-async def api_smart_connector(cp_id:str,connector_id:int,payload:SmartConnectorPayload):
-    try: db.set_smart_connector_policy(unquote(cp_id),connector_id,payload.enabled,payload.priority,payload.min_kw,payload.max_kw)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    await _rebalance_smart_charging(force=True,trigger="Connector-Regel geändert")
-    return {"ok":True}
-
-@app.post("/api/smart-charging/rebalance")
-async def api_smart_rebalance():
-    return {"ok":True,"result":await _rebalance_smart_charging(force=True,trigger="Manuell ausgelöst")}
 
 @app.get("/api/search")
 async def api_global_search(q: str=""):
