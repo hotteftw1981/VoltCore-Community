@@ -32,6 +32,17 @@ Community is not intended to be annoying or deliberately crippled. The differenc
 
 > 🚧 **Status:** work in progress. Not yet intended for public production use.
 
+## 🚀 Installation
+
+VoltCore Community supports two official deployment methods:
+
+- 🐳 **Docker Compose** — our default route
+- 🟦 **Portainer** — convenient stack deployment through the GUI
+
+👉 **[Open the full installation guide](docs/INSTALLATION.en.md)**
+
+It covers requirements, startup, ports, persistent data, updates, backup notes and troubleshooting step by step. 📚🔧
+
 ## ⚡ Planned Community scope
 
 The first Community edition is planned to include:
@@ -149,6 +160,7 @@ Current project documentation:
 - 📋 Community scope: `docs/COMMUNITY_SCOPE.md`
 - 🌍 Internationalisation: `docs/I18N.md`
 - 🎨 Branding & logo set: `docs/BRANDING.md`
+- 🐳🟦 Installation: `docs/INSTALLATION.en.md`
 
 More detailed installation, configuration, update, backup, OCPP, security and troubleshooting documentation will be added as the Community build matures. 🛠️📖
 

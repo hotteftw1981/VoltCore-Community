@@ -32,6 +32,17 @@ Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abg
 
 > 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen.
 
+## 🚀 Installation
+
+VoltCore Community unterstützt zwei offizielle Installationswege:
+
+- 🐳 **Docker Compose** — unser Standardweg
+- 🟦 **Portainer** — komfortabel als Stack über die GUI
+
+👉 **[Zur ausführlichen Installationsanleitung](docs/INSTALLATION.md)**
+
+Dort findest du Schritt für Schritt Voraussetzungen, Start, Ports, Datenhaltung, Updates, Backup-Hinweise und Troubleshooting. 📚🔧
+
 ## ⚡ Geplanter Community-Umfang
 
 Die erste Community Edition soll enthalten:
@@ -149,6 +160,7 @@ Aktuell vorhanden:
 - 📋 Community-Umfang: `docs/COMMUNITY_SCOPE.md`
 - 🌍 Mehrsprachigkeit / i18n: `docs/I18N.md`
 - 🎨 Branding & Logo-Set: `docs/BRANDING.md`
+- 🐳🟦 Installation: `docs/INSTALLATION.md`
 
 Ausführliche Installations-, Konfigurations-, Update-, Backup-, OCPP-, Security- und Troubleshooting-Dokumentation folgt mit dem weiteren Community-Ausbau. 🛠️📖
 
