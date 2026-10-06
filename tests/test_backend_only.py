@@ -184,5 +184,65 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         ):
             self.assertFalse((ROOT / relative).exists())
 
+
+    def test_backend_only_registration_and_employment_fields_are_removed(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        users = (ROOT / "app" / "templates" / "users.html").read_text(encoding="utf-8")
+        vehicles = (ROOT / "app" / "templates" / "vehicles.html").read_text(encoding="utf-8")
+        login = (ROOT / "app" / "templates" / "login.html").read_text(encoding="utf-8")
+        base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+
+        for needle in (
+            "/public/access-request",
+            "/registration-onboarding",
+            "/registration-requests",
+            "ACCESS_TERMS_VERSION",
+            "ACCESS_SIGNATURE_DIR",
+            "registration=db.registration_settings()",
+            "role: str = \"Fahrer\"",
+            "department: str | None",
+            "driver: str | None",
+        ):
+            self.assertNotIn(needle, main)
+
+        for needle in (
+            "role TEXT NOT NULL DEFAULT 'Fahrer'",
+            "department TEXT",
+            "weekly_hours REAL",
+            "budget_source TEXT NOT NULL DEFAULT 'manual'",
+            "driver TEXT",
+            "CREATE TABLE IF NOT EXISTS access_request_verifications",
+            "CREATE TABLE IF NOT EXISTS access_requests",
+            "def registration_settings(",
+            "def create_access_request(",
+            "def approve_access_request(",
+            "def create_user(name,role",
+            "_validate_registration",
+        ):
+            self.assertNotIn(needle, db)
+
+        self.assertIn('DROP TABLE IF EXISTS access_request_verifications', db)
+        self.assertIn('DROP TABLE IF EXISTS access_requests', db)
+        self.assertIn('("users",("role","department","weekly_hours","budget_source"))', db)
+        self.assertIn('("vehicles",("driver",))', db)
+
+        for needle in ("Rolle", "Disposition", "Abteilung", "userRole", "department"):
+            self.assertNotIn(needle, users)
+        for needle in ("Fahrer", "driver", "department", "u.role"):
+            self.assertNotIn(needle, vehicles)
+        for needle in ("Zum Ladeportal", "/public/ladeguthaben", "/public/access-request", "persönliche PIN"):
+            self.assertNotIn(needle, login)
+        for needle in ("/registration-onboarding", "/registration-requests"):
+            self.assertNotIn(needle, base)
+
+        for relative in (
+            "app/templates/access_request.html",
+            "app/templates/registration_settings.html",
+            "app/templates/access_requests.html",
+            "app/templates/registration_request_detail.html",
+        ):
+            self.assertFalse((ROOT / relative).exists())
+
 if __name__ == "__main__":
     unittest.main()
