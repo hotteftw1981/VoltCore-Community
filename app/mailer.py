@@ -225,7 +225,7 @@ def render_template(template_key, context=None, base_url=None):
     if template_key not in TEMPLATE_LABELS:
         raise ValueError("Unbekannte Mailvorlage.")
     branding=db.branding_settings(); data=_mail_data(template_key,context or {})
-    product=branding.get("product_name") or "VoltCore"
+    product=branding.get("product_name") or "VoltCore Community"
     organization=branding.get("organization_name") or ""
     display=branding.get("display_name") or product
     color=branding.get("primary_color") or "#2563eb"
@@ -261,7 +261,7 @@ def send_template(template_key, recipients, context=None, base_url=None, allow_d
     rendered=render_template(template_key,context,base_url or cfg.get("public_base_url"))
     msg=EmailMessage()
     msg["Subject"]=rendered["subject"]
-    sender_name=cfg.get("from_name") or db.branding_settings().get("display_name") or "VoltCore"
+    sender_name=cfg.get("from_name") or db.branding_settings().get("display_name") or "VoltCore Community"
     msg["From"]=f'{sender_name} <{cfg["from_email"]}>'
     msg["To"] = ", ".join(to)
     msg.set_content(rendered["text"])
