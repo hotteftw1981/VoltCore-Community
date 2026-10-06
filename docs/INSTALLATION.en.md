@@ -7,9 +7,9 @@
 </p>
 
 > [!IMPORTANT]
-> 🚧 **VoltCore Community is still under active development.**
+> 🧪 **VoltCore Community is currently at release-candidate stage.**
 >
-> This guide already documents the intended official deployment paths. It will be finalized and release-tested with the first runnable Community release.
+> The deployment paths below are automatically validated by Community CI against fresh installations.
 
 ## ⚡ Two official installation methods
 
@@ -52,7 +52,7 @@ git clone https://github.com/hotteftw1981/VoltCore-Community.git
 cd VoltCore-Community
 ```
 
-Stable releases will later also provide a prebuilt Community container image via GHCR.
+Stable releases also provide a prebuilt Community container image via GHCR.
 
 ## ⚙️ Create the environment file
 
@@ -163,7 +163,7 @@ In Portainer:
 4. use `docker-compose.portainer.yml`
 5. deploy the stack
 
-Git-based stacks can later point directly to the public Community repository.
+Git-based stacks can point directly to this Community repository.
 
 ## 📦 Community image
 
@@ -179,7 +179,7 @@ Stable releases will also use versioned tags such as:
 ghcr.io/hotteftw1981/voltcore-community:1.0.0
 ```
 
-> 🚧 The public container image will be enabled with the first runnable Community release.
+> The Community image is produced from the tested source by the release/container pipeline.
 
 ## 🌐 UI
 
