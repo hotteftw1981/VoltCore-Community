@@ -1,8 +1,7 @@
-"""One-shot recovery of reviewed shared functions, NOT removed edition modules.
+"""One-shot recovery of reviewed shared functions and the first-run audit name.
 
-Reads an immutable commit in this repository, selects an explicit function
-allowlist and rejects unexpected source/destination changes. The only intended
-runtime diff is app/db.py; the runner commits it only after real HTTP validation.
+Uses immutable source and explicit allowlists. Only app/db.py and one audited
+expression in app/main.py may change. Commit only after real HTTP validation.
 """
 import ast
 import hashlib
@@ -13,6 +12,7 @@ import subprocess
 BASE = "d6bb35c65b01bceaae9c95246f8d6fc5ad009aa6"
 SOURCE_BLOB = "af5c31e8a8a2990ec5a68115ad5483a37458389b"
 TARGET_BLOB = "6180df6f8498cf00428382e8a8e23995669deddf"
+MAIN_BLOB = "ada22f06a76f88268a52a839f11907c50b819a5d"
 NAMES = {
     "active_system_session_counts", "delete_other_system_sessions", "security_event_summary",
     "add_activity", "recent_activity", "_severity_rank", "_upsert_notification_conn",
@@ -35,6 +35,9 @@ def main():
     target = Path("app/db.py")
     before = target.read_bytes()
     assert blob_sha(before) == TARGET_BLOB, "Target moved; review before retrying"
+    main_path = Path("app/main.py")
+    main_before = main_path.read_bytes()
+    assert blob_sha(main_before) == MAIN_BLOB, "Main source moved; review before retrying"
     source = subprocess.check_output(["git", "show", BASE + ":app/db.py"])
     assert blob_sha(source) == SOURCE_BLOB, "Unexpected baseline source"
     text = source.decode("utf-8")
@@ -58,10 +61,16 @@ def main():
     addition = "\n\n# Shared Community audit, notifications, diagnostics, push and session helpers.\n\n" + "\n\n\n".join(pieces) + "\n"
     result = before.decode("utf-8") + addition
     compile(result, str(target), "exec")
-    # The existing source is preserved byte-for-byte, including the 3D tariff fix.
     assert result.startswith(before.decode("utf-8"))
+    main_text = main_before.decode("utf-8")
+    broken = "Monatsguthaben: {'aktiv' if credit_enabled else 'aus'}"
+    fixed = "Monatslimit: {'aktiv' if default_limit_enabled else 'aus'}"
+    assert main_text.count(broken) == 1, "Unexpected first-run audit expression"
+    main_result = main_text.replace(broken, fixed)
+    compile(main_result, str(main_path), "exec")
     target.write_text(result, encoding="utf-8")
-    print(f"Restored {len(pieces)} reviewed shared functions; existing runtime unchanged")
+    main_path.write_text(main_result, encoding="utf-8")
+    print(f"Restored {len(pieces)} reviewed shared functions and corrected first-run audit variable")
     for name in sorted(NAMES):
         print("RESTORED", name)
 

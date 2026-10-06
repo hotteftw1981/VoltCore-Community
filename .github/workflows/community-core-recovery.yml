@@ -19,16 +19,16 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Restore only reviewed shared helpers
+      - name: Restore only reviewed shared helpers and audit expression
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p qa-evidence
           python scripts/restore_community_core.py | tee qa-evidence/restored-functions.txt
           python -m compileall -q app tests scripts
           git diff --check
-          test "$(git diff --name-only)" = app/db.py
-          git diff -- app/db.py > qa-evidence/recovery.patch
+          diff -u <(printf 'app/db.py\napp/main.py\n') <(git diff --name-only)
+          git diff -- app/db.py app/main.py > qa-evidence/recovery.patch
       - name: Build test image
         run: docker build -t community-core-recovery .
       - name: Full regression suite
@@ -60,15 +60,16 @@ jobs:
             tail -100 qa-evidence/container.log
             exit 1
           fi
-      - name: Commit validated DB change to isolated recovery branch only
+      - name: Commit validated runtime changes to isolated recovery branch only
+        shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/fix/community-3e-core-recovery
-          test "$(git diff --name-only)" = app/db.py
+          diff -u <(printf 'app/db.py\napp/main.py\n') <(git diff --name-only)
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/db.py
-          git commit -m 'fix: restore shared Community runtime helpers removed with Fleet cleanup'
+          git add app/db.py app/main.py
+          git commit -m 'fix: restore shared Community runtime and first-run audit logging'
           git push origin HEAD:refs/heads/fix/community-3e-core-recovery
           git rev-parse HEAD > qa-evidence/verified-commit.txt
       - name: Collect failure logs
