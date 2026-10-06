@@ -224,10 +224,6 @@ TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "voltcore_community_portal"
-PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
-PORTAL_PIN_ITERATIONS = 180000
-PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
 PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
@@ -267,25 +263,6 @@ def _password_needs_rehash(encoded: str) -> bool:
 _DUMMY_PASSWORD_SALT = bytes.fromhex("a93e62ad45fb76540fd0b944732b18bc")
 _DUMMY_PASSWORD_DIGEST = hashlib.pbkdf2_hmac("sha256", b"invalid-password", _DUMMY_PASSWORD_SALT, PBKDF2_ITERATIONS).hex()
 _DUMMY_PASSWORD_HASH = f"pbkdf2_sha256${PBKDF2_ITERATIONS}${_DUMMY_PASSWORD_SALT.hex()}${_DUMMY_PASSWORD_DIGEST}"
-
-
-def _portal_pin_hash(pin: str) -> str:
-    pin=str(pin or "").strip()
-    if len(pin) != 6 or not pin.isdigit():
-        raise ValueError("Der Portal-PIN muss genau 6 Ziffern haben.")
-    salt=secrets.token_bytes(16)
-    digest=hashlib.pbkdf2_hmac("sha256",pin.encode("utf-8"),salt,PORTAL_PIN_ITERATIONS)
-    return "pbkdf2_sha256$"+str(PORTAL_PIN_ITERATIONS)+"$"+salt.hex()+"$"+digest.hex()
-
-
-def _portal_pin_ok(pin: str, encoded: str) -> bool:
-    try:
-        scheme,iterations,salt_hex,digest_hex=encoded.split("$",3)
-        if scheme != "pbkdf2_sha256": return False
-        actual=hashlib.pbkdf2_hmac("sha256",str(pin).encode("utf-8"),bytes.fromhex(salt_hex),int(iterations)).hex()
-        return hmac.compare_digest(actual,digest_hex)
-    except Exception:
-        return False
 
 
 def _session_hash(token: str) -> str:
@@ -378,15 +355,6 @@ def _activity_descriptor(method: str, path: str):
     return f"Änderung {verb}", "System", path
 
 
-def _generate_unique_portal_pin():
-    records=db.portal_pin_records(include_disabled=True)
-    for _ in range(100):
-        pin=f"{secrets.randbelow(1000000):06d}"
-        if not any(_portal_pin_ok(pin,r.get("portal_pin_hash") or "") for r in records):
-            return pin
-    raise RuntimeError("Es konnte keine eindeutige Portal-PIN erzeugt werden.")
-
-
 def _normalize_signature_png(data: bytes) -> bytes:
     try:
         with PILImage.open(io.BytesIO(data)) as source:
@@ -418,16 +386,6 @@ def _save_access_signature(data_url: str, request_id_hint: str = "new"):
     try: os.chmod(target,0o600)
     except OSError: pass
     return name
-
-
-def _portal_request_user(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    return db.portal_user_for_session(_session_hash(token)) if token else None
-
-
-def _portal_client_hash(request: Request):
-    host=(request.client.host if request.client else "unknown") or "unknown"
-    return hashlib.sha256(host.encode("utf-8")).hexdigest()
 
 
 def _login_redirect(request: Request, reason: str | None = None):
@@ -2748,7 +2706,7 @@ async def create_user(payload: UserPayload):
     data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
-    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    user=db.get_user(uid) or {}; return {"ok":True,"user":user}
 
 @app.put("/api/users/{user_id}")
 async def update_user(request:Request,user_id: int,payload: UserPayload):
@@ -2776,7 +2734,7 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
         before_text="Alle Ladepunkte" if before_access["mode"]=="all" else (", ".join(before_access["charge_point_ids"]) or "Keine Ladepunkte")
         after_text="Alle Ladepunkte" if after_access["mode"]=="all" else (", ".join(after_access["charge_point_ids"]) or "Keine Ladepunkte")
         db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladeberechtigung geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"{before_text} → {after_text}")
-    user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    return {"ok":True,"user":user}
 
 @app.post("/api/users/{user_id}/image")
 async def upload_user_image(user_id:int, image:UploadFile=File(...)):
