@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from . import db
 from .runtime_utils import bool_value, clear_secret, ensure_setting_defaults, read_secret, secret_is_configured, write_secret
 
-REPOSITORY = os.getenv("UPDATE_GITHUB_REPOSITORY", "hotteftw1981/VoltCore").strip()
-LEGACY_REPOSITORY = os.getenv("UPDATE_GITHUB_REPOSITORY_FALLBACK", "hotteftw1981/drk-ocpp-backend").strip()
+REPOSITORY = os.getenv("UPDATE_GITHUB_REPOSITORY", "hotteftw1981/VoltCore-Community").strip()
+LEGACY_REPOSITORY = os.getenv("UPDATE_GITHUB_REPOSITORY_FALLBACK", "").strip()
 GITHUB_TOKEN_FILE = db.DATA_DIR / ".update_github_token"
 PORTAINER_WEBHOOK_FILE = db.DATA_DIR / ".update_portainer_webhook"
 CHECK_CACHE_SECONDS = 600
@@ -122,12 +122,14 @@ def _github_latest_release(token):
     last_error=None
     for repository in repositories:
         url=f"https://api.github.com/repos/{repository}/releases/latest"
-        req=urllib.request.Request(url,headers={
+        headers={
             "Accept":"application/vnd.github+json",
-            "Authorization":f"Bearer {token}",
             "X-GitHub-Api-Version":"2022-11-28",
-            "User-Agent":"voltcore-update-center",
-        })
+            "User-Agent":"voltcore-community-update-center",
+        }
+        if token:
+            headers["Authorization"]=f"Bearer {token}"
+        req=urllib.request.Request(url,headers=headers)
         try:
             with urllib.request.urlopen(req,timeout=15) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -168,8 +170,6 @@ def check_latest(current_version, force=False):
     if not cfg["check_enabled"]:
         return {"configured":cfg.get("github_token_configured",False),"check_enabled":False,"current_version":current_version,"update_available":False,"message":"Update-Prüfung ist deaktiviert.","install_ready":cfg.get("portainer_webhook_configured",False)}
     token=read_secret(GITHUB_TOKEN_FILE).strip()
-    if not token:
-        return {"configured":False,"check_enabled":True,"current_version":current_version,"update_available":False,"message":"GitHub-Zugriff noch nicht eingerichtet.","install_ready":cfg.get("portainer_webhook_configured",False)}
     now=time.time()
     with _cache_lock:
         cached=_cache.get("payload")
@@ -189,9 +189,9 @@ def check_latest(current_version, force=False):
     except urllib.error.HTTPError as exc:
         detail="GitHub-Zugriff fehlgeschlagen."
         if exc.code in (401,403):
-            detail="GitHub-Token ist ungültig oder besitzt keinen Lesezugriff auf das private Repository."
+            detail="GitHub-Zugriff wurde abgewiesen. Falls ein optionaler Token hinterlegt ist, bitte dessen Berechtigung prüfen."
         elif exc.code==404:
-            detail="Kein freigegebenes Release gefunden oder das Repository ist für den Token nicht sichtbar."
+            detail="Kein freigegebenes Community-Release gefunden."
         db.set_setting("update_last_check_at",datetime.now(timezone.utc).isoformat())
         db.set_setting("update_last_error",f"HTTP {exc.code}: {detail}")
         raise RuntimeError(detail) from exc
@@ -209,8 +209,6 @@ def cached_status(current_version):
     cfg=settings()
     latest=cfg.get("last_seen_version") or ""
     error=cfg.get("last_error") or ""
-    if not cfg.get("github_token_configured"):
-        return {"level":"neutral","label":"Nicht eingerichtet","detail":"GitHub-Release-Prüfung benötigt einen Lese-Token","available":False}
     if error:
         return {"level":"warn","label":"Prüfen","detail":"Letzte Update-Prüfung ist fehlgeschlagen","available":False}
     if latest:
