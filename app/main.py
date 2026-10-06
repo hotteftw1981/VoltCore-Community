@@ -1,4 +1,6 @@
 import logging
+import base64
+import binascii
 import asyncio
 import csv
 import io
