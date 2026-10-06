@@ -257,22 +257,17 @@ def init_db():
                 range_km REAL,
                 drivetrain TEXT,
                 assigned_charge_point TEXT,
-                driver TEXT,
                 image_path TEXT,
                 active INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'Fahrer',
-                department TEXT,
                 rfid TEXT,
                 status TEXT NOT NULL DEFAULT 'Aktiv',
                 vehicle TEXT,
                 monthly_kwh_limit REAL,
                 monthly_limit_mode TEXT NOT NULL DEFAULT 'warn',
-                weekly_hours REAL,
-                budget_source TEXT NOT NULL DEFAULT 'manual',
                 charge_access_mode TEXT NOT NULL DEFAULT 'all',
                 image_path TEXT
             );
@@ -386,44 +381,6 @@ def init_db():
                 revision INTEGER NOT NULL DEFAULT 1,
                 delivered_at TEXT NOT NULL,
                 PRIMARY KEY(subscription_id,notification_id,revision)
-            );
-            CREATE TABLE IF NOT EXISTS access_request_verifications (
-                token_hash TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                email_hash TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS access_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Neu',
-                name TEXT NOT NULL,
-                street TEXT NOT NULL,
-                postal_code TEXT NOT NULL,
-                city TEXT NOT NULL,
-                email TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                vehicle_make_model TEXT,
-                vehicle_plate TEXT NOT NULL,
-                weekly_hours REAL,
-                field_values_json TEXT,
-                field_schema_json TEXT,
-                approved_budget_kwh REAL,
-                budget_source TEXT,
-                terms_version TEXT NOT NULL,
-                terms_snapshot TEXT NOT NULL,
-                signature_path TEXT NOT NULL,
-                signed_at TEXT NOT NULL,
-                verified_at TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                admin_note TEXT,
-                decision_at TEXT,
-                decided_by INTEGER,
-                user_id INTEGER
             );
             CREATE TABLE IF NOT EXISTS billing_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -593,10 +550,6 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN monthly_kwh_limit REAL")
         if "monthly_limit_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN monthly_limit_mode TEXT NOT NULL DEFAULT 'warn'")
-        if "weekly_hours" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN weekly_hours REAL")
-        if "budget_source" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN budget_source TEXT NOT NULL DEFAULT 'manual'")
         if "image_path" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN image_path TEXT")
         if "charge_access_mode" not in user_columns:
@@ -628,24 +581,26 @@ def init_db():
             conn.execute("ALTER TABLE notifications ADD COLUMN audience TEXT NOT NULL DEFAULT 'all'")
         if "revision" not in notification_columns:
             conn.execute("ALTER TABLE notifications ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
-        access_request_columns = {r[1] for r in conn.execute("PRAGMA table_info(access_requests)").fetchall()}
-        for name, statement in {
-            "weekly_hours": "ALTER TABLE access_requests ADD COLUMN weekly_hours REAL",
-            "field_values_json": "ALTER TABLE access_requests ADD COLUMN field_values_json TEXT",
-            "field_schema_json": "ALTER TABLE access_requests ADD COLUMN field_schema_json TEXT",
-            "approved_budget_kwh": "ALTER TABLE access_requests ADD COLUMN approved_budget_kwh REAL",
-            "budget_source": "ALTER TABLE access_requests ADD COLUMN budget_source TEXT",
-        }.items():
-            if name not in access_request_columns:
-                conn.execute(statement)
         # Community is backend-only: remove obsolete personal portal state
         # left by the 0.9.7.74/0.9.7.75 release candidates.
         conn.execute("DROP TABLE IF EXISTS portal_sessions")
         conn.execute("DROP TABLE IF EXISTS portal_login_attempts")
         conn.execute("DROP TABLE IF EXISTS portal_pin_reset_tokens")
         conn.execute("DROP TABLE IF EXISTS portal_pin_reset_requests")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_verify_email ON access_request_verifications(email_hash,created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
+        conn.execute("DROP TABLE IF EXISTS access_request_verifications")
+        conn.execute("DROP TABLE IF EXISTS access_requests")
+        conn.execute("DELETE FROM app_settings WHERE key LIKE 'registration_%'")
+        for table_name, columns in (
+            ("users",("role","department","weekly_hours","budget_source")),
+            ("vehicles",("driver",)),
+        ):
+            existing={r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+            for legacy_col in columns:
+                if legacy_col in existing:
+                    try:
+                        conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {legacy_col}")
+                    except sqlite3.OperationalError:
+                        pass
         conn.execute("DROP TABLE IF EXISTS rfid_enrollment_sessions")
         conn.execute("DROP TABLE IF EXISTS rfid_replacement_requests")
         conn.execute("DROP INDEX IF EXISTS idx_transactions_import_source_key")
@@ -906,9 +861,7 @@ def init_db():
 
         now_setting=utc_now()
         for key,value in (("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
-                          ("rfid_local_list_version","1"),
-                          ("registration_enabled","0"),("registration_reference_kwh","0"),
-                          ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
+                          ("rfid_local_list_version","1")):
             conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
         current_local_version=int((conn.execute("SELECT value FROM app_settings WHERE key='rfid_local_list_version'").fetchone() or [1])[0] or 1)
 
@@ -1920,7 +1873,7 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
 def active_transactions_for_charge_point(cp_id, limit=20):
     with _lock, _connect() as conn:
         rows=conn.execute("""SELECT t.*, v.name AS vehicle_name, v.make AS vehicle_make, v.model AS vehicle_model, v.plate AS vehicle_plate, v.image_path AS vehicle_image_path,
-            u.name AS user_name, u.role AS user_role, u.department AS user_department, u.image_path AS user_image_path, r.uid AS rfid_uid
+            u.name AS user_name, u.image_path AS user_image_path, r.uid AS rfid_uid
             FROM transactions t LEFT JOIN vehicles v ON v.id=t.vehicle_id
             LEFT JOIN users u ON u.id=t.user_id LEFT JOIN rfid_cards r ON r.id=t.rfid_card_id
             WHERE t.charge_point_id=? AND t.status='Active' AND t.ended_at IS NULL
@@ -1940,7 +1893,7 @@ def active_transactions_for_charge_point(cp_id, limit=20):
 def active_transactions(limit=50):
     with _lock, _connect() as conn:
         rows=conn.execute("""SELECT t.*, v.name AS vehicle_name, v.make AS vehicle_make, v.model AS vehicle_model, v.plate AS vehicle_plate, v.image_path AS vehicle_image_path,
-            u.name AS user_name, u.role AS user_role, u.department AS user_department, u.image_path AS user_image_path, r.uid AS rfid_uid
+            u.name AS user_name, u.image_path AS user_image_path, r.uid AS rfid_uid
             FROM transactions t LEFT JOIN vehicles v ON v.id=t.vehicle_id
             LEFT JOIN users u ON u.id=t.user_id LEFT JOIN rfid_cards r ON r.id=t.rfid_card_id
             WHERE t.status='Active' AND t.ended_at IS NULL
@@ -2232,7 +2185,7 @@ def get_transaction(tx_id):
     with _lock, _connect() as conn:
         row=conn.execute("""SELECT t.*, v.name AS vehicle_name, v.make AS vehicle_make, v.model AS vehicle_model,
                       v.plate AS vehicle_plate, v.image_path AS vehicle_image_path,
-                      u.name AS user_name, u.role AS user_role, r.uid AS rfid_uid, r.label AS rfid_label, r.status AS rfid_status,
+                      u.name AS user_name, r.uid AS rfid_uid, r.label AS rfid_label, r.status AS rfid_status,
                       (SELECT AVG(ms.power_kw) FROM meter_samples ms WHERE ms.transaction_id=t.id AND ms.power_kw IS NOT NULL) AS avg_power_kw,
                       (SELECT MAX(ms.power_kw) FROM meter_samples ms WHERE ms.transaction_id=t.id AND ms.power_kw IS NOT NULL) AS sampled_peak_kw
                FROM transactions t LEFT JOIN vehicles v ON v.id=t.vehicle_id
@@ -2328,18 +2281,18 @@ def set_vehicle_image(vehicle_id, image_path):
 
 
 
-def create_vehicle(name, make=None, model=None, plate=None, battery_kwh=None, ac_power_kw=None, dc_power_kw=None, range_km=None, drivetrain=None, assigned_charge_point=None, driver=None):
+def create_vehicle(name, make=None, model=None, plate=None, battery_kwh=None, ac_power_kw=None, dc_power_kw=None, range_km=None, drivetrain=None, assigned_charge_point=None):
     with _lock, _connect() as conn:
         cur = conn.execute(
-            "INSERT INTO vehicles(name,make,model,plate,battery_kwh,ac_power_kw,dc_power_kw,range_km,drivetrain,assigned_charge_point,driver,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,1)",
-            (name, make, model, plate, battery_kwh, ac_power_kw, dc_power_kw, range_km, drivetrain, assigned_charge_point, driver),
+            "INSERT INTO vehicles(name,make,model,plate,battery_kwh,ac_power_kw,dc_power_kw,range_km,drivetrain,assigned_charge_point,active) VALUES(?,?,?,?,?,?,?,?,?,?,1)",
+            (name, make, model, plate, battery_kwh, ac_power_kw, dc_power_kw, range_km, drivetrain, assigned_charge_point),
         )
         conn.commit()
         return int(cur.lastrowid)
 
 
 def update_vehicle(vehicle_id, **fields):
-    allowed = {"name", "make", "model", "plate", "battery_kwh", "assigned_charge_point", "driver"}
+    allowed = {"name", "make", "model", "plate", "battery_kwh", "ac_power_kw", "dc_power_kw", "range_km", "drivetrain", "assigned_charge_point"}
     updates = [(k, fields[k]) for k in allowed if k in fields]
     if not updates:
         return False
@@ -2645,19 +2598,15 @@ def user_may_charge_at(user_id,charge_point_id):
         return bool(conn.execute("SELECT 1 FROM user_charge_point_access WHERE user_id=? AND charge_point_id=?",(int(user_id),str(charge_point_id))).fetchone())
 
 
-def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
-    """Create a neutral Community charging user.
-
-    weekly_hours and budget_source remain accepted for backwards compatibility,
-    but Community never derives charging credit from employment data.
-    """
+def create_user(name,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",charge_access_mode="all",allowed_charge_point_ids=None):
+    """Create a neutral Community charging user."""
     limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
         access_mode=_normalize_charge_access_mode(charge_access_mode)
         cur=conn.execute(
-            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (name,role,department,status,email,phone,limit_value,mode,None,"manual",access_mode),
+            "INSERT INTO users(name,status,email,phone,monthly_kwh_limit,monthly_limit_mode,charge_access_mode) VALUES(?,?,?,?,?,?,?)",
+            (name,status,email,phone,limit_value,mode,access_mode),
         )
         user_id=int(cur.lastrowid)
         _set_user_charge_access_conn(conn,user_id,access_mode,allowed_charge_point_ids)
@@ -2667,9 +2616,7 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
 def update_user(user_id,**fields):
     access_mode=fields.pop("charge_access_mode",None)
     access_ids=fields.pop("allowed_charge_point_ids",None)
-    fields.pop("weekly_hours",None)
-    fields.pop("budget_source",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
+    allowed={"name","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2787,7 +2734,6 @@ def delete_user_permanently(user_id):
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
             if card_uids:
                 _rfid_local_list_bump_conn(conn,card_uids)
@@ -2832,7 +2778,6 @@ def purge_user_with_history(user_id):
             conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
             conn.execute("DELETE FROM users WHERE id=?",(uid,))
             if card_uids:
                 _rfid_local_list_bump_conn(conn,card_uids)
@@ -3972,7 +3917,7 @@ def list_billing_groups():
     with _lock, _connect() as conn:
         groups=[dict(r) for r in conn.execute("SELECT g.*,COUNT(ubg.user_id) AS user_count FROM billing_groups g LEFT JOIN user_billing_groups ubg ON ubg.group_id=g.id GROUP BY g.id ORDER BY g.name").fetchall()]
         for group in groups:
-            group["members"]=[dict(r) for r in conn.execute("SELECT u.id,u.name,u.status,u.department FROM user_billing_groups x JOIN users u ON u.id=x.user_id WHERE x.group_id=? ORDER BY u.name",(group["id"],)).fetchall()]
+            group["members"]=[dict(r) for r in conn.execute("SELECT u.id,u.name,u.status FROM user_billing_groups x JOIN users u ON u.id=x.user_id WHERE x.group_id=? ORDER BY u.name",(group["id"],)).fetchall()]
         return groups
 
 def create_billing_group(name):
@@ -4008,7 +3953,7 @@ def unassign_user_billing_group(user_id, group_id):
 
 def list_tariff_users():
     with _lock, _connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT id,name,status,department,rfid FROM users ORDER BY name COLLATE NOCASE").fetchall()]
+        return [dict(r) for r in conn.execute("SELECT id,name,status,rfid FROM users ORDER BY name COLLATE NOCASE").fetchall()]
 
 def list_tariff_charge_points():
     with _lock, _connect() as conn:
@@ -4226,260 +4171,6 @@ def _setting_int(key, default, minimum=0, maximum=3650):
     return max(int(minimum), min(int(maximum), value))
 
 
-def _registration_default_fields():
-    return json.loads(json.dumps(_REGISTRATION_BUILTIN_FIELDS,ensure_ascii=False))
-
-def registration_settings():
-    """Return Community registration settings without employment-based rules."""
-    def fnum(key,default,minimum,maximum):
-        try: value=float(get_setting(key,str(default)))
-        except (TypeError,ValueError): value=float(default)
-        return max(float(minimum),min(float(maximum),value))
-    enabled=setting_bool("registration_enabled",False)
-    ref_kwh=fnum("registration_reference_kwh",0,0,10000)
-    limit_mode="block" if str(get_setting("registration_limit_mode","warn")).lower()=="block" else "warn"
-    raw=get_setting("registration_form_fields",None)
-    try:
-        fields=json.loads(raw) if raw else _registration_default_fields()
-        if not isinstance(fields,list): raise ValueError()
-    except Exception:
-        fields=_registration_default_fields()
-    defaults={x["id"]:x for x in _registration_default_fields()}
-    clean=[]; seen=set()
-    for item in fields:
-        if not isinstance(item,dict): continue
-        fid=str(item.get("id") or "").strip()
-        if not fid or fid in seen or fid=="weekly_hours": continue
-        base=defaults.get(fid,{})
-        typ=str(item.get("type") or base.get("type") or "text").lower()
-        if typ not in {"text","tel","number","date","textarea","select","checkbox"}: typ="text"
-        system=bool(base.get("system"))
-        entry={"id":fid,"type":typ,"label":str(item.get("label") or base.get("label") or fid)[:80],"enabled":bool(item.get("enabled",base.get("enabled",True))),"required":bool(item.get("required",base.get("required",False))),"system":system,"order":int(item.get("order",base.get("order",100)) or 100),"help":str(item.get("help") or base.get("help") or "")[:240]}
-        if typ=="select": entry["options"]=[str(x)[:80] for x in (item.get("options") or []) if str(x).strip()][:30]
-        if system: entry["enabled"]=True; entry["required"]=True
-        clean.append(entry); seen.add(fid)
-    for fid,base in defaults.items():
-        if fid not in seen:
-            clean.append(dict(base))
-    clean.sort(key=lambda x:(int(x.get("order",100)),str(x.get("label","")).casefold()))
-    return {"enabled":enabled,"budget_mode":"fixed","reference_hours":None,"reference_kwh":ref_kwh,"limit_mode":limit_mode,"fields":clean,"self_service_rfid_limit":2}
-
-def calculate_registration_budget(weekly_hours=None, settings=None):
-    """Legacy-compatible helper; Community always uses the fixed configured kWh value."""
-    cfg=settings or registration_settings()
-    ref_kwh=float(cfg.get("reference_kwh") or 0)
-    return float(Decimal(str(ref_kwh)).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-
-def save_registration_settings(payload):
-    enabled=bool(payload.get("enabled",True))
-    try: ref_kwh=float(payload.get("reference_kwh",0))
-    except (TypeError,ValueError): raise ValueError("Das Standardbudget muss eine Zahl sein.")
-    if not 0<=ref_kwh<=10000: raise ValueError("Das Standardbudget muss zwischen 0 und 10.000 kWh liegen.")
-    limit_mode="block" if str(payload.get("limit_mode") or "warn").lower()=="block" else "warn"
-    fields=payload.get("fields")
-    if not isinstance(fields,list): fields=registration_settings()["fields"]
-    defaults={x["id"]:x for x in _registration_default_fields()}; clean=[]; seen=set()
-    for idx,item in enumerate(fields[:40]):
-        if not isinstance(item,dict): continue
-        fid=str(item.get("id") or "").strip()
-        if not fid:
-            fid="custom_"+hashlib.sha256((str(item.get("label") or "field")+str(idx)+utc_now()).encode()).hexdigest()[:10]
-        if fid=="weekly_hours" or fid in seen: continue
-        is_builtin=fid in defaults
-        if not is_builtin and not fid.startswith("custom_"): fid="custom_"+re.sub(r"[^a-z0-9]+","_",fid.lower()).strip("_")[:30]
-        typ=str(item.get("type") or defaults.get(fid,{}).get("type") or "text").lower()
-        if typ not in {"text","tel","number","date","textarea","select","checkbox"}: typ="text"
-        system=bool(defaults.get(fid,{}).get("system"))
-        entry={"id":fid,"type":typ,"label":str(item.get("label") or defaults.get(fid,{}).get("label") or "Feld")[:80],"enabled":bool(item.get("enabled",True)),"required":bool(item.get("required",False)),"system":system,"order":int(item.get("order",(idx+1)*10) or (idx+1)*10),"help":str(item.get("help") or "")[:240]}
-        if typ=="select": entry["options"]=[str(x).strip()[:80] for x in (item.get("options") or []) if str(x).strip()][:30]
-        if system: entry["enabled"]=True; entry["required"]=True
-        clean.append(entry); seen.add(fid)
-    for fid,base in defaults.items():
-        if fid not in seen: clean.append(dict(base))
-    clean.sort(key=lambda x:(int(x.get("order",100)),str(x.get("label","")).casefold()))
-    with _lock,_connect() as conn:
-        now=utc_now()
-        vals={
-            "registration_enabled":"1" if enabled else "0",
-            "registration_budget_mode":"fixed",
-            "registration_reference_hours":"",
-            "registration_reference_kwh":str(ref_kwh),
-            "registration_limit_mode":limit_mode,
-            "registration_form_fields":json.dumps(clean,ensure_ascii=False,separators=(",",":")),
-        }
-        for key,value in vals.items():
-            conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",(key,value,now))
-        conn.execute("UPDATE users SET weekly_hours=NULL,budget_source='manual' WHERE weekly_hours IS NOT NULL OR budget_source<>'manual'")
-        conn.commit()
-    result=registration_settings()
-    result["recalculated_users"]=0
-    result["recalculated_user_ids"]=[]
-    result["skipped_auto_users"]=0
-    result["skipped_auto_user_ids"]=[]
-    return result
-
-# V0.9.7.20 - public access requests
-
-def access_request_start_allowed(email_hash, ip_hash, window_minutes=60, ip_limit=5):
-    cutoff=(datetime.now(timezone.utc)-timedelta(minutes=max(1,int(window_minutes)))).isoformat()
-    with _connect() as conn:
-        by_email=int(conn.execute("SELECT COUNT(*) FROM access_request_verifications WHERE email_hash=? AND created_at>=?",(str(email_hash),cutoff)).fetchone()[0] or 0)
-        by_ip=int(conn.execute("SELECT COUNT(*) FROM access_request_verifications WHERE ip_hash=? AND created_at>=?",(str(ip_hash),cutoff)).fetchone()[0] or 0)
-        return by_email < 1 and by_ip < max(1,int(ip_limit))
-
-
-def create_access_request_verification(email, email_hash, ip_hash, token_hash, expires_at):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("DELETE FROM access_request_verifications WHERE expires_at<?",((datetime.now(timezone.utc)-timedelta(days=2)).isoformat(),))
-        conn.execute("UPDATE access_request_verifications SET used_at=? WHERE email_hash=? AND used_at IS NULL",(now,str(email_hash)))
-        conn.execute("INSERT INTO access_request_verifications(token_hash,email,email_hash,ip_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)",(str(token_hash),str(email).strip(),str(email_hash),str(ip_hash),now,str(expires_at)))
-        conn.commit(); return True
-
-
-def access_request_verification(token_hash):
-    now=utc_now()
-    with _connect() as conn:
-        row=conn.execute("SELECT * FROM access_request_verifications WHERE token_hash=? AND used_at IS NULL AND expires_at>?",(str(token_hash),now)).fetchone()
-        return dict(row) if row else None
-
-
-def create_access_request(token_hash, *, name, street="", postal_code="", city="", phone="", vehicle_make_model="", vehicle_plate="", weekly_hours=None, field_values_json=None, field_schema_json=None, terms_version, terms_snapshot, signature_path, ip_hash):
-    now=utc_now()
-    hours=None  # Community does not collect or evaluate employment hours.
-    normalized_plate=normalize_vehicle_plate(vehicle_plate)
-    try:
-        values=json.loads(str(field_values_json or '{}'))
-        if isinstance(values,dict) and 'vehicle_plate' in values:
-            values['vehicle_plate']=normalized_plate
-            field_values_json=json.dumps(values,ensure_ascii=False)
-    except Exception:
-        pass
-    with _lock,_connect() as conn:
-        verify=conn.execute("SELECT * FROM access_request_verifications WHERE token_hash=? AND used_at IS NULL AND expires_at>?",(str(token_hash),now)).fetchone()
-        if not verify: raise ValueError("Der Bestätigungslink ist ungültig oder abgelaufen.")
-        email=str(verify['email']).strip()
-        existing=conn.execute("SELECT id FROM access_requests WHERE LOWER(email)=LOWER(?) AND status IN ('Neu','In Prüfung')",(email,)).fetchone()
-        if existing: raise ValueError("Für diese E-Mail-Adresse besteht bereits ein offener Antrag.")
-        cur=conn.execute("""INSERT INTO access_requests(created_at,updated_at,status,name,street,postal_code,city,email,phone,vehicle_make_model,vehicle_plate,weekly_hours,field_values_json,field_schema_json,terms_version,terms_snapshot,signature_path,signed_at,verified_at,ip_hash)
-            VALUES(?,?,'Neu',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(now,now,str(name).strip(),str(street or '').strip(),str(postal_code or '').strip(),str(city or '').strip(),email,str(phone or '').strip(),str(vehicle_make_model or '').strip() or None,normalized_plate,hours,str(field_values_json or '{}'),str(field_schema_json or '[]'),str(terms_version),str(terms_snapshot),str(signature_path),now,now,str(ip_hash)))
-        request_id=int(cur.lastrowid)
-        conn.execute("UPDATE access_request_verifications SET used_at=? WHERE token_hash=?",(now,str(token_hash)))
-        conn.commit(); return request_id
-
-
-def list_access_requests(status=None, limit=200):
-    with _connect() as conn:
-        params=[]; where=""
-        if status and str(status) != 'Alle': where=" WHERE a.status=?"; params.append(str(status))
-        params.append(max(1,min(int(limit or 200),500)))
-        rows=conn.execute("""SELECT a.*,su.display_name AS decided_by_name,u.name AS created_user_name
-            FROM access_requests a LEFT JOIN system_users su ON su.id=a.decided_by LEFT JOIN users u ON u.id=a.user_id"""+where+" ORDER BY CASE a.status WHEN 'Neu' THEN 0 WHEN 'In Prüfung' THEN 1 ELSE 2 END,a.created_at DESC LIMIT ?",params).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_access_request(request_id):
-    with _connect() as conn:
-        row=conn.execute("""SELECT a.*,su.display_name AS decided_by_name,u.name AS created_user_name
-            FROM access_requests a LEFT JOIN system_users su ON su.id=a.decided_by LEFT JOIN users u ON u.id=a.user_id WHERE a.id=?""",(int(request_id),)).fetchone()
-        return dict(row) if row else None
-
-
-def access_request_view(request_id):
-    item=get_access_request(request_id)
-    if not item:
-        return None
-    try:
-        item["terms"]=json.loads(item.get("terms_snapshot") or "[]")
-    except Exception:
-        item["terms"]=[]
-    try:
-        item["form_fields"]=json.loads(item.get("field_schema_json") or "[]")
-    except Exception:
-        item["form_fields"]=[]
-    try:
-        item["form_values"]=json.loads(item.get("field_values_json") or "{}")
-    except Exception:
-        item["form_values"]={}
-    item["signature_url"]=""
-    return item
-
-
-def delete_access_request(request_id):
-    """Delete one access-request record while leaving any approved user intact."""
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT id,name,status,signature_path,user_id FROM access_requests WHERE id=?",(int(request_id),)).fetchone()
-        if not row:
-            return None
-        item=dict(row)
-        conn.execute("DELETE FROM access_requests WHERE id=?",(int(request_id),))
-        conn.execute("UPDATE notifications SET active=0 WHERE notification_key IN (?,?)",
-                     (f"access-request:{int(request_id)}",f"access-approved:{int(request_id)}"))
-        conn.commit()
-        return item
-
-
-def set_access_request_in_review(request_id):
-    with _lock,_connect() as conn:
-        cur=conn.execute("UPDATE access_requests SET status='In Prüfung',updated_at=? WHERE id=? AND status='Neu'",(utc_now(),int(request_id)))
-        conn.commit(); return cur.rowcount>0
-
-
-def approve_access_request(request_id, system_user_id, monthly_kwh_limit=None, monthly_limit_mode="warn", admin_note=None, budget_source="manual", return_details=False):
-    now=utc_now(); mode="block" if str(monthly_limit_mode).lower()=="block" else "warn"
-    source="manual"
-    with _lock,_connect() as conn:
-        req=conn.execute("SELECT * FROM access_requests WHERE id=?",(int(request_id),)).fetchone()
-        if not req: raise ValueError("Zugangsantrag nicht gefunden.")
-        if req['status'] in ('Genehmigt','Abgelehnt'): raise ValueError("Dieser Antrag wurde bereits abgeschlossen.")
-        if conn.execute("SELECT 1 FROM users WHERE LOWER(TRIM(COALESCE(email,'')))=LOWER(TRIM(?)) LIMIT 1",(req['email'],)).fetchone():
-            raise ValueError("Für diese E-Mail-Adresse existiert bereits ein Ladebenutzer.")
-        limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
-        normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
-        vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
-        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,email,phone,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,NULL,?)""",(req['name'],vehicle_text,limit_value,mode,req['email'],req['phone'],source))
-        user_id=int(cur.lastrowid)
-        vehicle_id=None; vehicle_created=False
-        if normalized_plate:
-            plate_key=vehicle_plate_key(normalized_plate)
-            existing=None
-            for row in conn.execute("SELECT id,plate FROM vehicles WHERE active=1 AND TRIM(COALESCE(plate,''))<>'' ORDER BY id").fetchall():
-                if vehicle_plate_key(row['plate'])==plate_key:
-                    existing=row; break
-            if existing:
-                vehicle_id=int(existing['id'])
-            else:
-                vehicle_name=str(req['vehicle_make_model'] or '').strip() or normalized_plate
-                vcur=conn.execute("""INSERT INTO vehicles(name,make,model,plate,battery_kwh,ac_power_kw,dc_power_kw,range_km,drivetrain,assigned_charge_point,driver,active)
-                    VALUES(?,NULL,NULL,?,NULL,NULL,NULL,NULL,NULL,NULL,?,1)""",(vehicle_name,normalized_plate,str(req['name'] or '').strip() or None))
-                vehicle_id=int(vcur.lastrowid); vehicle_created=True
-            conn.execute("UPDATE user_vehicles SET primary_vehicle=0 WHERE user_id=?",(user_id,))
-            conn.execute("INSERT OR IGNORE INTO user_vehicles(user_id,vehicle_id,primary_vehicle,assigned_at) VALUES(?,?,1,?)",(user_id,vehicle_id,now))
-        conn.execute("UPDATE access_requests SET status='Genehmigt',updated_at=?,decision_at=?,decided_by=?,admin_note=?,user_id=?,approved_budget_kwh=?,budget_source=?,vehicle_plate=? WHERE id=?",(now,now,int(system_user_id) if system_user_id else None,str(admin_note or '').strip() or None,user_id,limit_value,source,normalized_plate,int(request_id)))
-        conn.commit()
-        result={"user_id":user_id,"vehicle_id":vehicle_id,"vehicle_created":vehicle_created,"vehicle_plate":normalized_plate}
-        return result if return_details else user_id
-
-
-def decide_access_request(request_id, status, system_user_id, admin_note=None, user_id=None):
-    if status not in {'Genehmigt','Abgelehnt'}: raise ValueError('Ungültiger Antragsstatus.')
-    now=utc_now()
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT status FROM access_requests WHERE id=?",(int(request_id),)).fetchone()
-        if not row: return False
-        if row[0] in ('Genehmigt','Abgelehnt'): raise ValueError('Dieser Antrag wurde bereits abgeschlossen.')
-        conn.execute("UPDATE access_requests SET status=?,updated_at=?,decision_at=?,decided_by=?,admin_note=?,user_id=? WHERE id=?",(status,now,now,int(system_user_id) if system_user_id else None,str(admin_note or '').strip() or None,user_id,int(request_id)))
-        conn.commit(); return True
-
-
-def access_request_counts():
-    with _connect() as conn:
-        rows=conn.execute("SELECT status,COUNT(*) n FROM access_requests GROUP BY status").fetchall()
-        d={r['status']:int(r['n']) for r in rows}
-        return {'new':d.get('Neu',0),'review':d.get('In Prüfung',0),'approved':d.get('Genehmigt',0),'rejected':d.get('Abgelehnt',0),'total':sum(d.values())}
-
-
 def active_rfid_count(user_id):
     with _connect() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM rfid_cards WHERE user_id=? AND status='Aktiv'",(int(user_id),)).fetchone()[0] or 0)
@@ -4533,7 +4224,7 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
                    t.charging_seconds,t.stand_seconds,t.connection_seconds,t.user_id,t.vehicle_id,
                    t.tariff_name,t.tariff_source,t.price_cents_per_kwh,t.cost_cents,
                    t.billing_group_id,t.billing_group_name,t.timing_quality,
-                   u.name AS user_name,u.department AS user_department,
+                   u.name AS user_name,
                    v.name AS vehicle_name,v.plate AS vehicle_plate
               FROM transactions t
               LEFT JOIN users u ON u.id=t.user_id
@@ -4789,8 +4480,8 @@ def global_search(query,limit_per_group=6):
     if len(q)<2:return {"query":q,"groups":[],"total":0}
     like=f"%{q}%"; groups=[]
     with _lock,_connect() as conn:
-        users=[dict(r) for r in conn.execute("""SELECT u.id,u.name,u.department,u.status FROM users u WHERE u.name LIKE ? COLLATE NOCASE OR COALESCE(u.department,'') LIKE ? COLLATE NOCASE OR COALESCE(u.rfid,'') LIKE ? COLLATE NOCASE OR EXISTS(SELECT 1 FROM rfid_cards r WHERE r.user_id=u.id AND (r.uid LIKE ? COLLATE NOCASE OR COALESCE(r.label,'') LIKE ? COLLATE NOCASE)) ORDER BY u.name LIMIT ?""",(like,like,like,like,like,limit)).fetchall()]
-        if users: groups.append({"key":"users","label":"Ladebenutzer / RFID","items":[{"title":r['name'],"subtitle":" · ".join(x for x in [r.get('department'),r.get('status')] if x),"url":f"/users?user={r['id']}"} for r in users]})
+        users=[dict(r) for r in conn.execute("""SELECT u.id,u.name,u.status FROM users u WHERE u.name LIKE ? COLLATE NOCASE OR COALESCE(u.rfid,'') LIKE ? COLLATE NOCASE OR EXISTS(SELECT 1 FROM rfid_cards r WHERE r.user_id=u.id AND (r.uid LIKE ? COLLATE NOCASE OR COALESCE(r.label,'') LIKE ? COLLATE NOCASE)) ORDER BY u.name LIMIT ?""",(like,like,like,like,limit)).fetchall()]
+        if users: groups.append({"key":"users","label":"Ladebenutzer / RFID","items":[{"title":r['name'],"subtitle":str(r.get('status') or ''),"url":f"/users?user={r['id']}"} for r in users]})
         vehicles=[dict(r) for r in conn.execute("SELECT id,name,plate,make,model FROM vehicles WHERE active=1 AND (name LIKE ? COLLATE NOCASE OR COALESCE(plate,'') LIKE ? COLLATE NOCASE OR COALESCE(make,'') LIKE ? COLLATE NOCASE OR COALESCE(model,'') LIKE ? COLLATE NOCASE) ORDER BY name LIMIT ?",(like,like,like,like,limit)).fetchall()]
         if vehicles: groups.append({"key":"vehicles","label":"Fahrzeuge","items":[{"title":r['name'],"subtitle":" · ".join(x for x in [r.get('plate'),r.get('make'),r.get('model')] if x),"url":f"/vehicles?vehicle={r['id']}"} for r in vehicles]})
         cps=[dict(r) for r in conn.execute("SELECT id,vendor,model,location,status FROM charge_points WHERE COALESCE(ignored,0)=0 AND (id LIKE ? COLLATE NOCASE OR COALESCE(vendor,'') LIKE ? COLLATE NOCASE OR COALESCE(model,'') LIKE ? COLLATE NOCASE OR COALESCE(location,'') LIKE ? COLLATE NOCASE OR COALESCE(serial_number,'') LIKE ? COLLATE NOCASE) ORDER BY id LIMIT ?",(like,like,like,like,like,limit)).fetchall()]
