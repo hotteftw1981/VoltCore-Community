@@ -6,11 +6,11 @@
 <section class="settings-grid">
   <div class="panel branding-panel">
     <div class="panelhead"><div><h2>Branding</h2><span>Community · Name &amp; Logo</span></div></div>
-    <p class="detail-note">Passe VoltCore Community an deine Organisation an. Die Community-Edition bleibt als Produktbasis erkennbar.</p>
+    <p class="detail-note">Passe VoltCore Community an deine Installation an. Die Community-Edition bleibt als Produktbasis erkennbar.</p>
     <form id="brandingForm" class="branding-form" enctype="multipart/form-data">
       <div class="branding-fields">
         <label>Produktname<input id="brandProductName" name="product_name" maxlength="80" required></label>
-        <label>Organisation<input id="brandOrganization" name="organization_name" maxlength="100" required></label>
+        <label>Installation / Organisation<input id="brandOrganization" name="organization_name" maxlength="100" required></label>
         <label>Anzeigename<input id="brandDisplayName" name="display_name" maxlength="80" required></label>
         <label>Untertitel<input id="brandSubtitle" name="product_subtitle" maxlength="100" required></label>
         <label>Primär-/Akzentfarbe<div class="branding-color-row"><input id="brandColorText" name="primary_color" pattern="#[0-9A-Fa-f]{6}" required><input id="brandColor" type="color" aria-label="Akzentfarbe auswählen"></div></label>
@@ -48,6 +48,18 @@
     <div class="mail-test-card"><div><b>Testmail</b><small>Prüft SMTP und das aktuelle Branding.</small></div><div class="mail-test-row"><input id="mailTestRecipient" type="email" placeholder="Testadresse"><select id="mailTestTemplate"></select><button class="secondary" id="mailTestSend" type="button">Testmail senden</button></div><div id="mailTestMessage" class="form-message"></div></div>
   </div>
 
+  <div class="panel charging-credit-panel">
+    <div class="panelhead"><div><h2>Optionales Freikontingent</h2><span>standardmäßig aus</span></div></div>
+    <p class="detail-note">Ein Freikontingent ist kein Ladelimit. Wenn es aktiviert ist, werden die ersten kWh je Ladebenutzer und Kalendermonat bei der Kostenberechnung mit 0 € berücksichtigt.</p>
+    <form id="chargingCreditForm" class="mail-settings-form">
+      <div class="setting-switch-card"><div><b>Monatliches Freikontingent aktivieren</b><small>Ohne Aktivierung wird jede geladene kWh nach dem zutreffenden Tarif berechnet.</small></div><label class="toggle-switch"><input id="chargingCreditEnabled" type="checkbox"><span></span></label></div>
+      <div class="form-grid">
+        <label>Freie kWh pro Benutzer / Monat<input id="chargingCreditKwh" type="number" min="0" max="100000" step="1" value="0"></label>
+      </div>
+      <div class="branding-actions"><button class="primary" type="submit">Freikontingent speichern</button><div id="chargingCreditMessage" class="form-message"></div></div>
+    </form>
+  </div>
+
   <div class="panel">
     <h2>Administration</h2>
     <div class="settings-list">
@@ -78,6 +90,11 @@ function fillMail(d){document.getElementById('mailEnabled').checked=!!d.enabled;
 fetch('/api/settings/mail').then(r=>r.json()).then(fillMail);
 mailForm.onsubmit=async e=>{e.preventDefault();const payload={enabled:document.getElementById('mailEnabled').checked,host:document.getElementById('mailHost').value.trim(),port:Number(document.getElementById('mailPort').value||587),security:document.getElementById('mailSecurity').value,username:document.getElementById('mailUsername').value.trim(),password:document.getElementById('mailPassword').value||null,clear_password:document.getElementById('mailClearPassword').checked,from_email:document.getElementById('mailFromEmail').value.trim(),from_name:document.getElementById('mailFromName').value.trim(),admin_recipients:document.getElementById('mailAdminRecipients').value.trim(),public_base_url:document.getElementById('mailPublicBaseUrl').value.trim(),event_rfid_requests:false,event_pin_reset_admin:false,event_backup_failures:document.getElementById('mailEventBackup').checked,event_security_warnings:document.getElementById('mailEventSecurity').checked,event_access_requests:false};const r=await fetch('/api/settings/mail',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));mailMsg.textContent=r.ok?'E-Mail-Einstellungen gespeichert.':(d.detail||'Speichern fehlgeschlagen.');mailMsg.className='form-message '+(r.ok?'success':'error');if(r.ok){document.getElementById('mailPassword').value='';document.getElementById('mailClearPassword').checked=false;fillMail(d.settings)}};
 document.getElementById('mailTestSend').onclick=async()=>{const recipient=document.getElementById('mailTestRecipient').value.trim();if(!recipient){mailTestMsg.textContent='Bitte eine Testadresse angeben.';mailTestMsg.className='form-message error';return}const r=await fetch('/api/settings/mail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipient,template:mailTestTemplate.value||'system'})}),d=await r.json().catch(()=>({}));mailTestMsg.textContent=r.ok?'Testmail wurde versendet.':(d.detail||'Testmail konnte nicht versendet werden.');mailTestMsg.className='form-message '+(r.ok?'success':'error')};
+
+const chargingCreditForm=document.getElementById('chargingCreditForm'),chargingCreditMsg=document.getElementById('chargingCreditMessage');
+function fillChargingCredit(d){document.getElementById('chargingCreditEnabled').checked=!!d.enabled;document.getElementById('chargingCreditKwh').value=Number(d.default_monthly_kwh||0)}
+fetch('/api/settings/charging-credit').then(r=>r.json()).then(fillChargingCredit);
+chargingCreditForm.onsubmit=async e=>{e.preventDefault();const payload={enabled:document.getElementById('chargingCreditEnabled').checked,default_monthly_kwh:Number(document.getElementById('chargingCreditKwh').value||0)},r=await fetch('/api/settings/charging-credit',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));chargingCreditMsg.textContent=r.ok?'Freikontingent gespeichert.':(d.detail||'Speichern fehlgeschlagen.');chargingCreditMsg.className='form-message '+(r.ok?'success':'error');if(r.ok)fillChargingCredit(d.settings)};
 
 const brandingForm=document.getElementById('brandingForm'),brandingMsg=document.getElementById('brandingMessage'),brandColor=document.getElementById('brandColor'),brandColorText=document.getElementById('brandColorText');
 const previews={logo_light_url:document.getElementById('previewLogoLight'),logo_dark_url:document.getElementById('previewLogoDark'),favicon_url:document.getElementById('previewFavicon')};
