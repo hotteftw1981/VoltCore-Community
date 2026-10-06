@@ -21,17 +21,17 @@ class CommunityNoLiveViewTests(unittest.TestCase):
         ):
             self.assertNotIn(needle, main)
 
-    def test_liveview_ui_is_not_present(self):
-        for rel in (
-            "app/templates/base.html",
-            "app/templates/settings.html",
-            "app/static/style.css",
-            "README.md",
-            "README.en.md",
-            "docs/COMMUNITY_SCOPE.md",
-        ):
-            text = (ROOT / rel).read_text(encoding="utf-8").lower()
-            self.assertNotIn("liveview", text, rel)
+    def test_liveview_runtime_code_is_gone(self):
+        allowed_suffixes = {".py", ".html", ".css", ".js", ".json"}
+        for path in (ROOT / "app").rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
+                continue
+            # db.py intentionally contains one migration cleanup for stale
+            # 0.9.7.74 app_settings keys. It must not expose LiveView helpers.
+            if path == ROOT / "app" / "db.py":
+                continue
+            text = path.read_text(encoding="utf-8").lower()
+            self.assertNotIn("liveview", text, str(path.relative_to(ROOT)))
 
     def test_liveview_database_helpers_are_removed(self):
         db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
@@ -43,6 +43,15 @@ class CommunityNoLiveViewTests(unittest.TestCase):
             "def save_liveview_settings(",
         ):
             self.assertNotIn(needle, db)
+        self.assertIn("DELETE FROM app_settings WHERE key LIKE 'liveview_%'", db)
+
+    def test_public_feature_lists_do_not_advertise_liveview(self):
+        for rel in ("README.md", "README.en.md"):
+            text = (ROOT / rel).read_text(encoding="utf-8").lower()
+            self.assertNotIn("liveview", text, rel)
+
+        scope = (ROOT / "docs" / "COMMUNITY_SCOPE.md").read_text(encoding="utf-8")
+        self.assertIn("LiveView / Kiosk is explicitly **not part of VoltCore Community**", scope)
 
 
 if __name__ == "__main__":
