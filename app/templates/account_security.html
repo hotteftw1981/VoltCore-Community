@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Anmeldesicherheit - {{ branding.product_name }}{% endblock %}
+{% block heading %}Anmeldesicherheit{% endblock %}
+{% block subtitle %}Passwortschutz, Zwei-Faktor-Authentifizierung und Wiederherstellungscodes{% endblock %}
+{% block content %}
+<section class="stats three">
+  <div class="stat"><span>2FA / TOTP</span><b id="twoFactorState">{{ 'Aktiv' if two_factor and two_factor.totp_enabled else 'Inaktiv' }}</b><small>Authenticator-App</small></div>
+  <div class="stat"><span>Wiederherstellungscodes</span><b id="recoveryCount">{{ two_factor.recovery_codes_remaining if two_factor else 0 }}</b><small>noch verfügbar</small></div>
+  <div class="stat"><span>Konto</span><b>{{ auth_user.display_name }}</b><small>{{ auth_user.username }}</small></div>
+</section>
+
+<section class="settings-grid">
+  <div class="panel">
+    <div class="panelhead"><div><h2>Zwei-Faktor-Authentifizierung</h2><span>Zusätzlicher Einmalcode nach dem Passwort</span></div><span id="twoFactorBadge" class="state {{ 'green' if two_factor and two_factor.totp_enabled else '' }}">{{ 'Aktiv' if two_factor and two_factor.totp_enabled else 'Inaktiv' }}</span></div>
+    <div id="twoFactorOff" {% if two_factor and two_factor.totp_enabled %}hidden{% endif %}>
+      <p class="detail-note">Nach der Aktivierung benötigst du bei jeder neuen Anmeldung zusätzlich einen Code aus einer TOTP-kompatiblen Authenticator-App.</p>
+      <form id="setupStartForm">
+        <label>Aktuelles Passwort<input id="setupPassword" type="password" autocomplete="current-password" required></label>
+        <div class="form-actions"><button class="primary" type="submit">2FA einrichten</button></div>
+      </form>
+    </div>
+    <div id="twoFactorOn" {% if not two_factor or not two_factor.totp_enabled %}hidden{% endif %}>
+      <div class="settings-list">
+        <div><span>Status</span><b>Aktiviert</b></div>
+        <div><span>Aktiv seit</span><b id="enabledAt">{{ two_factor.totp_enabled_at or '—' }}</b></div>
+        <div><span>Recovery-Codes</span><b><span id="enabledRecoveryCount">{{ two_factor.recovery_codes_remaining if two_factor else 0 }}</span> verbleibend</b></div>
+      </div>
+      <div class="form-actions"><button id="showRecoveryForm" class="secondary" type="button">Neue Wiederherstellungscodes</button><button id="showDisableForm" class="danger-outline" type="button">2FA deaktivieren</button></div>
+    </div>
+    <div id="accountSecurityMessage" class="form-message"></div>
+  </div>
+
+  <div class="panel">
+    <div class="panelhead"><div><h2>Was wird geschützt?</h2><span>Anmeldung in die interne Weboberfläche</span></div></div>
+    <div class="settings-list">
+      <div><span>1. Faktor</span><b>Benutzername + Passwort</b></div>
+      <div><span>2. Faktor</span><b>TOTP-Code · 30 Sekunden</b></div>
+      <div><span>Fallback</span><b>Einmalige Wiederherstellungscodes</b></div>
+      <div><span>Schutz vor Wiederholung</span><b>Bereits verwendete TOTP-Zeitfenster werden abgelehnt</b></div>
+    </div>
+    <div class="detail-note"><b>Wichtig:</b> Bewahre Wiederherstellungscodes getrennt vom Authenticator-Gerät auf. Jeder Code funktioniert nur einmal.</div>
+  </div>
+</section>
+
+<div class="modal" id="setupModal" hidden><div class="modal-card">
+  <div class="panelhead modal-title-row"><div><h2>Authenticator verbinden</h2><span>QR-Code scannen und bestätigen</span></div><button class="modal-close" id="setupClose" type="button">&times;</button></div>
+  <div style="display:grid;gap:16px;justify-items:center">
+    <img id="setupQr" alt="QR-Code für die Authenticator-App" style="width:220px;height:220px;max-width:70vw;border-radius:12px;background:#fff;padding:10px">
+    <div class="detail-note" style="width:100%"><b>Manueller Schlüssel</b><br><code id="setupSecret" style="word-break:break-all"></code></div>
+  </div>
+  <form id="setupConfirmForm"><label>6-stelliger Code<input id="setupCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label><div id="setupMessage" class="form-message"></div><div class="form-actions"><button id="setupCancel" class="secondary" type="button">Abbrechen</button><button class="primary" type="submit">Aktivieren</button></div></form>
+</div></div>
+
+<div class="modal" id="recoveryModal" hidden><div class="modal-card">
+  <div class="panelhead modal-title-row"><div><h2>Wiederherstellungscodes</h2><span>Nur jetzt vollständig sichtbar</span></div><button class="modal-close" id="recoveryClose" type="button">&times;</button></div>
+  <p class="detail-note">Speichere diese Codes sicher. Jeder Code kann genau einmal anstelle des Authenticator-Codes verwendet werden.</p>
+  <div id="recoveryCodes" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-family:monospace;font-size:1rem"></div>
+  <div class="form-actions"><button id="copyRecovery" class="secondary" type="button">Codes kopieren</button><button id="recoveryDone" class="primary" type="button">Sicher gespeichert</button></div>
+</div></div>
+
+<div class="modal" id="protectedModal" hidden><div class="modal-card">
+  <div class="panelhead modal-title-row"><div><h2 id="protectedTitle">2FA verwalten</h2><span id="protectedSubtitle">Bestätigung erforderlich</span></div><button class="modal-close" id="protectedClose" type="button">&times;</button></div>
+  <form id="protectedForm"><label>Aktuelles Passwort<input id="protectedPassword" type="password" autocomplete="current-password" required></label><label>Authenticator- oder Wiederherstellungscode<input id="protectedCode" autocomplete="one-time-code" required></label><div id="protectedMessage" class="form-message"></div><div class="form-actions"><button id="protectedCancel" class="secondary" type="button">Abbrechen</button><button id="protectedSubmit" class="primary" type="submit">Bestätigen</button></div></form>
+</div></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const $=id=>document.getElementById(id);
+let protectedAction=null,lastRecovery=[];
+function msg(text,type){const m=$('accountSecurityMessage');m.textContent=text||'';m.className='form-message '+(type||'')}
+function setState(s){
+  const on=!!Number((s&&s.totp_enabled)||0);
+  $('twoFactorState').textContent=on?'Aktiv':'Inaktiv';
+  $('twoFactorBadge').textContent=on?'Aktiv':'Inaktiv';
+  $('twoFactorBadge').className='state '+(on?'green':'');
+  $('twoFactorOff').hidden=on;$('twoFactorOn').hidden=!on;
+  const c=Number((s&&s.recovery_codes_remaining)||0);
+  $('recoveryCount').textContent=String(c);$('enabledRecoveryCount').textContent=String(c);
+  if(s&&s.totp_enabled_at)$('enabledAt').textContent=window.ocppLocalTime(s.totp_enabled_at);
+}
+async function refresh(){const r=await fetch('/api/account/2fa/status',{cache:'no-store'});if(r.ok)setState((await r.json()).two_factor)}
+$('setupStartForm').onsubmit=async e=>{
+  e.preventDefault();msg('Erzeuge sicheren Schlüssel …');
+  const r=await fetch('/api/account/2fa/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:$('setupPassword').value})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){msg(d.detail||'Einrichtung konnte nicht gestartet werden.','error');return}
+  $('setupSecret').textContent=d.secret;$('setupQr').src=d.qr_url+'?t='+Date.now();$('setupCode').value='';$('setupMessage').textContent='';$('setupModal').hidden=false;msg('');
+};
+$('setupConfirmForm').onsubmit=async e=>{
+  e.preventDefault();const m=$('setupMessage');m.textContent='Prüfe Code …';
+  const r=await fetch('/api/account/2fa/setup/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:$('setupCode').value})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){m.className='form-message error';m.textContent=d.detail||'Code konnte nicht bestätigt werden.';return}
+  $('setupModal').hidden=true;showRecovery(d.recovery_codes||[]);setState(d.two_factor);$('setupStartForm').reset();
+};
+async function cancelSetup(){await fetch('/api/account/2fa/setup/cancel',{method:'POST'}).catch(()=>{});$('setupModal').hidden=true}
+$('setupClose').onclick=$('setupCancel').onclick=cancelSetup;
+function showRecovery(codes){
+  lastRecovery=codes;
+  $('recoveryCodes').innerHTML=codes.map(x=>'<code>'+x+'</code>').join('');
+  $('recoveryModal').hidden=false;
+}
+$('copyRecovery').onclick=async()=>{
+  try{await navigator.clipboard.writeText(lastRecovery.join('\n'));$('copyRecovery').textContent='Kopiert ✓'}
+  catch(_){$('copyRecovery').textContent='Kopieren nicht möglich'}
+};
+$('recoveryClose').onclick=$('recoveryDone').onclick=()=>{$('recoveryModal').hidden=true;lastRecovery=[];$('copyRecovery').textContent='Codes kopieren';refresh()};
+function openProtected(action){
+  protectedAction=action;$('protectedForm').reset();$('protectedMessage').textContent='';
+  const regen=action==='recovery';
+  $('protectedTitle').textContent=regen?'Neue Wiederherstellungscodes':'2FA deaktivieren';
+  $('protectedSubtitle').textContent=regen?'Bestehende Codes werden ungültig':'Danach genügt wieder das Passwort';
+  $('protectedSubmit').textContent=regen?'Neue Codes erzeugen':'2FA deaktivieren';
+  $('protectedSubmit').className=regen?'primary':'stop';
+  $('protectedModal').hidden=false;
+}
+$('showRecoveryForm').onclick=()=>openProtected('recovery');
+$('showDisableForm').onclick=()=>openProtected('disable');
+$('protectedClose').onclick=$('protectedCancel').onclick=()=>$('protectedModal').hidden=true;
+$('protectedForm').onsubmit=async e=>{
+  e.preventDefault();
+  const path=protectedAction==='recovery'?'/api/account/2fa/recovery-codes':'/api/account/2fa/disable';
+  const m=$('protectedMessage');m.textContent='Prüfe …';
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:$('protectedPassword').value,code:$('protectedCode').value})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){m.className='form-message error';m.textContent=d.detail||'Aktion fehlgeschlagen.';return}
+  $('protectedModal').hidden=true;
+  if(protectedAction==='recovery')showRecovery(d.recovery_codes||[]);
+  setState(d.two_factor);
+  msg(protectedAction==='disable'?'2FA wurde deaktiviert.':'Neue Wiederherstellungscodes wurden erzeugt.','success');
+};
+refresh();
+</script>
+{% endblock %}

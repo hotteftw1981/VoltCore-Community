@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Aktivitätsprotokoll - {{ branding.product_name }}{% endblock %}
+{% block heading %}Aktivitätsprotokoll{% endblock %}
+{% block subtitle %}Nachvollziehbare Änderungen und Systemzugriffe{% endblock %}
+{% block content %}
+<section class="stats three activity-stats">
+  <div class="stat"><span>Angezeigte Einträge</span><b id="activityCount">0</b><small>neueste zuerst</small></div>
+  <div class="stat"><span>Letzte Aktivität</span><b id="activityLast">—</b><small id="activityLastUser">noch keine Daten</small></div>
+  <div class="stat"><span>Filter</span><b id="activityFilterLabel">Alle</b><small>Benutzer, Bereich oder Aktion</small></div>
+</section>
+<section class="panel">
+  <div class="panelhead"><div><h2>Audit-Log</h2><span>V0.8.8</span></div><button class="secondary" id="activityRefresh" type="button">Aktualisieren</button></div>
+  <div class="filters activity-filters">
+    <input id="activitySearch" type="search" placeholder="Suche nach Benutzer, Aktion oder Ziel …" autocomplete="off">
+    <select id="activityCategory">
+      <option value="">Alle Bereiche</option>
+      <option>Zugriff</option>
+      <option>Systembenutzer</option>
+      <option>Ladebenutzer</option>
+      <option>Fahrzeuge</option>
+      <option>Ladepunkte</option>
+      <option>OCPP-Geräte</option>
+      <option>Ladevorgänge</option>
+      <option>System</option>
+    </select>
+  </div>
+  <div class="table-panel">
+    <table class="activity-table">
+      <thead><tr><th>Zeit</th><th>Benutzer</th><th>Bereich</th><th>Aktion</th><th>Ziel</th><th>Status</th></tr></thead>
+      <tbody id="activityRows"></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script>
+const activityEsc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const activityFmt=v=>{if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',dateStyle:'short',timeStyle:'medium'}).format(d)};
+let activityTimer;
+async function loadActivity(){
+  const q=document.getElementById('activitySearch').value.trim();
+  const category=document.getElementById('activityCategory').value;
+  const params=new URLSearchParams({limit:'250'});if(q)params.set('q',q);if(category)params.set('category',category);
+  const r=await fetch('/api/activity?'+params.toString(),{cache:'no-store'});const d=await r.json();const items=d.items||[];
+  document.getElementById('activityCount').textContent=items.length;
+  document.getElementById('activityFilterLabel').textContent=category||'Alle';
+  document.getElementById('activityLast').textContent=items.length?activityFmt(items[0].ts):'—';
+  document.getElementById('activityLastUser').textContent=items.length?(items[0].display_name||items[0].username||'System'):'noch keine Daten';
+  document.getElementById('activityRows').innerHTML=items.map(x=>`<tr><td><b>${activityEsc(activityFmt(x.ts))}</b></td><td>${activityEsc(x.display_name||x.username||'System')}<small>${activityEsc(x.username||'')}</small></td><td><span class="activity-category">${activityEsc(x.category||'System')}</span></td><td><b>${activityEsc(x.action)}</b>${x.method?`<small>${activityEsc(x.method)}</small>`:''}</td><td><code>${activityEsc(x.target||x.path||'—')}</code></td><td><span class="state ${Number(x.status_code||200)>=400?'activity-failed':''}">${activityEsc(x.status_code||'OK')}</span></td></tr>`).join('')||'<tr><td colspan="6" class="empty-cell">Keine passenden Aktivitäten gefunden.</td></tr>';
+}
+document.getElementById('activityRefresh').onclick=loadActivity;
+document.getElementById('activityCategory').onchange=loadActivity;
+document.getElementById('activitySearch').oninput=()=>{clearTimeout(activityTimer);activityTimer=setTimeout(loadActivity,250)};
+loadActivity();setInterval(loadActivity,15000);
+</script>{% endblock %}
