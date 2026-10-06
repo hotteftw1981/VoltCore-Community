@@ -1091,6 +1091,22 @@ async def registration_onboarding_page(request:Request,saved:str|None=None):
     return render(request,"registration_settings.html",page="registration-onboarding",settings=db.registration_settings(),saved=(saved=="1"))
 
 
+@app.post("/settings/registration")
+async def registration_settings_save(request:Request):
+    if (request.state.auth_user or {}).get("role")!="admin":
+        raise HTTPException(403,"Administratorrechte erforderlich")
+    form=await request.form()
+    current=db.registration_settings()
+    db.save_registration_settings({
+        "enabled":str(form.get("enabled") or "")=="1",
+        "budget_mode":"fixed",
+        "reference_kwh":float(str(form.get("reference_kwh") or "0").replace(",",".")),
+        "limit_mode":str(form.get("limit_mode") or "warn"),
+        "fields":current.get("fields",[]),
+    })
+    return RedirectResponse(url="/registration-onboarding?saved=1",status_code=303)
+
+
 @app.get("/registration-requests", response_class=HTMLResponse)
 async def registration_requests_page(request:Request):
     return render(request,"access_requests.html",page="access-requests",requests=db.list_access_requests())
