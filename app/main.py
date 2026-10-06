@@ -1076,6 +1076,14 @@ async def public_charging_portal_logout(request: Request):
     return response
 
 
+@app.get("/api/public/portal")
+async def api_public_portal(request: Request, period: str | None = None):
+    portal_user=_portal_request_user(request)
+    if not portal_user:
+        raise HTTPException(401,"PIN-Anmeldung erforderlich")
+    return db.portal_dashboard(int(portal_user["id"]),period=period)
+
+
 @app.get("/api/public/charging-budgets")
 async def public_charging_budgets(request: Request, period: str | None = None):
     portal_user=_portal_request_user(request)
