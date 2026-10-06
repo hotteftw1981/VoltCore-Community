@@ -29,7 +29,6 @@
     {% if auth_user and auth_user.role == 'admin' %}<a href="/tariffs" class="{% if page=='tariffs' %}active{% endif %}">€ <span>Tarife</span></a>{% endif %}
                 
     <a href="/activity" class="{% if page=='activity' %}active{% endif %}">◷ <span>Aktivitätsprotokoll</span></a>
-    {% if auth_user and auth_user.role == 'admin' %}<a href="/registration-onboarding" class="{% if page=='registration-onboarding' %}active{% endif %}">✦ <span>Registrierung & Onboarding</span></a><a href="/registration-requests" class="{% if page=='access-requests' %}active{% endif %}">✉ <span>Zugangsanträge</span></a>{% endif %}
     {% if auth_user and auth_user.role == 'admin' %}<a href="/system-users" class="{% if page=='system-users' %}active{% endif %}">♟ <span>Systembenutzer</span></a>{% endif %}
     {% if auth_user and auth_user.role == 'admin' %}<a href="/security" class="{% if page=='security' %}active{% endif %}">⌾ <span>Sicherheit</span></a>{% endif %}
     {% if auth_user and auth_user.role == 'admin' %}<a href="/backups" class="{% if page=='backups' %}active{% endif %}">▧ <span>Backup &amp; Restore</span></a>{% endif %}
