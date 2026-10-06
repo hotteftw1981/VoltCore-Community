@@ -1117,6 +1117,12 @@ async def registration_request_decision(request:Request,request_id:int,action:st
     pin=_generate_unique_portal_pin()
     db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),limit,monthly_limit_mode,note,"manual",return_details=True)
     db.deactivate_notification(f"access-request:{request_id}")
+    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
+    if mailer.settings(False).get("enabled"):
+        try:
+            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Öffnen Sie das Ladeportal und verwenden Sie „PIN vergessen?“, um Ihre persönliche PIN sicher festzulegen.","cta_label":"Ladeportal öffnen","cta_url":base+"/public/ladeguthaben"},base)
+        except Exception:
+            logging.exception("Registration approval notification failed")
     return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
 
 
