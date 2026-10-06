@@ -86,5 +86,51 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertIn('DROP TABLE IF EXISTS rfid_enrollment_sessions', db)
         self.assertIn('DROP TABLE IF EXISTS rfid_replacement_requests', db)
 
+
+    def test_engagement_bonus_and_rankings_are_removed(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+
+        for needle in (
+            "/engagement",
+            "AchievementPayload",
+            "BonusGrantPayload",
+            "BonusVoucherPayload",
+            "/api/settings/bonus-policy",
+            "/api/settings/portal-leaderboard-names",
+        ):
+            self.assertNotIn(needle, main)
+
+        for needle in (
+            "CREATE TABLE IF NOT EXISTS achievements",
+            "CREATE TABLE IF NOT EXISTS gamification_events",
+            "CREATE TABLE IF NOT EXISTS bonus_grants",
+            "def evaluate_user_achievements(",
+            "def bonus_wallet(",
+            "def general_leaderboard(",
+            "def seed_default_achievements(",
+            "_allocate_bonus_for_transaction_conn(",
+            "_bonus_wallet_conn(",
+        ):
+            self.assertNotIn(needle, db)
+
+        for table in (
+            "achievements",
+            "achievement_awards",
+            "gamification_events",
+            "gamification_event_rewards",
+            "gamification_event_results",
+            "bonus_vouchers",
+            "bonus_grants",
+            "bonus_usage",
+            "bonus_voucher_redemptions",
+            "bonus_transfers",
+        ):
+            self.assertIn(f'"{table}"', db)
+
+        self.assertNotIn('href="/engagement"', base)
+        self.assertFalse((ROOT / "app" / "templates" / "engagement.html").exists())
+
 if __name__ == "__main__":
     unittest.main()
