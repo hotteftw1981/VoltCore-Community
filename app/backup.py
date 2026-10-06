@@ -38,7 +38,7 @@ CREDENTIAL_FILE = db.DATA_DIR / ".backup_external_password"
 SFTP_KNOWN_HOSTS_FILE = db.DATA_DIR / ".backup_sftp_known_hosts"
 SMTP_CREDENTIAL_FILE = db.DATA_DIR / ".smtp_password"
 BACKUP_PREFIX = "voltcore-community-backup-"
-BACKUP_RE = re.compile(r"^ocpp-backup-(\d{8})-(\d{6})(?:-[a-z0-9_-]+)?\.zip$", re.I)
+BACKUP_RE = re.compile(r"^voltcore-community-backup-(\d{8})-(\d{6})(?:-[a-z0-9_-]+)?\.zip$", re.I)
 MAX_RESTORE_BYTES = 5 * 1024 * 1024 * 1024
 
 DEFAULTS = {
