@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sqlite3
 import tempfile
 import unittest
 
@@ -34,6 +35,27 @@ class CommunityRuntimeSmokeTests(unittest.TestCase):
     def test_public_surface_is_backend_only(self):
         self.assertNotIn("/public/ladeguthaben", main.PUBLIC_PATHS)
         self.assertNotIn("/public/access-request", main.PUBLIC_PATHS)
+
+    def test_fresh_schema_contains_only_backend_scope(self):
+        removed_tables = {
+            "load_rules", "portal_pin_reset_requests", "portal_pin_reset_tokens",
+            "access_request_verifications", "access_requests", "rfid_enrollment_sessions",
+            "billing_groups", "user_billing_groups", "portal_sessions", "portal_login_attempts",
+            "achievements", "achievement_awards", "gamification_events",
+            "gamification_event_rewards", "gamification_event_results", "bonus_vouchers",
+            "bonus_grants", "bonus_usage", "bonus_voucher_redemptions", "bonus_transfers",
+            "rfid_replacement_requests", "cost_centers",
+        }
+        with sqlite3.connect(db.DB_PATH) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertTrue(removed_tables.isdisjoint(tables), sorted(removed_tables & tables))
+            user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+            self.assertTrue(
+                {"weekly_hours", "gamification_enabled", "portal_pin_hash", "portal_enabled"}.isdisjoint(user_columns),
+                sorted(user_columns),
+            )
+            tariff_columns = {row[1] for row in conn.execute("PRAGMA table_info(tariffs)")}
+            self.assertTrue({"cost_center", "billing_group_id"}.isdisjoint(tariff_columns), sorted(tariff_columns))
 
 
 if __name__ == "__main__":
