@@ -1,8 +1,8 @@
 services:
-  ocpp-backend:
-    image: ${OCPP_IMAGE:-ghcr.io/hotteftw1981/voltcore:latest}
+  voltcore-community:
+    image: ${OCPP_IMAGE:-ghcr.io/hotteftw1981/voltcore-community:latest}
     pull_policy: always
-    container_name: drk-ocpp-backend
+    container_name: voltcore-community
     restart: unless-stopped
     init: true
     read_only: true
@@ -38,6 +38,8 @@ services:
       OCPP_TLS_CERTFILE: ${OCPP_TLS_CERTFILE:-}
       OCPP_TLS_KEYFILE: ${OCPP_TLS_KEYFILE:-}
       FLEET_INTEGRATION_TOKEN: ${FLEET_INTEGRATION_TOKEN:-}
+      UPDATE_GITHUB_REPOSITORY: ${UPDATE_GITHUB_REPOSITORY:-hotteftw1981/VoltCore-Community}
+      UPDATE_CHANNEL: ${UPDATE_CHANNEL:-stable}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
       interval: 30s
