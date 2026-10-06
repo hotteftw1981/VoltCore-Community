@@ -421,21 +421,13 @@ async def _web_push_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
-    db.seed_default_achievements()
-    db.reconcile_automatic_achievements()
-    db.finalize_ended_gamification_events()
     backup.ensure_defaults()
     mailer.ensure_defaults()
     updates.ensure_defaults()
     web_push.ensure_vapid_keys()
     updates.reconcile_startup(APP_VERSION)
-    global SMART_REBALANCE_EVENT
-    SMART_REBALANCE_EVENT=asyncio.Event()
-    register_smart_charging_trigger(_request_smart_rebalance)
     server = await serve_ocpp(port=OCPP_PORT)
     app.state.ocpp_server = server
-    reward_task=asyncio.create_task(_event_reward_worker())
-    smart_task=asyncio.create_task(_smart_charging_worker(SMART_REBALANCE_EVENT))
     diagnostic_task=asyncio.create_task(_diagnostic_worker())
     backup_task=asyncio.create_task(_backup_worker())
     update_task=asyncio.create_task(_update_worker())
@@ -443,19 +435,17 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        reward_task.cancel(); smart_task.cancel(); diagnostic_task.cancel(); backup_task.cancel(); update_task.cancel(); push_task.cancel()
-        for task in (reward_task,smart_task,diagnostic_task,backup_task,update_task,push_task):
+        diagnostic_task.cancel(); backup_task.cancel(); update_task.cancel(); push_task.cancel()
+        for task in (diagnostic_task,backup_task,update_task,push_task):
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        register_smart_charging_trigger(None)
-        SMART_REBALANCE_EVENT=None
         server.close()
         await server.wait_closed()
 
 
-app = FastAPI(title="VoltCore", version=APP_VERSION, lifespan=lifespan, docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url="/redoc" if ENABLE_API_DOCS else None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
+app = FastAPI(title="VoltCore Community", version=APP_VERSION, lifespan=lifespan, docs_url="/docs" if ENABLE_API_DOCS else None, redoc_url="/redoc" if ENABLE_API_DOCS else None, openapi_url="/openapi.json" if ENABLE_API_DOCS else None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 app.mount("/branding", StaticFiles(directory=BRANDING_DIR), name="branding")
