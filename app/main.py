@@ -2,8 +2,6 @@ import logging
 import asyncio
 import csv
 import io
-import base64
-import binascii
 import os
 import json
 import re
@@ -669,47 +667,6 @@ async def logout(request: Request):
     response=RedirectResponse(url="/login?reason=logout", status_code=303)
     response.delete_cookie(SESSION_COOKIE,path="/")
     return response
-
-
-def _normalize_signature_png(data: bytes) -> bytes:
-    try:
-        with PILImage.open(io.BytesIO(data)) as source:
-            image=source.convert("RGBA")
-            alpha=image.getchannel("A")
-            normalized=PILImage.new("RGBA",image.size,(17,24,39,0))
-            normalized.putalpha(alpha)
-            out=io.BytesIO(); normalized.save(out,format="PNG",optimize=True)
-            return out.getvalue()
-    except Exception as exc:
-        raise ValueError("Die digitale Unterschrift ist ungültig.") from exc
-
-
-def _save_access_signature(data_url: str, request_id_hint: str = "new"):
-    raw=str(data_url or "")
-    prefix="data:image/png;base64,"
-    if not raw.startswith(prefix):
-        raise ValueError("Bitte unterschreiben Sie den Antrag im Signaturfeld.")
-    try:
-        data=base64.b64decode(raw[len(prefix):],validate=True)
-    except (ValueError,binascii.Error):
-        raise ValueError("Die digitale Unterschrift ist ungültig.")
-    if len(data)<100 or len(data)>300*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("Die digitale Unterschrift ist ungültig oder zu groß.")
-    data=_normalize_signature_png(data)
-    name=f"signature-{request_id_hint}-{secrets.token_hex(12)}.png"
-    target=ACCESS_SIGNATURE_DIR/name
-    target.write_bytes(data)
-    try: os.chmod(target,0o600)
-    except OSError: pass
-    return name
-
-
-
-@app.get("/admin/ladeguthaben/{user_id}", response_class=HTMLResponse)
-async def admin_charging_budget_page(request: Request, user_id: int, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None):
-    data=db.portal_dashboard(user_id,period=period,include_inactive=True,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    if not data: raise HTTPException(404,"Ladebenutzer nicht gefunden")
-    return render(request,"public_budgets.html",page="users",portal_user=data["user"],portal_data=data,admin_preview=True)
 
 
 class RFIDEnrollmentStartPayload(BaseModel):
