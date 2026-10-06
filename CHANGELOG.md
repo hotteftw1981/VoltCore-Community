@@ -26,6 +26,8 @@ All notable changes to VoltCore Community are documented here.
 - Community billing now uses metered kWh multiplied by the transaction's stored tariff. Unlimited charging is not implicitly free; monthly limits do not subtract free credit.
 - Missing or invalid energy/tariff values remain unknown instead of being reported as free charging. An explicitly configured zero tariff still produces zero cost.
 - Billing rounding uses decimal half-up cents. No bulk recalculation of historical transactions is introduced.
+- Restored 33 shared backend helpers for audit logging, notifications, diagnostics, web push and session/security summaries that were accidentally removed alongside Fleet integration. No excluded edition modules were restored.
+- Fixed an obsolete variable reference in the first-run audit entry that caused HTTP 500 after saving the wizard.
 
 ### Release readiness
 - Existing Community databases clean up obsolete portal, registration, gamification, bonus, load-management, cost-center and integration state on startup.
@@ -33,6 +35,9 @@ All notable changes to VoltCore Community are documented here.
 - Regression coverage locks the backend-only edition boundary and runtime cleanup.
 - Documentation and smoke tests now describe the actual Community runtime instead of the temporary 0.9.7.74 restoration state.
 - Block 3D: 20 isolated SQLite billing regression tests passed locally and on GitHub Actions; Python compilation of app and tests passed on GitHub. This is not a full application-startup or end-to-end certification.
+- Block 3E adds a read-only Docker runtime QA workflow: fresh administrator setup, first-run configuration, authenticated pages/APIs, explicit negative authorization tests, removed-route checks and persisted data after restart.
+- Positive runtime-contract tests now detect missing shared database APIs and stale first-run variable references, complementing the existing feature-removal checks.
+- Runtime QA uses disposable loopback-only instances and random temporary credentials. Only external update checks are disabled through the existing persisted setting; production update behavior is unchanged. Browser interaction, physical chargers, external mail/push delivery and upgrade/restore scenarios require separate validation.
 
 ## 0.9.7.75 — Community scope correction
 
