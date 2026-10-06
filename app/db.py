@@ -4469,21 +4469,75 @@ def _apply_tariff_to_tx_conn(conn, tx_id, user_id, cp_id, started_at):
         (tariff["id"],tariff["name"],tariff["source"],tariff["price_cents_per_kwh"],tx_id),
     )
 
+def community_charging_credit_settings():
+    enabled=str(get_setting("community_free_credit_enabled","0") or "0").strip().lower() in {"1","true","yes","on"}
+    try:
+        default_kwh=max(0.0,float(get_setting("community_default_monthly_kwh","0") or 0))
+    except (TypeError,ValueError):
+        default_kwh=0.0
+    return {"enabled":enabled,"default_monthly_kwh":round(default_kwh,3)}
+
+
+def save_community_charging_credit_settings(enabled=False, default_monthly_kwh=0):
+    try:
+        amount=max(0.0,float(default_monthly_kwh or 0))
+    except (TypeError,ValueError) as exc:
+        raise ValueError("Das monatliche Freikontingent muss eine Zahl sein.") from exc
+    if amount>100000:
+        raise ValueError("Das monatliche Freikontingent darf höchstens 100.000 kWh betragen.")
+    enabled=bool(enabled)
+    if enabled and amount<=0:
+        raise ValueError("Für ein aktives Freikontingent muss ein Wert größer als 0 kWh angegeben werden.")
+    set_setting("community_free_credit_enabled","1" if enabled else "0")
+    set_setting("community_default_monthly_kwh",str(round(amount,3) if enabled else 0))
+    return community_charging_credit_settings()
+
+
+def _community_free_credit_remaining_conn(conn, user_id, started_at, tx_id):
+    if user_id is None:
+        return 0.0
+    enabled_row=conn.execute("SELECT value FROM app_settings WHERE key='community_free_credit_enabled'").fetchone()
+    enabled=str(enabled_row[0] if enabled_row else "0").strip().lower() in {"1","true","yes","on"}
+    if not enabled:
+        return 0.0
+    amount_row=conn.execute("SELECT value FROM app_settings WHERE key='community_default_monthly_kwh'").fetchone()
+    try:
+        allowance=max(0.0,float(amount_row[0] if amount_row else 0))
+    except (TypeError,ValueError):
+        allowance=0.0
+    if allowance<=0:
+        return 0.0
+    started=_parse_iso_utc(started_at) or datetime.now(timezone.utc)
+    start_utc,end_utc,_=_month_bounds_utc(started)
+    prior=conn.execute(
+        """SELECT COALESCE(SUM(energy_kwh),0) FROM transactions
+           WHERE id<>? AND user_id=? AND started_at>=? AND started_at<?
+             AND (ended_at IS NOT NULL OR status<>'Active')""",
+        (int(tx_id),int(user_id),start_utc,end_utc),
+    ).fetchone()[0]
+    return max(0.0,allowance-float(prior or 0))
+
+
 def _update_tx_cost_conn(conn, tx_id):
     """Freeze the session cost from the tariff snapshot.
 
-    Community monthly limits are usage/access limits, not implicit free-energy
-    allowances. Without an explicit zero-price tariff, charged energy is billed
-    at the stored tariff price.
+    A per-user monthly limit is an access/usage limit and never implies free
+    energy. An explicitly enabled Community free allowance is separate and only
+    reduces the billable energy for that user's first kWh of the month.
     """
-    row=conn.execute("SELECT id,energy_kwh,price_cents_per_kwh FROM transactions WHERE id=?",(tx_id,)).fetchone()
+    row=conn.execute(
+        "SELECT id,energy_kwh,price_cents_per_kwh,user_id,started_at FROM transactions WHERE id=?",
+        (tx_id,),
+    ).fetchone()
     if not row or row["energy_kwh"] is None:
         return
     energy=max(0.0,float(row["energy_kwh"] or 0))
     if row["price_cents_per_kwh"] is None:
         conn.execute("UPDATE transactions SET cost_cents=NULL WHERE id=?",(tx_id,))
         return
-    cents=(Decimal(str(energy))*Decimal(int(row["price_cents_per_kwh"]))).quantize(Decimal("1"),rounding=ROUND_HALF_UP)
+    free_remaining=_community_free_credit_remaining_conn(conn,row["user_id"],row["started_at"],tx_id)
+    chargeable_energy=max(0.0,energy-free_remaining)
+    cents=(Decimal(str(chargeable_energy))*Decimal(int(row["price_cents_per_kwh"]))).quantize(Decimal("1"),rounding=ROUND_HALF_UP)
     conn.execute("UPDATE transactions SET cost_cents=? WHERE id=?",(int(cents),tx_id))
 
 def diagnostic_summary(cp_id):
