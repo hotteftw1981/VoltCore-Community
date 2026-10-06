@@ -3521,31 +3521,31 @@ def _report_period(period: str = "current_month", date_from: str | None = None, 
     }
 
 
-def _report_data(period="current_month", date_from=None, date_to=None, user_id=None, vehicle_id=None, charge_point_id=None, cost_center=None, billing_group_id=None):
+def _report_data(period="current_month", date_from=None, date_to=None, user_id=None, vehicle_id=None, charge_point_id=None, billing_group_id=None):
     ctx=_report_period(period,date_from,date_to)
-    data=db.reporting_bundle(ctx["start_at"],ctx["end_at"],user_id,vehicle_id,charge_point_id,cost_center,billing_group_id)
+    data=db.reporting_bundle(ctx["start_at"],ctx["end_at"],user_id,vehicle_id,charge_point_id,billing_group_id)
     data["period"]=ctx
-    data["filters"]={"user_id":user_id,"vehicle_id":vehicle_id,"charge_point_id":charge_point_id or "","cost_center":cost_center or "","billing_group_id":billing_group_id}
+    data["filters"]={"user_id":user_id,"vehicle_id":vehicle_id,"charge_point_id":charge_point_id or "","billing_group_id":billing_group_id}
     data["generated_at"]=datetime.now(timezone.utc).isoformat()
     return data
 
 
 @app.get("/api/reports/export.csv")
-async def export_reports_csv(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, cost_center: str|None=None, billing_group_id: str|None=None):
-    data=_report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,cost_center,billing_group_id)
+async def export_reports_csv(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, billing_group_id: str|None=None):
+    data=_report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,billing_group_id)
     output=io.StringIO(newline="")
     writer=csv.writer(output,delimiter=";")
     writer.writerow([f"{db.branding_settings()['product_name']} Abrechnungsnachweis",data["period"]["label"]])
     writer.writerow(["Erstellt",datetime.now(BERLIN_TZ).strftime("%d.%m.%Y %H:%M")])
     writer.writerow([])
-    writer.writerow(["Start","Ende","Benutzer","Fahrzeug","Kennzeichen","Ladepunkt","Connector","Energie kWh","Tarif","Preis ct/kWh","Kosten EUR","Kostenstelle","Abrechnungsgruppe","Quelle"])
+    writer.writerow(["Start","Ende","Benutzer","Fahrzeug","Kennzeichen","Ladepunkt","Connector","Energie kWh","Tarif","Preis ct/kWh","Kosten EUR","Abrechnungsgruppe"])
     for row in data["transactions"]:
         writer.writerow([
             _local_text(row.get("started_at"),"%d.%m.%Y %H:%M"),_local_text(row.get("ended_at"),"%d.%m.%Y %H:%M"),
             row.get("user_name") or "Nicht zugeordnet",row.get("vehicle_name") or "Nicht zugeordnet",row.get("vehicle_plate") or "",
             row.get("charge_point_id") or "",row.get("connector_id") or "",f"{float(row.get('energy_kwh') or 0):.3f}".replace('.',','),
             row.get("tariff_name") or "",("" if row.get("price_cents_per_kwh") is None else str(row.get("price_cents_per_kwh")).replace('.',',')),
-            ("" if row.get("cost_cents") is None else f"{int(row['cost_cents'])/100:.2f}".replace('.',',')),row.get("cost_center") or "",row.get("billing_group_name") or "",row.get("import_source") or "OCPP",
+            ("" if row.get("cost_cents") is None else f"{int(row['cost_cents'])/100:.2f}".replace('.',',')),row.get("billing_group_name") or "",
         ])
     payload=output.getvalue().encode("utf-8-sig")
     return StreamingResponse(iter([payload]),media_type="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=ocpp-abrechnungsnachweis.csv"})
@@ -3579,8 +3579,6 @@ def _pdf_report_filter_labels(data):
         labels.append(("Fahrzeug",vehicle))
     if filters.get("charge_point_id"):
         labels.append(("Ladepunkt",filters["charge_point_id"]))
-    if filters.get("cost_center"):
-        labels.append(("Kostenstelle","Ohne Kostenstelle" if filters["cost_center"]=="__none__" else filters["cost_center"]))
     billing_id=filters.get("billing_group_id")
     if billing_id is not None:
         if str(billing_id)=="__none__":
@@ -3684,8 +3682,8 @@ def _pdf_session_table(rows, styles, story, primary):
 
 
 @app.get("/api/reports/export.pdf")
-async def export_reports_pdf(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, cost_center: str|None=None, billing_group_id: str|None=None):
-    data=_report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,cost_center,billing_group_id)
+async def export_reports_pdf(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, billing_group_id: str|None=None):
+    data=_report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,billing_group_id)
     summary=data["summary"]; brand=db.branding_settings(); primary=colors.HexColor(brand["primary_color"])
     buffer=io.BytesIO(); title="Abrechnungs- & Energiebericht"
     doc=SimpleDocTemplate(
@@ -3771,7 +3769,6 @@ async def export_reports_pdf(period: str="current_month", date_from: str|None=No
             ),
         ])
 
-    _pdf_breakdown_table("Kostenstellen",data["by_cost_center"],styles,story,primary)
     _pdf_breakdown_table("Benutzer",data["by_user"],styles,story,primary)
     _pdf_breakdown_table("Fahrzeuge",data["by_vehicle"],styles,story,primary)
     _pdf_breakdown_table("Ladepunkte",data["by_charge_point"],styles,story,primary)
@@ -3785,8 +3782,8 @@ async def export_reports_pdf(period: str="current_month", date_from: str|None=No
 
 
 @app.get("/api/reports")
-async def api_reports(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, cost_center: str|None=None, billing_group_id: str|None=None):
-    return _report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,cost_center,billing_group_id)
+async def api_reports(period: str="current_month", date_from: str|None=None, date_to: str|None=None, user_id: int|None=None, vehicle_id: int|None=None, charge_point_id: str|None=None, billing_group_id: str|None=None):
+    return _report_data(period,date_from,date_to,user_id,vehicle_id,charge_point_id,billing_group_id)
 
 
 
