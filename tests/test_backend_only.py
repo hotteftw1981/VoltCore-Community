@@ -60,5 +60,31 @@ class CommunityBackendOnlyTests(unittest.TestCase):
             self.assertNotIn(needle, users)
 
 
+    def test_rfid_self_service_is_removed(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        for needle in (
+            "/api/rfid/requests",
+            "rfid_self_enroll_mode",
+            "RFIDEnrollmentStartPayload",
+            "RFIDEnrollmentConfirmPayload",
+        ):
+            self.assertNotIn(needle, main)
+        for needle in (
+            "CREATE TABLE IF NOT EXISTS rfid_enrollment_sessions",
+            "CREATE TABLE IF NOT EXISTS rfid_replacement_requests",
+            "def rfid_enrollment_charge_points(",
+            "def start_rfid_enrollment(",
+            "def capture_rfid_enrollment_candidate(",
+            "def rfid_enrollment_status(",
+            "def confirm_rfid_enrollment(",
+            "def cancel_rfid_enrollment(",
+            "def create_rfid_replacement_request(",
+            "rfid_self_enroll_mode",
+        ):
+            self.assertNotIn(needle, db)
+        self.assertIn('DROP TABLE IF EXISTS rfid_enrollment_sessions', db)
+        self.assertIn('DROP TABLE IF EXISTS rfid_replacement_requests', db)
+
 if __name__ == "__main__":
     unittest.main()
