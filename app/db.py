@@ -57,10 +57,6 @@ def normalize_vehicle_plate(value):
     return raw
 
 
-def vehicle_plate_key(value):
-    return re.sub(r"[^A-ZÄÖÜ0-9]","",normalize_vehicle_plate(value))
-
-
 def _purge_legacy_demo_data(conn):
     """Remove legacy development/demo records from older releases.
 
@@ -590,6 +586,10 @@ def init_db():
         conn.execute("DROP TABLE IF EXISTS access_request_verifications")
         conn.execute("DROP TABLE IF EXISTS access_requests")
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'registration_%'")
+        legacy_default_limit=conn.execute("SELECT value FROM app_settings WHERE key='community_free_credit_enabled'").fetchone()
+        if legacy_default_limit and not conn.execute("SELECT 1 FROM app_settings WHERE key='community_default_monthly_limit_enabled'").fetchone():
+            conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?)",("community_default_monthly_limit_enabled",str(legacy_default_limit[0] or "0"),utc_now()))
+        conn.execute("DELETE FROM app_settings WHERE key='community_free_credit_enabled'")
         conn.execute("UPDATE notifications SET active=0 WHERE notification_key LIKE 'access-request:%' OR notification_key LIKE 'access-approved:%'")
         for table_name, columns in (
             ("users",("role","department","weekly_hours","budget_source")),
@@ -945,11 +945,6 @@ def mark_message(cp_id, message_type, **fields):
     fields["last_message_at"] = utc_now()
     fields["last_message_type"] = message_type
     upsert_charge_point(cp_id, **fields)
-
-def is_known_charge_point(cp_id):
-    with _lock, _connect() as conn:
-        row = conn.execute("SELECT onboarded, ignored FROM charge_points WHERE id=?", (cp_id,)).fetchone()
-        return bool(row and int(row["onboarded"] or 0) and not int(row["ignored"] or 0))
 
 def list_discovered_devices():
     with _lock, _connect() as conn:
@@ -2065,16 +2060,6 @@ def update_service_operation(operation_id, status, detail=None, external_ref=Non
         return dict(row) if row else None
 
 
-def update_latest_service_operation(cp_id, operation, status, detail="", external_ref="", completed=False):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT id FROM ocpp_service_operations
-            WHERE charge_point_id=? AND operation=? ORDER BY id DESC LIMIT 1""",
-            (str(cp_id),str(operation))).fetchone()
-    if not row:
-        return None
-    return update_service_operation(int(row["id"]),status,detail or None,external_ref or None,completed)
-
-
 def service_operations_for_charge_point(cp_id, limit=30):
     try: limit=max(1,min(100,int(limit or 30)))
     except (TypeError,ValueError): limit=30
@@ -2513,10 +2498,6 @@ def local_list_states():
         conn.commit()
         return result
 
-def local_list_uids_for_user(user_id):
-    with _lock,_connect() as conn:
-        return [str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(int(user_id),)).fetchall()]
-
 def refresh_local_list_for_user(user_id):
     with _lock,_connect() as conn:
         uids=[str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(int(user_id),)).fetchall()]
@@ -2533,13 +2514,6 @@ def refresh_local_list_for_month(month_key=None):
         _rfid_local_list_bump_conn(conn,uids) if uids else None
         conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('rfid_local_list_budget_month',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",(str(month_key),utc_now()))
         conn.commit(); return True
-
-def get_user_by_email(email):
-    key=str(email or "").strip().casefold()
-    if not key: return None
-    with _connect() as conn:
-        row=conn.execute("SELECT * FROM users WHERE LOWER(TRIM(COALESCE(email,'')))=? ORDER BY id LIMIT 1",(key,)).fetchone()
-        return dict(row) if row else None
 
 def get_user(user_id):
     with _lock, _connect() as conn:
@@ -3167,79 +3141,6 @@ def _analytics_bundle_conn(conn, rows, capacity_slots=1, now=None, include_weekd
     return bundle
 
 
-def user_analytics(user_id, now=None):
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT t.* FROM transactions t
-            WHERE t.user_id=? OR (t.user_id IS NULL AND (t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR t.id_tag=(SELECT rfid FROM users WHERE id=?)))
-            ORDER BY t.started_at""",(user_id,user_id,user_id)).fetchall()
-        return _analytics_bundle_conn(conn,rows,capacity_slots=1,now=now)
-
-
-
-
-_PORTAL_MONTH_NAMES = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"]
-
-def _portal_period_context(rows, requested=None, now=None):
-    berlin=ZoneInfo("Europe/Berlin")
-    now_utc=now or datetime.now(timezone.utc)
-    if now_utc.tzinfo is None: now_utc=now_utc.replace(tzinfo=timezone.utc)
-    now_local=now_utc.astimezone(berlin)
-    current_key=now_local.strftime("%Y-%m")
-    keys={current_key}
-    for row in rows:
-        started=_parse_iso_utc(row["started_at"])
-        if started: keys.add(started.astimezone(berlin).strftime("%Y-%m"))
-    month_options=[]
-    for key in sorted(keys, reverse=True):
-        try:
-            year,month=(int(x) for x in key.split("-",1))
-            label=f"{_PORTAL_MONTH_NAMES[month-1]} {year}"
-        except Exception:
-            continue
-        month_options.append({"key":key,"label":label})
-    requested=str(requested or current_key).strip().lower()
-    if requested=="all":
-        selected_key="all"; selected_label="Gesamt"; start_utc=end_utc=None
-    elif requested in {x["key"] for x in month_options}:
-        selected_key=requested
-        year,month=(int(x) for x in selected_key.split("-",1))
-        start_local=datetime(year,month,1,tzinfo=berlin)
-        if month==12: end_local=datetime(year+1,1,1,tzinfo=berlin)
-        else: end_local=datetime(year,month+1,1,tzinfo=berlin)
-        start_utc=start_local.astimezone(timezone.utc)
-        end_utc=min(end_local.astimezone(timezone.utc),now_utc) if selected_key==current_key else end_local.astimezone(timezone.utc)
-        selected_label=f"{_PORTAL_MONTH_NAMES[month-1]} {year}"
-    else:
-        selected_key=current_key
-        selected_label=f"{_PORTAL_MONTH_NAMES[now_local.month-1]} {now_local.year}"
-        start_local=now_local.replace(day=1,hour=0,minute=0,second=0,microsecond=0)
-        start_utc=start_local.astimezone(timezone.utc); end_utc=now_utc
-    return {
-        "selected_key":selected_key,"selected_label":selected_label,"current_key":current_key,
-        "start_utc":start_utc,"end_utc":end_utc,
-        "options":[{"key":"all","label":"Gesamt"}]+month_options,
-    }
-
-def _portal_period_summary_conn(conn, rows, period_ctx, now=None):
-    now_utc=now or datetime.now(timezone.utc)
-    if now_utc.tzinfo is None: now_utc=now_utc.replace(tzinfo=timezone.utc)
-    start_utc=period_ctx.get("start_utc"); end_utc=period_ctx.get("end_utc")
-    summary=_summarize_analytics_rows_conn(conn,rows,start_utc,end_utc,capacity_slots=1,now_utc=now_utc)
-    selected=[]
-    for row in rows:
-        started=_parse_iso_utc(row["started_at"])
-        if started is None: continue
-        if start_utc is not None and started < start_utc: continue
-        if end_utc is not None and started >= end_utc: continue
-        selected.append(row)
-    cost_rows=[r for r in selected if "cost_cents" in r.keys() and r["cost_cents"] is not None]
-    summary["cost_known_sessions"]=len(cost_rows)
-    summary["cost_cents"]=int(round(sum(float(r["cost_cents"] or 0) for r in cost_rows)))
-    summary["cost_eur"]=round(summary["cost_cents"]/100.0,2)
-    summary["period_key"]=period_ctx["selected_key"]
-    summary["period_label"]=period_ctx["selected_label"]
-    return summary,selected
-
 def charge_point_analytics(cp_id, now=None):
     with _lock,_connect() as conn:
         cp=conn.execute("SELECT connector_count FROM charge_points WHERE id=?",(cp_id,)).fetchone()
@@ -3277,15 +3178,6 @@ def list_users_rich():
                 "remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"]})
             result.append(item)
         return result
-
-def primary_vehicle_for_user(user_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT v.*,uv.primary_vehicle FROM user_vehicles uv
-            JOIN vehicles v ON v.id=uv.vehicle_id
-            WHERE uv.user_id=? AND v.active=1
-            ORDER BY uv.primary_vehicle DESC,v.name COLLATE NOCASE LIMIT 1""",(int(user_id),)).fetchone()
-        return dict(row) if row else None
-
 
 def assign_user_vehicle(user_id, vehicle_id, primary=False):
     with _lock, _connect() as conn:
@@ -3346,9 +3238,6 @@ def user_details(user_id, transaction_page=1, transaction_page_size=10):
         analytics_rows=conn.execute("""SELECT t.* FROM transactions t WHERE t.user_id=? OR (t.user_id IS NULL AND (t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR t.id_tag=(SELECT rfid FROM users WHERE id=?))) ORDER BY t.started_at""",(user_id,user_id,user_id)).fetchall()
         analytics=_analytics_bundle_conn(conn,analytics_rows,capacity_slots=1)
         return {"user":user,"rfid_cards":cards,"vehicles":vehicles,"transactions":txs,"transaction_pagination":{"page":transaction_page,"page_size":transaction_page_size,"total":tx_total,"pages":tx_pages},"stats":dict(st),"budget":budget,"active_session":active_item,"analytics":analytics}
-
-def list_users():
-    return list_users_rich()
 
 def update_charge_point_session_policy(cp_id, stand_grace_seconds, auto_stop_zero_minutes):
     """Persist vendor-neutral session timing policy for future transactions."""
@@ -3978,12 +3867,6 @@ def list_tariffs():
         for row in rows: row["target_label"]=_tariff_target_label_conn(conn,row["scope"],row.get("target_id"))
         return rows
 
-def get_tariff(tariff_id):
-    with _lock, _connect() as conn:
-        row=conn.execute("SELECT t.*,g.name AS billing_group_name FROM tariffs t LEFT JOIN billing_groups g ON g.id=t.billing_group_id WHERE t.id=?",(tariff_id,)).fetchone()
-        if not row: return None
-        item=dict(row); item["target_label"]=_tariff_target_label_conn(conn,item["scope"],item.get("target_id")); return item
-
 def _validate_tariff_target_conn(conn, scope, target_id):
     if scope=="global": return None
     if target_id in (None,""): raise ValueError("Bitte ein konkretes Tarifziel auswählen")
@@ -4051,13 +3934,6 @@ def _select_tariff_conn(conn, user_id, cp_id, at):
             result["source"]={"user":"Benutzer","user_group":"Gruppe","charge_point":"Ladepunkt","global":"Global"}[scope]; return result
     return None
 
-def resolve_tariff(user_id=None, id_tag=None, cp_id=None, at=None):
-    at=at or utc_now()
-    with _lock, _connect() as conn:
-        if user_id is None and id_tag:
-            row=conn.execute("SELECT user_id FROM rfid_cards WHERE uid=?",(id_tag,)).fetchone(); user_id=row[0] if row else None
-        return _select_tariff_conn(conn,user_id,cp_id,at)
-
 def _apply_tariff_to_tx_conn(conn, tx_id, user_id, cp_id, started_at):
     tariff=_select_tariff_conn(conn,user_id,cp_id,started_at)
     if not tariff: return
@@ -4102,10 +3978,6 @@ def _update_tx_cost_conn(conn, tx_id):
         return
     cents=(Decimal(str(chargeable_energy))*Decimal(int(row["price_cents_per_kwh"]))).quantize(Decimal("1"),rounding=ROUND_HALF_UP)
     conn.execute("UPDATE transactions SET cost_cents=? WHERE id=?",(int(cents),tx_id))
-
-def billing_groups_for_user(user_id):
-    with _lock, _connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT g.* FROM billing_groups g JOIN user_billing_groups x ON x.group_id=g.id WHERE x.user_id=?",(user_id,)).fetchall()]
 
 def diagnostic_summary(cp_id):
     caps=meter_capabilities_for_charge_point(cp_id)
@@ -4164,22 +4036,6 @@ def setting_bool(key, default=False):
     return str(value or "").strip().lower() in {"1","true","yes","on"}
 
 
-def _setting_int(key, default, minimum=0, maximum=3650):
-    try:
-        value=int(get_setting(key, str(default)))
-    except (TypeError, ValueError):
-        value=int(default)
-    return max(int(minimum), min(int(maximum), value))
-
-
-def active_rfid_count(user_id):
-    with _connect() as conn:
-        return int(conn.execute("SELECT COUNT(*) FROM rfid_cards WHERE user_id=? AND status='Aktiv'",(int(user_id),)).fetchone()[0] or 0)
-
-def user_has_active_rfid(user_id):
-    return active_rfid_count(user_id)>0
-
-
 def admin_reconcile_transaction(tx_id, reason="AdminReconciled"):
     tx=get_transaction(int(tx_id))
     if not tx: raise ValueError("Ladevorgang nicht gefunden")
@@ -4189,12 +4045,6 @@ def admin_reconcile_transaction(tx_id, reason="AdminReconciled"):
     return get_transaction(int(tx_id))
 
 # V0.9.7.5 - Billing & reporting helpers
-
-def _report_row_amounts(row):
-    energy=float(row.get("energy_kwh") or 0.0)
-    cost=row.get("cost_cents")
-    return energy, (int(cost) if cost is not None else None)
-
 
 def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, charge_point_id=None, billing_group_id=None):
     """Return immutable accounting/reporting data from completed transactions.
@@ -4393,16 +4243,6 @@ def add_security_event(event_type, severity="info", category="security", charge_
         conn.execute("""INSERT INTO security_events(ts,severity,category,event_type,charge_point_id,system_user_id,username,remote,success,detail)
                         VALUES(?,?,?,?,?,?,?,?,?,?)""",(utc_now(),str(severity or "info"),str(category or "security"),str(event_type),charge_point_id,system_user_id,username,remote,None if success is None else (1 if success else 0),detail))
         conn.commit()
-
-
-def recent_security_events(limit=100, category=None):
-    limit=max(1,min(int(limit or 100),500)); clauses=[]; values=[]
-    if category:
-        clauses.append("category=?"); values.append(str(category))
-    where=(" WHERE "+" AND ".join(clauses)) if clauses else ""
-    with _connect() as conn:
-        rows=conn.execute("SELECT * FROM security_events"+where+" ORDER BY id DESC LIMIT ?",values+[limit]).fetchall()
-        return [dict(r) for r in rows]
 
 
 def security_events_page(page=1, page_size=10, category=None):
