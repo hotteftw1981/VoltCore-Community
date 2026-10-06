@@ -10,9 +10,9 @@
   {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
   <form method="post" action="/first-run" class="first-run-form">
     <section class="first-run-section">
-      <h3>🏢 Installation &amp; Organisation</h3>
+      <h3>🏠 Installation</h3>
       <div class="form-grid">
-        <label>Organisationsname<input name="organization_name" value="{{ values.organization_name if values else branding.organization_name }}" required maxlength="120"></label>
+        <label>Name der Installation / Organisation<input name="organization_name" value="{{ values.organization_name if values else branding.organization_name }}" required maxlength="120" placeholder="z. B. Zuhause, Haus A oder Musterfirma"></label>
         <label>Anzeigename<input name="display_name" value="{{ values.display_name if values else branding.display_name }}" required maxlength="120"></label>
       </div>
       <small>Beides kann später unter Einstellungen geändert werden.</small>
@@ -62,12 +62,12 @@
     </section>
 
     <section class="first-run-section">
-      <h3>⚡ Freies Ladeguthaben / Monatslimit</h3>
-      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Standard-Ladeguthaben verwenden</span></label>
+      <h3>⚡ Optionales Freikontingent</h3>
+      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Freikontingent für Ladebenutzer verwenden</span></label>
       <div class="form-grid">
-        <label>Standardwert (kWh / Monat)<input name="default_monthly_kwh" type="number" min="0" step="1" value="{{ values.default_monthly_kwh if values else '0' }}"></label>
+        <label>Freie kWh pro Benutzer / Monat<input name="default_monthly_kwh" type="number" min="0" step="1" value="{{ values.default_monthly_kwh if values else '0' }}"></label>
       </div>
-      <small>Standardmäßig ist diese Funktion <strong>aus</strong>. Keine Wochenarbeitszeit, keine Arbeitgeberlogik – nur ein optionales neutrales Monatslimit.</small>
+      <small>Standardmäßig ist diese Funktion <strong>aus</strong>. Wenn aktiviert, sind die ersten angegebenen kWh je Ladebenutzer und Kalendermonat kostenfrei. Das ist unabhängig von optionalen Monatslimits.</small>
     </section>
 
     <div class="form-actions">
