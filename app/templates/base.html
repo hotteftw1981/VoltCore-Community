@@ -28,6 +28,11 @@
     <a href="/users" class="{% if page=='users' %}active{% endif %}">♙ <span>Ladebenutzer / RFID</span></a>
     <a href="/reports" class="{% if page=='reports' %}active{% endif %}">▤ <span>Berichte</span></a>
     {% if auth_user and auth_user.role == 'admin' %}<a href="/tariffs" class="{% if page=='tariffs' %}active{% endif %}">€ <span>Tarife</span></a>{% endif %}
+    {% if auth_user and auth_user.role == 'admin' %}<a href="/load-management" class="{% if page=='load-management' %}active{% endif %}">⌁ <span>Lastmanagement</span></a>{% endif %}
+    {% if auth_user and auth_user.role == 'admin' %}<a href="/engagement" class="{% if page=='engagement' %}active{% endif %}">★ <span>Achievements & Events</span></a>{% endif %}
+    {% if auth_user and auth_user.role == 'admin' %}<a href="/cost-centers" class="{% if page=='cost-centers' %}active{% endif %}">¤ <span>Kostenstellen</span></a>{% endif %}
+    {% if auth_user and auth_user.role == 'admin' %}<a href="/imports" class="{% if page=='imports' %}active{% endif %}">⇩ <span>Importe</span></a>{% endif %}
+
     <a href="/activity" class="{% if page=='activity' %}active{% endif %}">◷ <span>Aktivitätsprotokoll</span></a>
     {% if auth_user and auth_user.role == 'admin' %}<a href="/registration-onboarding" class="{% if page=='registration-onboarding' %}active{% endif %}">✦ <span>Registrierung & Onboarding</span></a><a href="/registration-requests" class="{% if page=='access-requests' %}active{% endif %}">✉ <span>Zugangsanträge</span></a>{% endif %}
     {% if auth_user and auth_user.role == 'admin' %}<a href="/system-users" class="{% if page=='system-users' %}active{% endif %}">♟ <span>Systembenutzer</span></a>{% endif %}
