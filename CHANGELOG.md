@@ -19,9 +19,15 @@ All notable changes to VoltCore Community are documented here.
 - Tariffs, billing groups, reports, CSV/PDF export, backup/restore, branding, PWA, security and system-user roles.
 - OCPP 1.6J monitoring, diagnostics, remote commands and charge-point onboarding.
 
+### Fixed
+- The optional first-run default monthly kWh limit is now actually applied to newly created charging users while explicit unlimited users remain possible.
+- Offline RFID LocalList authorization is re-evaluated once on month change so block-mode monthly limits do not remain stale across billing months.
+- Removed orphaned registration-signature code, unused runtime imports and unreferenced database helper functions left behind by the Community scope reduction.
+
 ### Release readiness
 - Existing Community databases clean up obsolete portal, registration, gamification, bonus, load-management, cost-center and integration state on startup.
-- Regression coverage locks the backend-only edition boundary.
+- The short-lived `community_free_credit_enabled` setting is migrated to the neutral default-limit setting name.
+- Regression coverage locks the backend-only edition boundary and runtime cleanup.
 - Documentation and smoke tests now describe the actual Community runtime instead of the temporary 0.9.7.74 restoration state.
 
 ## 0.9.7.75 — Community scope correction
