@@ -399,7 +399,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -579,7 +579,7 @@ async def login_page(request: Request, next: str = "/", reason: str | None = Non
     token=request.cookies.get(SESSION_COOKIE)
     if token and db.system_user_for_session(_session_hash(token)):
         return RedirectResponse(url="/", status_code=303)
-    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason, registration=db.registration_settings())
+    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason)
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -1224,16 +1224,6 @@ def _ocpp_transport_status():
     return {"level":"neutral","label":"WS / Proxy","detail":"Direktes WSS deaktiviert · TLS kann am Reverse Proxy terminiert werden","affects_overall":False}
 
 
-def _fleet_integration_status():
-    enabled=bool(str(os.getenv("FLEET_INTEGRATION_TOKEN") or "").strip())
-    return {
-        "level":"ok" if enabled else "neutral",
-        "label":"Bereit" if enabled else "Deaktiviert",
-        "detail":"Read-only Fleet API v1 mit Bearer-Token aktiv" if enabled else "Vorbereitete Fuhrpark-Schnittstelle · kein Token gesetzt",
-        "affects_overall":False,
-    }
-
-
 def _system_status_payload(auth=None):
     cps=db.list_charge_points()
     total=len(cps)
@@ -1660,7 +1650,7 @@ async def api_ocpp_device(cp_id: str):
     cp["connectors"] = db.connectors_for_charge_point(cp_id)
     from .ocpp_server import ACTIVE_CONNECTIONS
     cp["connected"] = cp_id in ACTIVE_CONNECTIONS
-    return {"device": cp, "events": db.events_for_charge_point(cp_id, 120), "transactions": db.transactions_for_charge_point(cp_id, 50), "active_transactions": db.active_transactions_for_charge_point(cp_id, 20), "live_telemetry": db.live_telemetry_for_charge_point(cp_id), "load_state": db.load_state_for_charge_point(cp_id)}
+    return {"device": cp, "events": db.events_for_charge_point(cp_id, 120), "transactions": db.transactions_for_charge_point(cp_id, 50), "active_transactions": db.active_transactions_for_charge_point(cp_id, 20), "live_telemetry": db.live_telemetry_for_charge_point(cp_id)}
 
 @app.post("/api/ocpp-devices/{cp_id}/onboard")
 async def onboard_ocpp_device(cp_id: str, payload: DeviceOnboardPayload):
@@ -1720,7 +1710,6 @@ class ChargePointPayload(BaseModel):
     connector_type: str | None = "Type 2"
     max_power_kw: float = 22
     notes: str | None = None
-    rfid_self_enroll_mode: str = "auto"
 
 class SessionPolicyPayload(BaseModel):
     stand_grace_seconds: int = 120
@@ -1752,16 +1741,14 @@ async def api_charge_point(cp_id: str):
     for e in events:
         e["human_label"]=labels.get(e.get("event_type"),e.get("event_type") or "OCPP-Ereignis")
         e["human_status"]="Fehler/Warnung" if any(x in str(e.get("event_type","")).lower() for x in ("fault","error","warning")) else ("Pausiert" if "Suspended" in str(e.get("payload","")) else "Information")
-    return {"charge_point": cp, "events": events, "transactions": transactions, "active_transactions": active, "meter_samples": db.meter_samples_for_charge_point(cp_id), "meter_diagnostics": db.meter_diagnostics_for_charge_point(cp_id, 12), "meter_capabilities": db.meter_capabilities_for_charge_point(cp_id), "diagnostics": db.diagnostic_summary(cp_id), "live_telemetry": live, "load_state": db.load_state_for_charge_point(cp_id)}
+    return {"charge_point": cp, "events": events, "transactions": transactions, "active_transactions": active, "meter_samples": db.meter_samples_for_charge_point(cp_id), "meter_diagnostics": db.meter_diagnostics_for_charge_point(cp_id, 12), "meter_capabilities": db.meter_capabilities_for_charge_point(cp_id), "diagnostics": db.diagnostic_summary(cp_id), "live_telemetry": live}
 
 @app.get("/api/tariffs")
 async def api_tariffs():
     return {
         "tariffs":db.list_tariffs(),
-        "groups":db.list_billing_groups(),
         "users":db.list_tariff_users(),
         "charge_points":db.list_tariff_charge_points(),
-        "cost_centers":db.list_cost_centers(True),
     }
 
 class TariffPayload(BaseModel):
@@ -1771,16 +1758,12 @@ class TariffPayload(BaseModel):
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
-    billing_group_id: int | None = None
 
 class TariffVersionPayload(BaseModel):
     name: str
     price_cents_per_kwh: int
     valid_from: str
     valid_until: str | None = None
-    cost_center: str | None = None
-    billing_group_id: int | None = None
 
 @app.post("/api/tariffs")
 async def create_tariff(payload: TariffPayload):
@@ -1797,34 +1780,6 @@ async def create_tariff_version(tariff_id:int,payload:TariffVersionPayload):
 @app.delete("/api/tariffs/{tariff_id}")
 async def remove_tariff(tariff_id:int):
     if not db.delete_tariff(tariff_id): raise HTTPException(404,"Tarif nicht gefunden")
-    return {"ok":True}
-
-class BillingGroupPayload(BaseModel):
-    name: str
-    cost_center: str | None = None
-    active: bool = True
-
-@app.post("/api/billing-groups")
-async def create_group(payload: BillingGroupPayload):
-    try: return {"id":db.create_billing_group(payload.name,payload.cost_center)}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/billing-groups/{group_id}")
-async def update_group(group_id:int,payload:BillingGroupPayload):
-    active=bool(getattr(payload,"active",True))
-    try: ok=db.update_billing_group(group_id,payload.name,payload.cost_center,active)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Abrechnungsgruppe nicht gefunden")
-    return {"ok":True}
-
-@app.post("/api/billing-groups/{group_id}/users/{user_id}")
-async def add_group_user(group_id:int,user_id:int):
-    try: db.assign_user_billing_group(user_id,group_id); return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/billing-groups/{group_id}/users/{user_id}")
-async def remove_group_user(group_id:int,user_id:int):
-    if not db.unassign_user_billing_group(user_id,group_id): raise HTTPException(404,"Zuordnung nicht gefunden")
     return {"ok":True}
 
 @app.get("/api/charge-points/{cp_id}/diagnostics")
@@ -2353,10 +2308,6 @@ class RFIDReplacePayload(BaseModel):
     expires_at: str | None = None
     notes: str | None = None
 
-class RFIDRequestStatusPayload(BaseModel):
-    status: str
-    resolution_note: str | None = None
-
 @app.get("/api/users")
 async def api_users():
     return {"users": db.list_users_rich()}
@@ -2524,24 +2475,6 @@ async def unassign_user_vehicle(user_id: int, vehicle_id: int):
 
 @app.get("/api/rfid")
 async def api_rfid(): return {"cards":db.list_rfid_cards()}
-
-@app.get("/api/rfid/requests")
-async def api_rfid_requests(status: str | None = None):
-    return {"requests":db.list_rfid_replacement_requests(status)}
-
-@app.post("/api/rfid/requests/{request_id}/status")
-async def api_rfid_request_status(request_id:int,payload:RFIDRequestStatusPayload):
-    try: ok=db.update_rfid_replacement_request(request_id,payload.status,payload.resolution_note)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Ersatzanfrage nicht gefunden")
-    return {"ok":True}
-
-
-@app.delete("/api/rfid/requests/{request_id}")
-async def api_delete_rfid_request(request_id:int):
-    deleted=db.delete_rfid_replacement_request(request_id)
-    if not deleted: raise HTTPException(404,"Ersatzanfrage nicht gefunden")
-    return {"ok":True,"deleted_id":request_id,"card_id":deleted.get("card_id"),"status":deleted.get("status")}
 
 @app.post("/api/rfid")
 async def create_rfid(payload: RFIDPayload):
