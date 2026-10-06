@@ -8,7 +8,7 @@
   {% for x in requests %}
   <article class="row">
     <div><b>{{ x.name }}</b><small>{{ x.email }} · {{ x.status }} · {{ x.created_at }}</small></div>
-    <a class="secondary button" href="/access-requests/{{ x.id }}">Öffnen</a>
+    <a class="secondary button" href="/registration-requests/{{ x.id }}">Öffnen</a>
   </article>
   {% else %}<div class="empty">Keine Zugangsanträge vorhanden.</div>{% endfor %}
 </section>
