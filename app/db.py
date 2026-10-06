@@ -590,6 +590,7 @@ def init_db():
         conn.execute("DROP TABLE IF EXISTS access_request_verifications")
         conn.execute("DROP TABLE IF EXISTS access_requests")
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'registration_%'")
+        conn.execute("UPDATE notifications SET active=0 WHERE notification_key LIKE 'access-request:%' OR notification_key LIKE 'access-approved:%'")
         for table_name, columns in (
             ("users",("role","department","weekly_hours","budget_source")),
             ("vehicles",("driver",)),
