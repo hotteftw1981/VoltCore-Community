@@ -112,6 +112,9 @@ class CommunityBackendOnlyTests(unittest.TestCase):
             "def seed_default_achievements(",
             "_allocate_bonus_for_transaction_conn(",
             "_bonus_wallet_conn(",
+            "ACHIEVEMENT_METRICS",
+            "LEADERBOARD_METRIC_META",
+            '"voucher_prefix":"VOLT"',
         ):
             self.assertNotIn(needle, db)
 
