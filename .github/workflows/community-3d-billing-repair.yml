@@ -1,0 +1,69 @@
+name: Community 3D Billing Repair
+
+on:
+  push:
+    branches: [fix/community-3d-billing-qa]
+    paths: [.github/workflows/community-3d-billing-repair.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-3d-billing-repair
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'hotteftw1981/VoltCore-Community' && github.ref == 'refs/heads/fix/community-3d-billing-qa'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout reviewed branch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reproduce baseline billing failures
+        shell: bash
+        run: |
+          mkdir -p qa-evidence
+          if python -m unittest discover -s tests -p test_community_billing.py -v > qa-evidence/before.txt 2>&1; then
+            echo 'Baseline unexpectedly passes; refusing an unnecessary repair.'
+            exit 1
+          fi
+          tail -8 qa-evidence/before.txt
+      - name: Apply only the reviewed, hash-guarded correction
+        run: python scripts/repair_community_billing.py
+      - name: Compile application source
+        run: python -m compileall -q app tests
+      - name: Run billing regression tests against repository source
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m unittest discover -s tests -p test_community_billing.py -v 2>&1 | tee qa-evidence/after.txt
+          git diff --check
+          git diff -- app/db.py > qa-evidence/billing.patch
+      - name: Commit verified function change to the isolated branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REF}" = 'refs/heads/fix/community-3d-billing-qa'
+          test "$(git diff --name-only)" = 'app/db.py'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/db.py
+          git commit -m 'fix: separate Community tariff billing from monthly charging limits'
+          git push origin HEAD:refs/heads/fix/community-3d-billing-qa
+          git rev-parse HEAD > qa-evidence/verified-commit.txt
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-3d-billing-evidence
+          path: qa-evidence/
+          retention-days: 7
