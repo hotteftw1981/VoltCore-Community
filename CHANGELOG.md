@@ -2,6 +2,28 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.76 — Backend-only Community scope
+
+### Removed
+- Removed the public personal charging portal, PIN login/reset and all portal administration.
+- Removed RFID self-service / enrollment while keeping normal RFID administration in the backend.
+- Removed achievements, XP/levels, events, rankings, bonus kWh, vouchers and transfers.
+- Removed Smart Charging / load management, cost centers, Lade.cloud import and Fleet Integration APIs.
+- Removed public registration / access requests and their onboarding workflow.
+- Removed employer- and organization-specific charging-user fields such as weekly working hours, departments and charging-user roles.
+- Removed the legacy free-text vehicle driver field; user-to-vehicle assignment remains available through the neutral assignment model.
+
+### Kept
+- Neutral backend charging-user management, RFID management, vehicles and user/vehicle/RFID assignment.
+- Optional manually configured monthly kWh limits, disabled by default on fresh installations.
+- Tariffs, billing groups, reports, CSV/PDF export, backup/restore, branding, PWA, security and system-user roles.
+- OCPP 1.6J monitoring, diagnostics, remote commands and charge-point onboarding.
+
+### Release readiness
+- Existing Community databases clean up obsolete portal, registration, gamification, bonus, load-management, cost-center and integration state on startup.
+- Regression coverage locks the backend-only edition boundary.
+- Documentation and smoke tests now describe the actual Community runtime instead of the temporary 0.9.7.74 restoration state.
+
 ## 0.9.7.75 — Community scope correction
 
 ### Removed
