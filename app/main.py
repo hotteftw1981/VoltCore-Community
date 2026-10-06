@@ -51,7 +51,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.9.7.74"
+APP_VERSION = "0.9.7.75"
 APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
@@ -230,7 +230,7 @@ PORTAL_PIN_ITERATIONS = 180000
 PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/liveview", "/api/liveview", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -333,7 +333,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/") or path.startswith("/api/integrations/fleet/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/integrations/fleet/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -1204,14 +1204,6 @@ async def ocpp_monitor_page(request: Request):
     return render(request, "ocpp_monitor.html", page="ocpp-monitor")
 
 
-@app.get("/liveview", response_class=HTMLResponse)
-async def liveview_page(request: Request, preview: str | None = None):
-    # Deliberately uses a dedicated, chrome-free template for wall displays.
-    preview=str(preview or "").strip().lower()
-    if preview not in db.LIVEVIEW_PRESETS:
-        preview=""
-    return render(request, "liveview.html", page="liveview", liveview_settings=db.liveview_settings(), liveview_preview=preview)
-
 @app.get("/ocpp-devices/{cp_id}/detail", response_class=HTMLResponse)
 async def ocpp_device_detail_page(request: Request, cp_id: str):
     cp_id = unquote(cp_id)
@@ -1456,36 +1448,6 @@ async def pwa_manifest():
 @app.get("/service-worker.js")
 async def pwa_service_worker():
     return FileResponse(BASE_DIR/"static"/"service-worker.js",media_type="application/javascript",headers={"Cache-Control":"no-cache","Service-Worker-Allowed":"/"})
-
-
-class LiveviewSettingsPayload(BaseModel):
-    preset: str = "standard"
-    sort: str = "auto"
-    columns: str = "auto"
-    refresh_seconds: int = 2
-    show_vehicle: bool = True
-    show_user: bool = True
-    show_soc: bool = True
-    show_energy: bool = True
-    show_diagnostics: bool = True
-    show_clock: bool = True
-    show_technical_id: bool = True
-
-
-@app.get("/api/settings/liveview")
-async def api_liveview_settings():
-    return db.liveview_settings()
-
-
-@app.put("/api/settings/liveview")
-async def api_liveview_settings_save(payload: LiveviewSettingsPayload, request: Request):
-    try:
-        result=db.save_liveview_settings(payload.model_dump())
-    except ValueError as exc:
-        raise HTTPException(400,str(exc))
-    auth=getattr(request.state,"auth_user",None) or {}
-    db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="LiveView-Einstellungen gespeichert",category="Einstellungen",target="LiveView / Kiosk",method=request.method,path=request.url.path,details=f"preset={result.get('preset')}; sort={result.get('sort')}; columns={result.get('columns')}; refresh={result.get('refresh_seconds')}s")
-    return {"ok":True,**result}
 
 
 class MailSettingsPayload(BaseModel):
@@ -2125,127 +2087,6 @@ class DeviceOnboardPayload(BaseModel):
     notes: str | None = None
 
 
-def _live_age_seconds(value, now=None):
-    if not value:
-        return None
-    try:
-        dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
-        if dt.tzinfo is None:
-            dt=dt.replace(tzinfo=timezone.utc)
-        return max(0, int(((now or datetime.now(timezone.utc))-dt.astimezone(timezone.utc)).total_seconds()))
-    except (TypeError,ValueError):
-        return None
-
-
-def _telemetry_freshness(age_seconds):
-    if age_seconds is None:
-        return "none"
-    if age_seconds <= 90:
-        return "live"
-    if age_seconds <= 300:
-        return "delayed"
-    return "stale"
-
-
-def _liveview_snapshot():
-    now=datetime.now(timezone.utc)
-    cps=db.list_charge_points()
-    active=db.active_transactions(100)
-    active_by_connector={(str(x.get("charge_point_id")),int(x.get("connector_id") or 0)):x for x in active}
-    from .ocpp_server import connection_snapshot
-    connection_rows=connection_snapshot().get("connections") or []
-    connection_by_id={str(x.get("id")):x for x in connection_rows}
-    stations=[]
-    total_power=0.0
-    has_power=False
-    online_count=0
-    charging_count=0
-    fresh_count=0
-    fault_count=0
-    warning_count=0
-    for cp in cps:
-        cp_id=str(cp.get("id"))
-        connected=is_connected(cp_id)
-        if connected:
-            online_count+=1
-        live=db.live_telemetry_for_charge_point(cp_id)
-        connectors=[]
-        for raw in live.get("connectors") or []:
-            item=dict(raw)
-            cid=int(item.get("connector_id") or 0)
-            tx=active_by_connector.get((cp_id,cid))
-            age=_live_age_seconds(item.get("last_meter_at"),now)
-            freshness=_telemetry_freshness(age)
-            if connected and freshness=="live":
-                fresh_count+=1
-            status=str(item.get("status") or "Unknown")
-            active_state=status in {"Charging","SuspendedEV","SuspendedEVSE","Preparing","Finishing"}
-            raw_power=item.get("last_power_kw")
-            # Values older than five minutes remain available as last-known values,
-            # but are never counted as live site power.
-            live_power=float(raw_power) if raw_power is not None and connected and freshness in {"live","delayed"} and active_state else None
-            if live_power is not None:
-                total_power+=live_power; has_power=True
-            if connected and status in {"Charging","SuspendedEV","SuspendedEVSE"}:
-                charging_count+=1
-            connectors.append({
-                "connector_id":cid,"connector_type":item.get("connector_type"),"status":status,
-                "max_power_kw":item.get("max_power_kw"),"power_kw":live_power,"last_power_kw":raw_power,
-                "power_source":item.get("power_source"),"last_power_source":item.get("last_power_source"),"energy_kwh":item.get("energy_kwh"),"meter_register_kwh":item.get("energy_kwh"),
-                "voltage_v":item.get("voltage_v"),"voltage_l1":item.get("voltage_l1"),"voltage_l2":item.get("voltage_l2"),"voltage_l3":item.get("voltage_l3"),
-                "current_import_a":item.get("current_import_a"),"current_import_l1":item.get("current_import_l1"),"current_import_l2":item.get("current_import_l2"),"current_import_l3":item.get("current_import_l3"),
-                "power_offered_kw":item.get("power_offered_kw"),"frequency_hz":item.get("frequency_hz"),
-                "temperature_c":item.get("temperature_c"),"soc_percent":item.get("soc_percent"),"last_soc_percent":item.get("last_soc_percent"),"soc_age_seconds":item.get("soc_age_seconds"),
-                "last_meter_at":item.get("last_meter_at"),"meter_age_seconds":age,"freshness":freshness,
-                "session":({
-                    "id":tx.get("id"),"started_at":tx.get("started_at"),"energy_kwh":tx.get("energy_kwh"),
-                    "user_id":tx.get("user_id"),"user_name":tx.get("user_name"),"user_role":tx.get("user_role"),
-                    "user_department":tx.get("user_department"),"user_image_path":tx.get("user_image_path"),
-                    "vehicle_id":tx.get("vehicle_id"),"vehicle_name":tx.get("vehicle_name"),"vehicle_make":tx.get("vehicle_make"),
-                    "vehicle_model":tx.get("vehicle_model"),"vehicle_plate":tx.get("vehicle_plate"),"vehicle_image_path":tx.get("vehicle_image_path"),
-                    "id_tag":tx.get("id_tag"),"max_power_kw":tx.get("max_power_kw"),
-                } if tx else None),
-            })
-        cp_last=live.get("last_meter_at")
-        cp_age=_live_age_seconds(cp_last,now)
-        # For an actually disconnected charge point, show how long OCPP
-        # communication has been absent. This is intentionally separate from
-        # MeterValues age: an online idle connector may legitimately send no
-        # MeterValues for many hours.
-        offline_age=_live_age_seconds(cp.get("last_message_at") or cp.get("last_seen"),now) if not connected else None
-        connection=connection_by_id.get(cp_id) or {}
-        diagnostic=connection.get("diagnostic") or {
-            "level":"critical" if not connected else ("critical" if (cp.get("status") or "")=="Faulted" else "healthy"),
-            "label":"Kritisch" if not connected or (cp.get("status") or "")=="Faulted" else "Gesund",
-            "score":0 if not connected else (35 if (cp.get("status") or "")=="Faulted" else 100),
-            "issues":[{"code":"offline","severity":"critical","title":"OCPP-Verbindung getrennt","detail":"Der Ladepunkt ist nicht verbunden."}] if not connected else [],
-        }
-        if diagnostic.get("level")=="critical":
-            fault_count+=1
-        elif diagnostic.get("level")=="warning":
-            warning_count+=1
-        stations.append({
-            "id":cp_id,"location":cp.get("location"),"vendor":cp.get("vendor"),"model":cp.get("model"),
-            "firmware":cp.get("firmware"),"serial_number":cp.get("serial_number"),
-            "status":cp.get("status") or "Unknown","connected":connected,"last_seen":cp.get("last_seen"),
-            "last_message_at":cp.get("last_message_at"),"last_message_type":cp.get("last_message_type"),
-            "max_power_kw":cp.get("max_power_kw"),"last_meter_at":cp_last,"meter_age_seconds":cp_age,
-            "offline_age_seconds":offline_age,
-            "freshness":_telemetry_freshness(cp_age),"connectors":connectors,
-            "diagnostic":diagnostic,
-            "heartbeat_age_seconds":diagnostic.get("heartbeat_age_seconds"),
-            "subprotocol":connection.get("subprotocol") or "ocpp1.6",
-        })
-    available_count=sum(1 for station in stations if station.get("connected") and str(station.get("status") or "")=="Available")
-    return {
-        "version":APP_VERSION,"generated_at":now.isoformat(),"stations":stations,"settings":db.liveview_settings(),
-        "summary":{"stations":len(stations),"online":online_count,"offline":max(0,len(stations)-online_count),
-                   "available":available_count,"active_sessions":len(active),
-                   "charging_connectors":charging_count,"total_power_kw":round(total_power,2) if has_power else None,
-                   "fresh_connectors":fresh_count,"critical":fault_count,"warnings":warning_count},
-    }
-
-
 @app.get("/api/ocpp-monitor")
 async def api_ocpp_monitor():
     from .ocpp_server import connection_snapshot
@@ -2253,18 +2094,6 @@ async def api_ocpp_monitor():
     data["active_transactions"] = db.active_transactions(50)
     return data
 
-
-@app.get("/api/liveview")
-async def api_liveview():
-    return _liveview_snapshot()
-
-
-@app.get("/api/liveview/history/{cp_id}")
-async def api_liveview_history(cp_id: str, connector_id: int | None = None, hours: int = 6, points: int = 240):
-    cp_id=unquote(cp_id)
-    if not db.get_charge_point(cp_id):
-        raise HTTPException(404,"Ladepunkt nicht gefunden")
-    return db.meter_history_for_charge_point(cp_id, connector_id=connector_id, hours=hours, max_points=points)
 
 @app.get("/api/ocpp-devices")
 async def api_ocpp_devices():
