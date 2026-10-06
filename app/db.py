@@ -7247,7 +7247,7 @@ def set_access_request_in_review(request_id):
         conn.commit(); return cur.rowcount>0
 
 
-def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_kwh_limit=None, monthly_limit_mode="warn", admin_note=None, budget_source="manual", return_details=False):
+def approve_access_request(request_id, system_user_id, monthly_kwh_limit=None, monthly_limit_mode="warn", admin_note=None, budget_source="manual", return_details=False):
     now=utc_now(); mode="block" if str(monthly_limit_mode).lower()=="block" else "warn"
     source="manual"
     with _lock,_connect() as conn:
@@ -7259,8 +7259,8 @@ def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_
         limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
         normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
         vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
-        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_pin_hash,portal_pin_set_at,portal_enabled,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,?, ?,1,?,?)""",(req['name'],vehicle_text,limit_value,mode,1,req['email'],req['phone'],str(portal_pin_hash),now,None,source))
+        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,weekly_hours,budget_source)
+            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,NULL,?)""",(req['name'],vehicle_text,limit_value,mode,0,req['email'],req['phone'],source))
         user_id=int(cur.lastrowid)
         vehicle_id=None; vehicle_created=False
         if normalized_plate:
