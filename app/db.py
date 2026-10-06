@@ -5,7 +5,6 @@ import threading
 import hashlib
 import hmac
 import secrets
-import re
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
@@ -34,27 +33,6 @@ def _connect():
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def normalize_vehicle_plate(value):
-    """Normalize common German plate input without mangling unusual/foreign plates."""
-    raw=str(value or "").strip().upper()
-    if not raw:
-        return ""
-    raw=raw.replace("–","-").replace("—","-")
-    raw=re.sub(r"\s+"," ",raw)
-    raw=re.sub(r"\s*-\s*","-",raw)
-    # Clear German formats: district (1-3 letters), group (1-2 letters), digits, optional E/H.
-    patterns=(
-        r"^([A-ZÄÖÜ]{1,3})-([A-ZÄÖÜ]{1,2})\s*-?\s*(\d{1,4})([EH]?)$",
-        r"^([A-ZÄÖÜ]{1,3})\s+([A-ZÄÖÜ]{1,2})\s*-?\s*(\d{1,4})([EH]?)$",
-    )
-    for pattern in patterns:
-        m=re.fullmatch(pattern,raw)
-        if m:
-            return f"{m.group(1)}-{m.group(2)} {m.group(3)}{m.group(4)}"
-    # If the structure is ambiguous, keep it readable rather than guessing a district code.
-    return raw
 
 
 def _purge_legacy_demo_data(conn):
