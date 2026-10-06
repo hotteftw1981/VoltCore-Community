@@ -16,8 +16,8 @@ services:
       - "8010:8000"
       - "9000:9000"
     volumes:
-      - ocpp_data:/data
-      - ${OCPP_TLS_CERT_DIR:-ocpp_tls}:/run/ocpp-tls:ro
+      - voltcore_community_data:/data
+      - ${OCPP_TLS_CERT_DIR:-voltcore_community_tls}:/run/ocpp-tls:ro
     environment:
       DATA_DIR: /data
       WEB_PORT: 8000
@@ -46,5 +46,5 @@ services:
       retries: 3
       start_period: 10s
 volumes:
-  ocpp_data:
-  ocpp_tls:
+  voltcore_community_data:
+  voltcore_community_tls:
