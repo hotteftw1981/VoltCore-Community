@@ -271,11 +271,6 @@ def init_db():
                 vehicle TEXT,
                 monthly_kwh_limit REAL,
                 monthly_limit_mode TEXT NOT NULL DEFAULT 'warn',
-                gamification_enabled INTEGER NOT NULL DEFAULT 1,
-                gamification_seen_award_id INTEGER,
-                gamification_seen_level INTEGER,
-                weekly_hours REAL,
-                budget_source TEXT NOT NULL DEFAULT 'manual',
                 charge_access_mode TEXT NOT NULL DEFAULT 'all',
                 image_path TEXT
             );
@@ -295,14 +290,6 @@ def init_db():
                 PRIMARY KEY(user_id, charge_point_id)
             );
             CREATE INDEX IF NOT EXISTS idx_user_charge_point_access_cp ON user_charge_point_access(charge_point_id,user_id);
-            CREATE TABLE IF NOT EXISTS load_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                condition_text TEXT,
-                action_text TEXT,
-                priority TEXT NOT NULL DEFAULT 'Normal',
-                active INTEGER NOT NULL DEFAULT 1
-            );
             CREATE TABLE IF NOT EXISTS connectors (
                 charge_point_id TEXT NOT NULL,
                 connector_id INTEGER NOT NULL,
@@ -398,84 +385,6 @@ def init_db():
                 delivered_at TEXT NOT NULL,
                 PRIMARY KEY(subscription_id,notification_id,revision)
             );
-            CREATE TABLE IF NOT EXISTS portal_pin_reset_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email_hash TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                user_id INTEGER,
-                requested_at TEXT NOT NULL,
-                mail_sent INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS portal_pin_reset_tokens (
-                token_hash TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS access_request_verifications (
-                token_hash TEXT PRIMARY KEY,
-                email TEXT NOT NULL,
-                email_hash TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                used_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS access_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'Neu',
-                name TEXT NOT NULL,
-                street TEXT NOT NULL,
-                postal_code TEXT NOT NULL,
-                city TEXT NOT NULL,
-                email TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                vehicle_make_model TEXT,
-                vehicle_plate TEXT NOT NULL,
-                weekly_hours REAL,
-                field_values_json TEXT,
-                field_schema_json TEXT,
-                approved_budget_kwh REAL,
-                budget_source TEXT,
-                terms_version TEXT NOT NULL,
-                terms_snapshot TEXT NOT NULL,
-                signature_path TEXT NOT NULL,
-                signed_at TEXT NOT NULL,
-                verified_at TEXT NOT NULL,
-                ip_hash TEXT NOT NULL,
-                admin_note TEXT,
-                decision_at TEXT,
-                decided_by INTEGER,
-                user_id INTEGER
-            );
-            CREATE TABLE IF NOT EXISTS rfid_enrollment_sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                charge_point_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                candidate_uid TEXT,
-                detected_at TEXT,
-                completed_at TEXT,
-                message TEXT
-            );
-            CREATE TABLE IF NOT EXISTS billing_groups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                cost_center TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS user_billing_groups (
-                user_id INTEGER NOT NULL,
-                group_id INTEGER NOT NULL,
-                assigned_at TEXT NOT NULL,
-                PRIMARY KEY(user_id, group_id)
-            );
             CREATE TABLE IF NOT EXISTS tariffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -484,144 +393,8 @@ def init_db():
                 price_cents_per_kwh INTEGER NOT NULL,
                 valid_from TEXT NOT NULL,
                 valid_until TEXT,
-                cost_center TEXT,
-                billing_group_id INTEGER,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS portal_sessions (
-                token_hash TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS portal_login_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip_hash TEXT NOT NULL,
-                ts TEXT NOT NULL,
-                success INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS achievements (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                icon TEXT,
-                metric TEXT NOT NULL DEFAULT 'manual',
-                threshold REAL,
-                hidden INTEGER NOT NULL DEFAULT 0,
-                system_secret INTEGER NOT NULL DEFAULT 0,
-                category TEXT NOT NULL DEFAULT 'Allgemein',
-                rarity TEXT NOT NULL DEFAULT 'common',
-                xp INTEGER NOT NULL DEFAULT 50,
-                tier_group TEXT,
-                tier_name TEXT,
-                tier_rank INTEGER NOT NULL DEFAULT 0,
-                seed_key TEXT,
-                leaderboard_enabled INTEGER NOT NULL DEFAULT 0,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS achievement_awards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                achievement_id INTEGER NOT NULL,
-                awarded_at TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'automatic',
-                UNIQUE(user_id, achievement_id)
-            );
-            CREATE TABLE IF NOT EXISTS gamification_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                description TEXT,
-                metric TEXT NOT NULL DEFAULT 'energy_kwh',
-                starts_at TEXT NOT NULL,
-                ends_at TEXT NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                min_sessions INTEGER NOT NULL DEFAULT 0,
-                min_session_kwh REAL NOT NULL DEFAULT 0,
-                reward_bonus_kwh REAL NOT NULL DEFAULT 0,
-                reward_valid_days INTEGER,
-                reward_bonus_enabled INTEGER NOT NULL DEFAULT 0,
-                winner_badge_enabled INTEGER NOT NULL DEFAULT 0,
-                winner_badge_name TEXT,
-                winner_badge_icon TEXT,
-                winner_badge_description TEXT,
-                winner_achievement_id INTEGER,
-                finalized_at TEXT
-            );
-            CREATE TABLE IF NOT EXISTS gamification_event_rewards (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                bonus_grant_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                granted_at TEXT NOT NULL,
-                UNIQUE(event_id,user_id)
-            );
-            CREATE TABLE IF NOT EXISTS gamification_event_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                rank INTEGER,
-                metric_value REAL,
-                qualified INTEGER NOT NULL DEFAULT 0,
-                sessions INTEGER NOT NULL DEFAULT 0,
-                energy_kwh REAL NOT NULL DEFAULT 0,
-                details_json TEXT,
-                captured_at TEXT NOT NULL,
-                UNIQUE(event_id,user_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_vouchers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                amount_kwh REAL NOT NULL,
-                redeem_until TEXT,
-                bonus_valid_days INTEGER NOT NULL DEFAULT 90,
-                max_redemptions INTEGER NOT NULL DEFAULT 1,
-                active INTEGER NOT NULL DEFAULT 1,
-                note TEXT,
-                created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS bonus_grants (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                remaining_kwh REAL NOT NULL,
-                granted_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                source TEXT NOT NULL DEFAULT 'admin',
-                note TEXT,
-                voucher_id INTEGER,
-                active INTEGER NOT NULL DEFAULT 1
-            );
-            CREATE TABLE IF NOT EXISTS bonus_usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                grant_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                transaction_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                used_at TEXT NOT NULL,
-                UNIQUE(grant_id, transaction_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_voucher_redemptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                voucher_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                grant_id INTEGER NOT NULL,
-                redeemed_at TEXT NOT NULL,
-                UNIQUE(voucher_id, user_id)
-            );
-            CREATE TABLE IF NOT EXISTS bonus_transfers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                from_user_id INTEGER NOT NULL,
-                to_user_id INTEGER NOT NULL,
-                source_grant_id INTEGER NOT NULL,
-                target_grant_id INTEGER NOT NULL,
-                amount_kwh REAL NOT NULL,
-                transferred_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS rfid_card_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -632,27 +405,6 @@ def init_db():
                 note TEXT,
                 source TEXT NOT NULL DEFAULT 'admin',
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS rfid_replacement_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                reason TEXT NOT NULL DEFAULT 'replacement',
-                status TEXT NOT NULL DEFAULT 'Offen',
-                note TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                resolved_at TEXT,
-                resolution_note TEXT
-            );
-            CREATE TABLE IF NOT EXISTS cost_centers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                name TEXT NOT NULL,
-                description TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS diagnostic_states (
                 state_key TEXT PRIMARY KEY,
@@ -788,27 +540,10 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN monthly_kwh_limit REAL")
         if "monthly_limit_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN monthly_limit_mode TEXT NOT NULL DEFAULT 'warn'")
-        if "gamification_enabled" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 1")
-        if "weekly_hours" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN weekly_hours REAL")
-        if "budget_source" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN budget_source TEXT NOT NULL DEFAULT 'manual'")
         if "image_path" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN image_path TEXT")
         if "charge_access_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN charge_access_mode TEXT NOT NULL DEFAULT 'all'")
-        user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
-        for name, statement in {
-            "portal_pin_hash": "ALTER TABLE users ADD COLUMN portal_pin_hash TEXT",
-            "portal_pin_set_at": "ALTER TABLE users ADD COLUMN portal_pin_set_at TEXT",
-            "portal_enabled": "ALTER TABLE users ADD COLUMN portal_enabled INTEGER NOT NULL DEFAULT 0",
-            "portal_last_login_at": "ALTER TABLE users ADD COLUMN portal_last_login_at TEXT",
-            "gamification_seen_award_id": "ALTER TABLE users ADD COLUMN gamification_seen_award_id INTEGER",
-            "gamification_seen_level": "ALTER TABLE users ADD COLUMN gamification_seen_level INTEGER",
-        }.items():
-            if name not in user_columns:
-                conn.execute(statement)
         rfid_columns = {r[1] for r in conn.execute("PRAGMA table_info(rfid_cards)").fetchall()}
         for name, statement in {
             "issued_at": "ALTER TABLE rfid_cards ADD COLUMN issued_at TEXT",
@@ -831,76 +566,13 @@ def init_db():
         }.items():
             if name not in local_list_state_columns:
                 conn.execute(statement)
-        cp_columns = {r[1] for r in conn.execute("PRAGMA table_info(charge_points)").fetchall()}
-        if "rfid_self_enroll_mode" not in cp_columns:
-            conn.execute("ALTER TABLE charge_points ADD COLUMN rfid_self_enroll_mode TEXT NOT NULL DEFAULT 'auto'")
         notification_columns = {r[1] for r in conn.execute("PRAGMA table_info(notifications)").fetchall()}
         if "audience" not in notification_columns:
             conn.execute("ALTER TABLE notifications ADD COLUMN audience TEXT NOT NULL DEFAULT 'all'")
         if "revision" not in notification_columns:
             conn.execute("ALTER TABLE notifications ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
-        access_request_columns = {r[1] for r in conn.execute("PRAGMA table_info(access_requests)").fetchall()}
-        for name, statement in {
-            "weekly_hours": "ALTER TABLE access_requests ADD COLUMN weekly_hours REAL",
-            "field_values_json": "ALTER TABLE access_requests ADD COLUMN field_values_json TEXT",
-            "field_schema_json": "ALTER TABLE access_requests ADD COLUMN field_schema_json TEXT",
-            "approved_budget_kwh": "ALTER TABLE access_requests ADD COLUMN approved_budget_kwh REAL",
-            "budget_source": "ALTER TABLE access_requests ADD COLUMN budget_source TEXT",
-        }.items():
-            if name not in access_request_columns:
-                conn.execute(statement)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_email ON portal_pin_reset_requests(email_hash,requested_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_ip ON portal_pin_reset_requests(ip_hash,requested_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_portal_pin_reset_tokens_expiry ON portal_pin_reset_tokens(expires_at,used_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_verify_email ON access_request_verifications(email_hash,created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_enrollment_active ON rfid_enrollment_sessions(charge_point_id,status,expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_events_card ON rfid_card_events(card_id,created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rfid_requests_status ON rfid_replacement_requests(status,created_at)")
         conn.execute("UPDATE rfid_cards SET issued_at=COALESCE(issued_at,created_at) WHERE issued_at IS NULL")
-        achievement_columns = {r[1] for r in conn.execute("PRAGMA table_info(achievements)").fetchall()}
-        leaderboard_enabled_added = "leaderboard_enabled" not in achievement_columns
-        for name, statement in {
-            "system_secret": "ALTER TABLE achievements ADD COLUMN system_secret INTEGER NOT NULL DEFAULT 0",
-            "category": "ALTER TABLE achievements ADD COLUMN category TEXT NOT NULL DEFAULT 'Allgemein'",
-            "rarity": "ALTER TABLE achievements ADD COLUMN rarity TEXT NOT NULL DEFAULT 'common'",
-            "xp": "ALTER TABLE achievements ADD COLUMN xp INTEGER NOT NULL DEFAULT 50",
-            "tier_group": "ALTER TABLE achievements ADD COLUMN tier_group TEXT",
-            "tier_name": "ALTER TABLE achievements ADD COLUMN tier_name TEXT",
-            "tier_rank": "ALTER TABLE achievements ADD COLUMN tier_rank INTEGER NOT NULL DEFAULT 0",
-            "seed_key": "ALTER TABLE achievements ADD COLUMN seed_key TEXT",
-            "leaderboard_enabled": "ALTER TABLE achievements ADD COLUMN leaderboard_enabled INTEGER NOT NULL DEFAULT 0",
-        }.items():
-            if name not in achievement_columns:
-                conn.execute(statement)
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_achievements_seed_key ON achievements(seed_key) WHERE seed_key IS NOT NULL")
-        if leaderboard_enabled_added:
-            conn.execute("""UPDATE achievements SET leaderboard_enabled=1 WHERE seed_key IN (
-                'energy-100','sessions-10','early-5','evening-10','night-5','weekend-10',
-                'active-days-30','months-3','week-streak-4','cp-2','vehicles-2','single-30',
-                'peak-11','max-month-energy-500','max-month-sessions-40','charging-hours-100',
-                'long-10','quick-20'
-            ) AND COALESCE(system_secret,0)=0""")
-        gamification_event_columns = {r[1] for r in conn.execute("PRAGMA table_info(gamification_events)").fetchall()}
-        reward_enabled_added = "reward_bonus_enabled" not in gamification_event_columns
-        for name, statement in {
-            "min_sessions": "ALTER TABLE gamification_events ADD COLUMN min_sessions INTEGER NOT NULL DEFAULT 0",
-            "min_session_kwh": "ALTER TABLE gamification_events ADD COLUMN min_session_kwh REAL NOT NULL DEFAULT 0",
-            "reward_bonus_kwh": "ALTER TABLE gamification_events ADD COLUMN reward_bonus_kwh REAL NOT NULL DEFAULT 0",
-            "reward_valid_days": "ALTER TABLE gamification_events ADD COLUMN reward_valid_days INTEGER",
-            "reward_bonus_enabled": "ALTER TABLE gamification_events ADD COLUMN reward_bonus_enabled INTEGER NOT NULL DEFAULT 0",
-            "winner_badge_enabled": "ALTER TABLE gamification_events ADD COLUMN winner_badge_enabled INTEGER NOT NULL DEFAULT 0",
-            "winner_badge_name": "ALTER TABLE gamification_events ADD COLUMN winner_badge_name TEXT",
-            "winner_badge_icon": "ALTER TABLE gamification_events ADD COLUMN winner_badge_icon TEXT",
-            "winner_badge_description": "ALTER TABLE gamification_events ADD COLUMN winner_badge_description TEXT",
-            "winner_achievement_id": "ALTER TABLE gamification_events ADD COLUMN winner_achievement_id INTEGER",
-            "finalized_at": "ALTER TABLE gamification_events ADD COLUMN finalized_at TEXT",
-        }.items():
-            if name not in gamification_event_columns:
-                conn.execute(statement)
-        if reward_enabled_added:
-            # Preserve all V0.9.5 events that already had a configured kWh reward.
-            conn.execute("UPDATE gamification_events SET reward_bonus_enabled=1 WHERE COALESCE(reward_bonus_kwh,0)>0")
         transaction_columns = {r[1] for r in conn.execute("PRAGMA table_info(transactions)").fetchall()}
         for col in ("user_id", "rfid_card_id"):
             if col not in transaction_columns: conn.execute(f"ALTER TABLE transactions ADD COLUMN {col} INTEGER")
@@ -1036,14 +708,6 @@ def init_db():
             "tariff_source": "ALTER TABLE transactions ADD COLUMN tariff_source TEXT",
             "price_cents_per_kwh": "ALTER TABLE transactions ADD COLUMN price_cents_per_kwh INTEGER",
             "cost_cents": "ALTER TABLE transactions ADD COLUMN cost_cents INTEGER",
-            "cost_center": "ALTER TABLE transactions ADD COLUMN cost_center TEXT",
-            "billing_group_id": "ALTER TABLE transactions ADD COLUMN billing_group_id INTEGER",
-            "billing_group_name": "ALTER TABLE transactions ADD COLUMN billing_group_name TEXT",
-            "import_source": "ALTER TABLE transactions ADD COLUMN import_source TEXT",
-            "import_key": "ALTER TABLE transactions ADD COLUMN import_key TEXT",
-            "imported_at": "ALTER TABLE transactions ADD COLUMN imported_at TEXT",
-            "import_source_name": "ALTER TABLE transactions ADD COLUMN import_source_name TEXT",
-            "import_evse_id": "ALTER TABLE transactions ADD COLUMN import_evse_id TEXT",
             "timing_quality": "ALTER TABLE transactions ADD COLUMN timing_quality TEXT",
             "post_session_occupied_started_at": "ALTER TABLE transactions ADD COLUMN post_session_occupied_started_at TEXT",
             "unplugged_at": "ALTER TABLE transactions ADD COLUMN unplugged_at TEXT",
@@ -1074,13 +738,6 @@ def init_db():
                   AND c.connector_id=transactions.connector_id
                   AND c.status='Finishing'
               )""")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_source_key ON transactions(import_source,import_key) WHERE import_source IS NOT NULL AND import_key IS NOT NULL")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_grants_user_expiry ON bonus_grants(user_id,active,expires_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_usage_transaction ON bonus_usage(transaction_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_voucher_redemptions_voucher ON bonus_voucher_redemptions(voucher_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_transfers_from ON bonus_transfers(from_user_id,transferred_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_bonus_transfers_to ON bonus_transfers(to_user_id,transferred_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_gamification_event_rewards_event ON gamification_event_rewards(event_id,granted_at)")
 
         meter_columns = {r[1] for r in conn.execute("PRAGMA table_info(meter_samples)").fetchall()}
         for name, statement in {
@@ -1140,15 +797,36 @@ def init_db():
 
         now_setting=utc_now()
         for key,value in (("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
-                          ("rfid_local_list_version","1"),
-                          ("registration_enabled","0"),("registration_reference_kwh","0"),
-                          ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
+                          ("rfid_local_list_version","1")):
             conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
         current_local_version=int((conn.execute("SELECT value FROM app_settings WHERE key='rfid_local_list_version'").fetchone() or [1])[0] or 1)
 
         # V0.9.7.75: LiveView is not part of Community. Remove settings left
         # behind by the short-lived 0.9.7.74 release candidate.
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'liveview_%'")
+        conn.execute("DROP TABLE IF EXISTS load_rules")
+        conn.execute("DROP TABLE IF EXISTS portal_pin_reset_requests")
+        conn.execute("DROP TABLE IF EXISTS portal_pin_reset_tokens")
+        conn.execute("DROP TABLE IF EXISTS access_request_verifications")
+        conn.execute("DROP TABLE IF EXISTS access_requests")
+        conn.execute("DROP TABLE IF EXISTS rfid_enrollment_sessions")
+        conn.execute("DROP TABLE IF EXISTS billing_groups")
+        conn.execute("DROP TABLE IF EXISTS user_billing_groups")
+        conn.execute("DROP TABLE IF EXISTS portal_sessions")
+        conn.execute("DROP TABLE IF EXISTS portal_login_attempts")
+        conn.execute("DROP TABLE IF EXISTS achievements")
+        conn.execute("DROP TABLE IF EXISTS achievement_awards")
+        conn.execute("DROP TABLE IF EXISTS gamification_events")
+        conn.execute("DROP TABLE IF EXISTS gamification_event_rewards")
+        conn.execute("DROP TABLE IF EXISTS gamification_event_results")
+        conn.execute("DROP TABLE IF EXISTS bonus_vouchers")
+        conn.execute("DROP TABLE IF EXISTS bonus_grants")
+        conn.execute("DROP TABLE IF EXISTS bonus_usage")
+        conn.execute("DROP TABLE IF EXISTS bonus_voucher_redemptions")
+        conn.execute("DROP TABLE IF EXISTS bonus_transfers")
+        conn.execute("DROP TABLE IF EXISTS rfid_replacement_requests")
+        conn.execute("DROP TABLE IF EXISTS cost_centers")
+        conn.execute("DELETE FROM app_settings WHERE key LIKE 'registration_%'")
 
         # Community does not rewrite historical billing data during initialization.
         # Existing transaction costs and tariff snapshots are preserved verbatim.
@@ -1162,19 +840,6 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_user_ts ON web_login_attempts(username_key,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ocpp_auth_attempts_key_ts ON ocpp_auth_attempts(client_key,ts DESC)")
 
-        # Import already-used free-text cost centers into the new master-data table.
-        # Historical transaction snapshots remain untouched; this only gives existing
-        # installations an immediately useful central catalog after the upgrade.
-        known_cost_centers=set()
-        for table in ("transactions","tariffs","billing_groups"):
-            for row in conn.execute(f"SELECT DISTINCT TRIM(cost_center) FROM {table} WHERE COALESCE(TRIM(cost_center),'')<>''").fetchall():
-                known_cost_centers.add(str(row[0]).strip())
-        now_cc=utc_now()
-        for code in sorted(known_cost_centers,key=str.casefold):
-            conn.execute("INSERT OR IGNORE INTO cost_centers(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)",(code,code,now_cc,now_cc))
-
-        # Fresh Community installations start without organization-specific
-        # load-management rules. Administrators can define rules for their site.
         conn.commit()
 
 
