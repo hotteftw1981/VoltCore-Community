@@ -883,7 +883,6 @@ class ChargePoint(OcppChargePoint):
                 f"connector={cid}; seconds={occupancy_finished.get('seconds')}; unplugged_at={occupancy_finished.get('unplugged_at')}",
                 transaction_id=occupancy_finished.get("transaction_id"),
             )
-        if cid > 0 and status_text in {"Available","Preparing","Charging","SuspendedEV","SuspendedEVSE","Finishing","Unavailable","Faulted"}:
         return call_result.StatusNotification()
 
     @on(Action.diagnostics_status_notification)
