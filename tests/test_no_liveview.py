@@ -23,6 +23,7 @@ class CommunityNoLiveViewTests(unittest.TestCase):
 
     def test_liveview_runtime_code_is_gone(self):
         allowed_suffixes = {".py", ".html", ".css", ".js", ".json"}
+        offenders = []
         for path in (ROOT / "app").rglob("*"):
             if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
                 continue
@@ -31,7 +32,9 @@ class CommunityNoLiveViewTests(unittest.TestCase):
             if path == ROOT / "app" / "db.py":
                 continue
             text = path.read_text(encoding="utf-8").lower()
-            self.assertNotIn("liveview", text, str(path.relative_to(ROOT)))
+            if "liveview" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual([], offenders, "LiveView runtime references remain")
 
     def test_liveview_database_helpers_are_removed(self):
         db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
