@@ -59,15 +59,6 @@ MEDIA_DIR = Path(os.getenv("DATA_DIR", "/data")) / "vehicle_images"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BRANDING_DIR = Path(os.getenv("DATA_DIR", "/data")) / "branding"
 BRANDING_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_SIGNATURE_DIR = Path(os.getenv("DATA_DIR", "/data")) / "access_request_signatures"
-ACCESS_SIGNATURE_DIR.mkdir(parents=True, exist_ok=True)
-ACCESS_TERMS_VERSION = "2026-10-06"
-ACCESS_TERMS = [
-    "Der Ladezugang ist persoenlich und darf nur im Rahmen der von der Administration freigegebenen Nutzung verwendet werden.",
-    "RFID-Karten, PINs und Zugangsdaten sind sicher aufzubewahren. Verlust, Diebstahl oder Missbrauch muessen unverzueglich gemeldet werden.",
-    "Der Betreiber kann Ladezugaenge bei Missbrauch, Sicherheitsproblemen oder organisatorischer Notwendigkeit voruebergehend sperren oder dauerhaft entziehen.",
-    "Technische Verfuegbarkeit kann nicht jederzeit garantiert werden. Es gelten zusaetzlich die oertlichen Betriebs- und Sicherheitsregeln der jeweiligen Ladeinfrastruktur.",
-]
 MAX_VEHICLE_IMAGE_BYTES = 5 * 1024 * 1024
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
 
@@ -225,7 +216,7 @@ PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -444,7 +435,7 @@ async def web_access_control(request: Request, call_next):
         return RedirectResponse(url="/first-run",status_code=303)
 
     # Settings and system-account administration are admin-only.
-    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/registration-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests")
+    admin_only = path in {"/settings","/security","/tariffs","/backups","/updates","/openapi.json","/first-run"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/")
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
@@ -624,7 +615,7 @@ async def login_page(request: Request, next: str = "/", reason: str | None = Non
     token=request.cookies.get(SESSION_COOKIE)
     if token and db.system_user_for_session(_session_hash(token)):
         return RedirectResponse(url="/", status_code=303)
-    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason, registration=db.registration_settings())
+    return render(request, "login.html", page="auth", next_path=next if next.startswith("/") and not next.startswith("//") else "/", login_reason=reason)
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -736,131 +727,6 @@ async def logout(request: Request):
     response=RedirectResponse(url="/login?reason=logout", status_code=303)
     response.delete_cookie(SESSION_COOKIE,path="/")
     return response
-
-
-@app.get("/public/access-request", response_class=HTMLResponse)
-async def public_access_request_start_page(request:Request, sent:str|None=None):
-    cfg=db.registration_settings()
-    step="start" if cfg.get("enabled") else "disabled"
-    return render(request,"access_request.html",page="public",step=step,verification_sent=(sent=="1"),terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.post("/public/access-request/start", response_class=HTMLResponse)
-async def public_access_request_start(request:Request, email:str=Form(...)):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    email_key=str(email or "").strip().casefold()
-    if len(email_key)>254 or "@" not in email_key:
-        return render(request,"access_request.html",status_code=400,page="public",step="start",error="Bitte geben Sie eine gültige E-Mail-Adresse ein.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
-    ip_hash=_client_hash(request)
-    if not db.access_request_start_allowed(email_hash,ip_hash,10,5):
-        return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
-    raw=secrets.token_urlsafe(32)
-    expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-    db.create_access_request_verification(email_key,email_hash,ip_hash,_session_hash(raw),expires)
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    await asyncio.to_thread(mailer.send_template,"system",[email_key],{"subject":"VoltCore Community · E-Mail bestätigen","headline":"Registrierung bestätigen","body":"Bitte bestätigen Sie Ihre E-Mail-Adresse, um den Antrag fortzusetzen.","detail":"Der Link ist 30 Minuten gültig.","cta_label":"Registrierung fortsetzen","cta_url":f"{base}/public/access-request/form?token={raw}"},base)
-    return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
-
-
-@app.get("/public/access-request/form", response_class=HTMLResponse)
-async def public_access_request_form(request:Request, token:str=""):
-    cfg=db.registration_settings()
-    if not cfg.get("enabled"):
-        return render(request,"access_request.html",status_code=403,page="public",step="disabled",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    existing=db.get_user_by_email(record["email"])
-    return render(request,"access_request.html",page="public",step="form",token=token,verified_email=record["email"],existing_user=existing,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=[x for x in cfg.get("fields",[]) if x.get("enabled")])
-
-
-@app.post("/public/access-request/submit", response_class=HTMLResponse)
-async def public_access_request_submit(request:Request):
-    cfg=db.registration_settings()
-    form=await request.form()
-    token=str(form.get("token") or "")
-    record=db.access_request_verification(_session_hash(token)) if token else None
-    if not cfg.get("enabled") or not record:
-        return render(request,"access_request.html",status_code=400,page="public",step="invalid",terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-    active_fields=[x for x in cfg.get("fields",[]) if x.get("enabled")]
-    values={str(x.get("id")):str(form.get(str(x.get("id"))) or "").strip() for x in active_fields}
-    for field in active_fields:
-        fid=str(field.get("id") or "")
-        if field.get("required") and not values.get(fid):
-            return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error=f"Bitte füllen Sie das Pflichtfeld „{field.get('label') or fid}“ aus.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    if str(form.get("terms_accept") or "")!="1":
-        return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error="Bitte bestätigen Sie die Nutzungsbedingungen.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
-    proof=hashlib.sha256(str(form.get("signature_data") or "").encode("utf-8")).hexdigest()
-    request_id=db.create_access_request(_session_hash(token),name=values.get("name",record["email"]),street=values.get("street",""),postal_code=values.get("postal_code",""),city=values.get("city",""),phone=values.get("phone",""),vehicle_make_model=values.get("vehicle_make_model",""),vehicle_plate=values.get("vehicle_plate",""),weekly_hours=None,field_values_json=json.dumps(values,ensure_ascii=False),field_schema_json=json.dumps(active_fields,ensure_ascii=False),terms_version=ACCESS_TERMS_VERSION,terms_snapshot=json.dumps(ACCESS_TERMS,ensure_ascii=False),signature_path="sha256:"+proof,ip_hash=_client_hash(request))
-    db.create_notification(f"access-request:{request_id}","info","Neuer Zugangsantrag",str(values.get("name") or record["email"]),"/registration-requests",audience="admin",source="event")
-    return render(request,"access_request.html",page="public",step="done",request_id=request_id,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
-
-
-@app.get("/registration-onboarding", response_class=HTMLResponse)
-async def registration_onboarding_page(request:Request,saved:str|None=None):
-    return render(request,"registration_settings.html",page="registration-onboarding",settings=db.registration_settings(),saved=(saved=="1"))
-
-
-@app.post("/settings/registration")
-async def registration_settings_save(request:Request):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        raise HTTPException(403,"Administratorrechte erforderlich")
-    form=await request.form()
-    current=db.registration_settings()
-    db.save_registration_settings({
-        "enabled":str(form.get("enabled") or "")=="1",
-        "budget_mode":"fixed",
-        "reference_kwh":float(str(form.get("reference_kwh") or "0").replace(",",".")),
-        "limit_mode":str(form.get("limit_mode") or "warn"),
-        "fields":current.get("fields",[]),
-    })
-    return RedirectResponse(url="/registration-onboarding?saved=1",status_code=303)
-
-
-@app.get("/registration-requests", response_class=HTMLResponse)
-async def registration_requests_page(request:Request):
-    return render(request,"access_requests.html",page="access-requests",requests=db.list_access_requests())
-
-
-@app.get("/registration-requests/{request_id}", response_class=HTMLResponse)
-async def registration_request_detail_page(request:Request,request_id:int,result:str|None=None):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
-    item=db.access_request_view(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    message={"approved":"Antrag genehmigt und Ladebenutzer im Backend erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
-    return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
-
-
-@app.post("/registration-requests/{request_id}/decision")
-async def registration_request_decision(request:Request,request_id:int,action:str=Form(...),note:str=Form(""),monthly_kwh_limit:str=Form(""),monthly_limit_mode:str=Form("warn")):
-    if (request.state.auth_user or {}).get("role")!="admin":
-        raise HTTPException(403,"Administratorrechte erforderlich")
-    item=db.get_access_request(request_id)
-    if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    auth=request.state.auth_user or {}
-    if action=="review":
-        db.set_access_request_in_review(request_id)
-        return RedirectResponse(url=f"/registration-requests/{request_id}?result=review",status_code=303)
-    if action=="reject":
-        db.decide_access_request(request_id,"Abgelehnt",auth.get("id"),note)
-        db.deactivate_notification(f"access-request:{request_id}")
-        return RedirectResponse(url=f"/registration-requests/{request_id}?result=rejected",status_code=303)
-    if action!="approve":
-        raise HTTPException(400,"Ungültige Aktion")
-    limit=None if str(monthly_kwh_limit or "").strip()=="" else max(0.0,float(str(monthly_kwh_limit).replace(",",".")))
-    db.approve_access_request(request_id,auth.get("id"),limit,monthly_limit_mode,note,"manual",return_details=True)
-    db.deactivate_notification(f"access-request:{request_id}")
-    base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
-    if mailer.settings(False).get("enabled"):
-        try:
-            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Ihr Ladebenutzer wird ausschließlich durch die Administration im VoltCore-Backend verwaltet. Für Ladebenutzer gibt es keinen separaten Portal- oder PIN-Zugang."},base)
-        except Exception:
-            logging.exception("Registration approval notification failed")
-    return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
 
 
 @app.get("/system-users", response_class=HTMLResponse)
@@ -1734,8 +1600,7 @@ def _telemetry_snapshot():
                 "last_meter_at":item.get("last_meter_at"),"meter_age_seconds":age,"freshness":freshness,
                 "session":({
                     "id":tx.get("id"),"started_at":tx.get("started_at"),"energy_kwh":tx.get("energy_kwh"),
-                    "user_id":tx.get("user_id"),"user_name":tx.get("user_name"),"user_role":tx.get("user_role"),
-                    "user_department":tx.get("user_department"),"user_image_path":tx.get("user_image_path"),
+                    "user_id":tx.get("user_id"),"user_name":tx.get("user_name"),"user_image_path":tx.get("user_image_path"),
                     "vehicle_id":tx.get("vehicle_id"),"vehicle_name":tx.get("vehicle_name"),"vehicle_make":tx.get("vehicle_make"),
                     "vehicle_model":tx.get("vehicle_model"),"vehicle_plate":tx.get("vehicle_plate"),"vehicle_image_path":tx.get("vehicle_image_path"),
                     "id_tag":tx.get("id_tag"),"max_power_kw":tx.get("max_power_kw"),
@@ -2313,7 +2178,6 @@ class VehiclePayload(BaseModel):
     range_km: float | None = None
     drivetrain: str | None = None
     assigned_charge_point: str | None = None
-    driver: str | None = None
 
 @app.put("/api/transactions/{transaction_id}/vehicle")
 async def set_transaction_vehicle(transaction_id: int, payload: dict):
@@ -2341,8 +2205,6 @@ async def api_vehicles():
         v["charge_point_status"] = cp.get("status") if cp else None
         v["charge_point_power_kw"] = cp.get("power_kw") if cp else None
         v["charge_point_power_source"] = cp.get("power_source") if cp else None
-        user = next((u for u in db.list_users() if u.get("name") == v.get("driver")), None)
-        v["rfid"] = user.get("rfid") if user else None
     return {"vehicles": vehicles}
 
 
@@ -2483,8 +2345,6 @@ async def delete_vehicle_image(vehicle_id: int):
 
 class UserPayload(BaseModel):
     name: str
-    role: str = "Fahrer"
-    department: str | None = None
     email: str | None = None
     phone: str | None = None
     status: str = "Aktiv"
@@ -2523,7 +2383,6 @@ async def create_user(payload: UserPayload):
     if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
     if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
     data=payload.model_dump()
-    data.update({"weekly_hours":None,"budget_source":"manual"})
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     user=db.get_user(uid) or {}; return {"ok":True,"user":user}
@@ -2536,7 +2395,6 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
     if not before: raise HTTPException(404,"Benutzer nicht gefunden")
     before_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     data=payload.model_dump()
-    data.update({"weekly_hours":None,"budget_source":"manual"})
     try: updated=db.update_user(user_id,**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     if not updated: raise HTTPException(404,"Benutzer nicht gefunden")
