@@ -39,6 +39,7 @@ from . import invites
 from . import totp
 from . import updates
 from . import web_push
+from .ladecloud_import import parse_ladecloud_xlsx
 from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
 try:
     from .ocpp_server import sync_local_list, sync_pending_local_lists
