@@ -1,139 +1,139 @@
 # VoltCore Community
 
-[English](README.md) | [Deutsch](README.de.md)
+[Deutsch](README.md) | [English](README.en.md)
 
 > [!WARNING]
-> ## ⚡ COMMUNITY ESCALATION
-> **VoltCore Community is FREE. Really free.**
+> ## ⚡ COMMUNITY-ESKALATION
+> **VoltCore Community ist KOSTENLOS. Wirklich kostenlos.**
 >
-> No trial timer. No "three users only". No "one charge point and then pay". No intentionally broken demo mode.
+> Kein Testzeitraum. Kein „nur drei Benutzer“. Kein „ein Ladepunkt kostenlos, danach bitte zahlen“. Kein absichtlich kaputtgeschnittener Demo-Modus.
 >
-> The Community edition is meant to be a genuinely useful, self-hosted OCPP platform that you can actually run.
+> Die Community Edition soll ein wirklich brauchbares, selbst gehostetes OCPP-System sein, das man auch ernsthaft einsetzen kann.
 
-## Free. Self-hosted. Useful.
+## Kostenlos. Selbst gehostet. Wirklich nutzbar.
 
-VoltCore Community is the **free Community edition of VoltCore** for self-hosted OCPP charging management.
+VoltCore Community ist die **kostenlose Community Edition von VoltCore** für selbst gehostetes OCPP-Lademanagement.
 
-The idea is simple: people, clubs, organisations, small fleets, labs and curious nerds should be able to operate their own charging infrastructure with a solid VoltCore base without paying for the Community edition.
+Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testumgebungen und neugierige Nerds sollen ihre eigene Ladeinfrastruktur mit einer soliden VoltCore-Basis betreiben können, ohne für die Community Edition bezahlen zu müssen.
 
-**Price: 0. Free. Kostenlos. Gratis.**
+**Preis: 0. Kostenlos. Free. Gratis.**
 
-The Community edition is not intended to be made annoying on purpose. The difference to future commercial VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — not from crippling the basics.
+Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren kommerziellen VoltCore-Editionen soll über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen erfolgen — nicht dadurch, dass die Grundlagen künstlich beschnitten werden.
 
-> Status: work in progress. Not yet intended for public production use.
+> Status: in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen.
 
-## Planned Community scope
+## Geplanter Community-Umfang
 
-The first Community edition is planned to include:
+Die erste Community Edition soll enthalten:
 
 - OCPP 1.6J
-- charge point discovery and onboarding
-- connector status
-- live charge point status
-- start / stop of charging sessions
-- basic remote commands
-- RFID management
-- user management
-- basic vehicle management
-- charging session history
-- basic user / vehicle / RFID assignment
-- dashboard
-- basic LiveView
-- basic reports
-- CSV export
-- backup / restore
-- in-app update menu
-- dark mode
-- basic branding such as organisation name and logo
-- security baseline
-- roles: Administrator / User / Read-only
-- system status
-- basic logs / audit
-- basic notifications
-- PWA baseline
+- Ladepunkte erkennen und onboarden
+- Connector-Status
+- Live-Status der Ladepunkte
+- Start / Stop von Ladevorgängen
+- grundlegende Remote-Befehle
+- RFID-Verwaltung
+- Benutzerverwaltung
+- einfache Fahrzeugverwaltung
+- Ladevorgänge / Historie
+- einfache Zuordnung Benutzer / Fahrzeug / RFID
+- Dashboard
+- Basis-LiveView
+- einfache Reports
+- CSV-Export
+- Backup / Restore
+- Update-Menü direkt in VoltCore
+- Dark Mode
+- Basis-Branding wie Organisationsname und Logo
+- Security-Basis
+- Rollen: Administrator / Benutzer / Nur Lesen
+- Systemstatus
+- Logs / Audit-Basis
+- einfache Benachrichtigungen
+- PWA-Basis
 
-The fixed initial scope is documented in `docs/COMMUNITY_SCOPE.md`.
+Der festgelegte erste Funktionsumfang ist zusätzlich in `docs/COMMUNITY_SCOPE.md` dokumentiert.
 
-## Updates via GitHub
+## Updates über GitHub
 
-VoltCore Community is designed to keep the familiar **Update** menu inside the application.
+VoltCore Community soll das bekannte **Update-Menü direkt in der Anwendung** behalten.
 
-Stable Community releases will be published as GitHub Releases in this repository. Running installations can check GitHub for newer stable releases and notify administrators when an update becomes available.
+Stabile Community-Releases werden als GitHub Releases in diesem Repository veröffentlicht. Laufende Installationen können GitHub auf neuere stabile Versionen prüfen und Administratoren direkt in VoltCore auf verfügbare Updates hinweisen.
 
-Planned behaviour:
+Geplant sind:
 
-- automatic update check after backend startup
-- periodic checks in the background
-- manual **Check for updates** action
-- release notes before installation
-- validation that the release belongs to VoltCore Community
-- database migration awareness
-- backup and rollback safety
+- automatische Update-Prüfung nach dem Backend-Start
+- regelmäßige Prüfungen im Hintergrund
+- manueller Button **Jetzt nach Updates suchen**
+- Release Notes vor der Installation
+- Prüfung, ob das Release wirklich für VoltCore Community bestimmt ist
+- Berücksichtigung von Datenbank-Migrationen
+- Backup- und Rollback-Sicherheit
 
-Public Community releases are designed to be discoverable without requiring every installation to store a GitHub access token.
+Öffentliche Community-Releases sollen sich prüfen lassen, ohne dass jede Installation zwingend einen eigenen GitHub-Zugriffstoken speichern muss.
 
-## Languages
+## Sprachen
 
-VoltCore Community is multilingual by design.
+VoltCore Community wird von Anfang an mehrsprachig aufgebaut.
 
-Initial languages:
+Zum Start:
 
-- English
-- German
+- Deutsch
+- Englisch
 
-Browser language detection is supported. A manual language choice can override automatic detection. English is the fallback language.
+Die Browsersprache kann automatisch erkannt werden. Eine manuelle Sprachauswahl hat Vorrang. Englisch dient als Fallback-Sprache.
 
-Translation files live in `app/locales/` and the application uses translation keys instead of hard-coded interface text wherever practical.
+Die Übersetzungen liegen in `app/locales/`. Neue UI-Texte sollen nach Möglichkeit über Übersetzungsschlüssel eingebunden und nicht fest im Quellcode verdrahtet werden.
 
-## Development model
+## Entwicklungsmodell
 
-VoltCore Community is derived from the private VoltCore development baseline.
+VoltCore Community wird aus der privaten VoltCore-Entwicklungsbasis abgeleitet.
 
-Non-Community features are removed from the Community source rather than merely hidden. This matters because a future public Community repository must not accidentally contain code that does not belong to the Community edition.
+Funktionen, die nicht zu Community gehören, werden aus dem Community-Quellcode entfernt und nicht lediglich ausgeblendet. Das ist wichtig, damit im später öffentlichen Community-Repository nicht versehentlich Code landet, der nicht zur Community Edition gehört.
 
 Branches:
 
-- `main` — future stable Community releases
-- `develop` — Community integration branch
-- short-lived feature branches — isolated work before integration
+- `main` — zukünftige stabile Community-Releases
+- `develop` — Integrationsbranch der Community Edition
+- kurzlebige Feature-Branches — einzelne Änderungen vor der Integration
 
-The repository remains private while the first Community build is being prepared and verified.
+Das Repository bleibt privat, während der erste Community-Build aufgebaut und geprüft wird.
 
-## What "free" means here
+## Was „kostenlos“ hier bedeutet
 
-VoltCore Community is intended to be the **free VoltCore edition**.
+VoltCore Community ist als **kostenlose VoltCore-Edition** geplant.
 
-The final public software license has not yet been selected. The license will be decided before this repository is made public. Until then, this private development repository is not a final licensing statement.
+Die endgültige öffentliche Softwarelizenz ist noch nicht festgelegt. Diese Entscheidung treffen wir, bevor das Repository öffentlich wird. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage.
 
-That distinction is intentional:
+Das ist bewusst getrennt:
 
-- **Community edition: free**
-- **final public license: still to be selected**
-- **repository visibility: private until the Community build is ready**
+- **Community Edition: kostenlos**
+- **endgültige öffentliche Lizenz: noch festzulegen**
+- **Repository: bleibt privat, bis Community veröffentlichungsreif ist**
 
-## Documentation
+## Dokumentation
 
-Current project documentation:
+Aktuell vorhanden:
 
-- Community scope: `docs/COMMUNITY_SCOPE.md`
-- Internationalisation: `docs/I18N.md`
+- Community-Umfang: `docs/COMMUNITY_SCOPE.md`
+- Mehrsprachigkeit / i18n: `docs/I18N.md`
 
-More detailed installation, configuration, update, backup, OCPP, security and troubleshooting documentation will be added as the Community build matures.
+Ausführliche Installations-, Konfigurations-, Update-, Backup-, OCPP-, Security- und Troubleshooting-Dokumentation folgt mit dem weiteren Community-Ausbau.
 
-## Philosophy
+## Grundidee
 
-VoltCore Community should be:
+VoltCore Community soll:
 
-- useful instead of artificially limited
-- understandable instead of mysterious
-- updateable instead of disposable
-- self-hostable instead of cloud-dependent
-- secure by default
-- pleasant to use
-- nerdy enough to still feel like VoltCore ⚡
+- brauchbar statt künstlich eingeschränkt sein
+- verständlich statt geheimnisvoll sein
+- updatefähig statt wegwerfbar sein
+- selbst hostbar statt cloudabhängig sein
+- standardmäßig sicher sein
+- angenehm zu bedienen sein
+- und natürlich nerdig genug bleiben, damit es noch nach VoltCore aussieht ⚡
 
 ---
 
-**VoltCore Community — OCPP charging management. Free. Self-hosted. Community-focused.**
+**VoltCore Community — OCPP-Lademanagement. Kostenlos. Selbst gehostet. Für die Community.**
 
-And yes: the README is expected to escalate further. 😄
+Und ja: Diese README darf später noch deutlich weiter eskalieren. 😄
