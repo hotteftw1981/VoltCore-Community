@@ -35,7 +35,7 @@ from . import mailer
 from . import totp
 from . import updates
 from . import web_push
-from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization, sync_local_list, sync_pending_local_lists
+from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, verify_offline_authorization, sync_local_list, sync_pending_local_lists
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
@@ -2573,9 +2573,7 @@ def _remote_audit(request: Request, cp_id: str, action: str, details: str = "", 
     db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action=action,category="Remote-Steuerung",target=cp_id,method=request.method,path=request.url.path,details=details,status_code=status_code)
 
 def _remote_history(cp_id: str, limit: int = 20):
-    wanted={"RemoteStartTransaction","RemoteStopTransaction","UnlockConnector","ChangeAvailability","Reset","CapabilityProbe",
-            "GetConfiguration","ChangeConfiguration","TriggerMessage","GetDiagnostics","DiagnosticsStatusNotification",
-            "UpdateFirmware","FirmwareStatusNotification","ReserveNow","CancelReservation"}
+    wanted={"RemoteStartTransaction","RemoteStopTransaction","UnlockConnector","ChangeAvailability","Reset","CapabilityProbe"}
     rows=[]
     for ev in db.events_for_charge_point(cp_id,120):
         if ev.get("event_type") in wanted:
@@ -2590,9 +2588,8 @@ async def remote_control_state(cp_id: str):
     active=db.active_transactions_for_charge_point(cp_id,20)
     cards=[c for c in db.list_rfid_cards() if c.get("status")=="Aktiv" and c.get("user_id")]
     return {"online":is_connected(cp_id),"connectors":db.connectors_for_charge_point(cp_id),"active_transactions":active,"rfid_cards":cards,
-            "history":_remote_history(cp_id),"service_operations":db.service_operations_for_charge_point(cp_id,30),
-            "reservations":db.ocpp_reservations_for_charge_point(cp_id,20),
-            "capability_snapshot":db.get_ocpp_capability_snapshot(cp_id),"remote_capabilities":db.remote_capability_profile(cp_id)}
+            "history":_remote_history(cp_id),"capability_snapshot":db.get_ocpp_capability_snapshot(cp_id),
+            "remote_capabilities":db.remote_capability_profile(cp_id)}
 
 
 @app.post("/api/remote-control/{cp_id}/capabilities")
@@ -2621,167 +2618,6 @@ async def reset_learned_remote_capabilities(cp_id: str, request: Request):
     removed=db.reset_remote_capability_profile(cp_id)
     _remote_audit(request,cp_id,"Erlernte OCPP-Fähigkeiten zurückgesetzt",f"entries={removed}")
     return {"ok":True,"removed":removed,"remote_capabilities":db.remote_capability_profile(cp_id)}
-
-
-def _service_actor(request: Request):
-    auth=getattr(request.state,"auth_user",None) or {}
-    return str(auth.get("display_name") or auth.get("username") or "Administrator")
-
-
-def _service_url(value, *, diagnostics=False):
-    raw=str(value or "").strip()
-    if not raw:
-        raise HTTPException(400,"URL fehlt")
-    parsed=urlparse(raw)
-    allowed={"https","http","ftp","ftps"} if diagnostics else {"https","http"}
-    if parsed.scheme.lower() not in allowed or not parsed.netloc:
-        raise HTTPException(400,"Ungültige URL. Erlaubt: "+", ".join(sorted(allowed)))
-    return raw
-
-
-def _service_iso_future(value, field="Zeitpunkt"):
-    raw=str(value or "").strip()
-    if not raw:
-        raise HTTPException(400,f"{field} fehlt")
-    try:
-        dt=datetime.fromisoformat(raw.replace("Z","+00:00"))
-        if dt.tzinfo is None:
-            dt=dt.replace(tzinfo=BERLIN_TZ)
-        dt=dt.astimezone(timezone.utc)
-    except (TypeError,ValueError):
-        raise HTTPException(400,f"{field} ist ungültig")
-    if dt <= datetime.now(timezone.utc):
-        raise HTTPException(400,f"{field} muss in der Zukunft liegen")
-    return dt.replace(microsecond=0).isoformat().replace("+00:00","Z")
-
-
-@app.post("/api/remote-control/{cp_id}/configuration/read")
-async def remote_configuration_read(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id)
-    if not db.get_charge_point(cp_id): raise HTTPException(404,"Ladepunkt nicht gefunden")
-    keys=payload.get("keys")
-    if isinstance(keys,str): keys=[x.strip() for x in keys.split(",") if x.strip()]
-    op=db.add_service_operation(cp_id,"configuration_read","Requested","Konfiguration lesen",f"keys={','.join(keys or []) or '*'}",requested_by=_service_actor(request))
-    try:
-        result=await read_configuration(cp_id,keys)
-        db.update_service_operation(op,"Completed",f"{len(result.get('configuration') or {})} Schlüssel gelesen",completed=True)
-        _remote_audit(request,cp_id,"OCPP-Konfiguration gelesen",f"keys={','.join(keys or []) or '*'}; returned={len(result.get('configuration') or {})}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),completed=True)
-        _remote_audit(request,cp_id,"GetConfiguration fehlgeschlagen",str(exc),409)
-        raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/configuration/change")
-async def remote_configuration_change(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); key=str(payload.get("key") or "").strip(); value=payload.get("value")
-    if not db.get_charge_point(cp_id): raise HTTPException(404,"Ladepunkt nicht gefunden")
-    snapshot=db.get_ocpp_capability_snapshot(cp_id) or {}
-    known=(snapshot.get("configuration") or {}).get(key) or {}
-    if known.get("readonly"):
-        raise HTTPException(409,"Dieser Konfigurationsschlüssel wurde vom Ladepunkt als schreibgeschützt gemeldet")
-    op=db.add_service_operation(cp_id,"configuration","Requested",f"{key} ändern",f"value={value}",requested_by=_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"change_configuration",key=key,value=value)
-        db.update_service_operation(op,result.get("status") or "Unknown",f"{key}={value}",completed=True)
-        _remote_audit(request,cp_id,"OCPP-Konfiguration geändert",f"key={key}; status={result.get('status')}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/trigger")
-async def remote_trigger_message(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); requested=str(payload.get("requested_message") or "").strip(); connector=payload.get("connector_id")
-    op=db.add_service_operation(cp_id,"trigger","Requested",f"Trigger {requested}",f"connector={connector}",requested_by=_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"trigger_message",requested_message=requested,connector_id=connector)
-        db.update_service_operation(op,result.get("status") or "Unknown",f"{requested}; connector={connector}",completed=True)
-        _remote_audit(request,cp_id,"TriggerMessage gesendet",f"message={requested}; connector={connector}; status={result.get('status')}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/diagnostics")
-async def remote_get_diagnostics(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); location=_service_url(payload.get("location"),diagnostics=True)
-    retries=max(0,min(9,int(payload.get("retries") or 0))); interval=max(0,min(86400,int(payload.get("retry_interval") or 0)))
-    op=db.add_service_operation(cp_id,"diagnostics","Requested","Diagnosepaket angefordert",f"location={location}; retries={retries}; interval={interval}",requested_by=_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"get_diagnostics",location=location,retries=retries,retry_interval=interval)
-        db.update_service_operation(op,"Requested",f"Diagnose angefordert; Geräteantwort={result.get('status')}",result.get("file_name") or None,completed=False)
-        _remote_audit(request,cp_id,"Diagnosepaket angefordert",f"status={result.get('status')}; file={result.get('file_name') or '-'}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/firmware")
-async def remote_update_firmware(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); location=_service_url(payload.get("location")); retrieve_date=_service_iso_future(payload.get("retrieve_date"),"Abrufzeit")
-    if db.active_transactions_for_charge_point(cp_id,1):
-        raise HTTPException(409,"Firmware-Update ist während eines aktiven Ladevorgangs gesperrt")
-    retries=max(0,min(9,int(payload.get("retries") or 0))); interval=max(0,min(86400,int(payload.get("retry_interval") or 0)))
-    op=db.add_service_operation(cp_id,"firmware","Scheduled","Firmware-Update geplant",f"location={location}; retrieve_date={retrieve_date}; retries={retries}; interval={interval}",requested_by=_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"update_firmware",location=location,retrieve_date=retrieve_date,retries=retries,retry_interval=interval)
-        db.update_service_operation(op,"Scheduled",f"Firmware-Anforderung angenommen; Abruf {retrieve_date}",completed=False)
-        _remote_audit(request,cp_id,"Firmware-Update angefordert",f"retrieve_date={retrieve_date}; status={result.get('status')}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/reservation")
-async def remote_reserve_now(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); connector=int(payload.get("connector_id") or 0); tag=str(payload.get("id_tag") or "").strip()
-    if connector<=0: raise HTTPException(400,"Konkreter Connector erforderlich")
-    decision=db.authorization_decision(tag)
-    if not decision.get("accepted"): raise HTTPException(409,decision.get("reason") or "RFID nicht autorisiert")
-    expiry=_service_iso_future(payload.get("expiry_date"),"Ablaufzeit")
-    reservation_id=int(payload.get("reservation_id") or db.next_reservation_id())
-    op=db.add_service_operation(cp_id,"reservation","Requested",f"Reservierung #{reservation_id}",f"connector={connector}; idTag={tag}; expiry={expiry}",str(reservation_id),_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"reserve",connector_id=connector,id_tag=tag,expiry_date=expiry,reservation_id=reservation_id)
-        db.save_ocpp_reservation(reservation_id,cp_id,connector,tag,expiry,result.get("status") or "Unknown")
-        db.update_service_operation(op,result.get("status") or "Unknown",f"connector={connector}; expiry={expiry}",str(reservation_id),completed=True)
-        _remote_audit(request,cp_id,"OCPP-Reservierung gesendet",f"id={reservation_id}; connector={connector}; status={result.get('status')}")
-        return {"ok":True,"reservation_id":reservation_id,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),str(reservation_id),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),str(reservation_id),completed=True); raise HTTPException(400,str(exc))
-
-
-@app.post("/api/remote-control/{cp_id}/reservation/cancel")
-async def remote_cancel_reservation(cp_id: str, payload: dict, request: Request):
-    cp_id=unquote(cp_id); reservation_id=int(payload.get("reservation_id") or 0)
-    if reservation_id<=0: raise HTTPException(400,"Reservierungs-ID fehlt")
-    known=next((x for x in db.ocpp_reservations_for_charge_point(cp_id,100) if int(x.get("reservation_id") or 0)==reservation_id),None)
-    if not known: raise HTTPException(404,"Reservierung für diesen Ladepunkt nicht gefunden")
-    op=db.add_service_operation(cp_id,"reservation_cancel","Requested",f"Reservierung #{reservation_id} aufheben","",str(reservation_id),_service_actor(request))
-    try:
-        result=await remote_command(cp_id,"cancel_reservation",reservation_id=reservation_id)
-        if result.get("accepted"): db.set_ocpp_reservation_status(reservation_id,"Cancelled")
-        db.update_service_operation(op,result.get("status") or "Unknown","",str(reservation_id),completed=True)
-        _remote_audit(request,cp_id,"OCPP-Reservierung aufgehoben",f"id={reservation_id}; status={result.get('status')}")
-        return {"ok":True,"operation_id":op,**result}
-    except RuntimeError as exc:
-        db.update_service_operation(op,"Fehler",str(exc),str(reservation_id),completed=True); raise HTTPException(504 if "Zeitüberschreitung" in str(exc) else 409,str(exc))
-    except ValueError as exc:
-        db.update_service_operation(op,"Ungültig",str(exc),str(reservation_id),completed=True); raise HTTPException(400,str(exc))
 
 
 @app.post("/api/remote-control/{cp_id}/start")
@@ -2843,13 +2679,6 @@ async def remote_reset(cp_id: str, payload: dict, request: Request):
     except ValueError as exc: raise HTTPException(400,str(exc))
     except Exception as exc: _remote_audit(request,cp_id,"Reset fehlgeschlagen",type(exc).__name__,502); logging.exception("Reset fehlgeschlagen"); raise HTTPException(502,f"OCPP-Befehl fehlgeschlagen: {type(exc).__name__}")
 
-
-@app.post("/api/remote-control/transactions/{transaction_id}/reconcile")
-async def admin_reconcile_transaction(transaction_id: int, request: Request, payload: dict | None = None):
-    try: tx=db.admin_reconcile_transaction(transaction_id,(payload or {}).get("reason") or "AdminReconciled")
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    _remote_audit(request,tx.get("charge_point_id") or "-","Session administrativ abgeschlossen",f"session={transaction_id}; reason={(payload or {}).get('reason') or 'AdminReconciled'}")
-    return {"ok":True,"transaction":tx}
 
 class SystemUserPayload(BaseModel):
     username: str
