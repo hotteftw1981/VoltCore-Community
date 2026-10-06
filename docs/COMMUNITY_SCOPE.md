@@ -64,6 +64,8 @@ The application should:
 
 ## Scope notes
 
+LiveView / Kiosk is explicitly **not part of VoltCore Community**. This applies to all former variants, including Standard, Pro and People.
+
 The Community edition now includes additional neutral modules restored from the VoltCore 0.9.7.74 baseline, including Smart Charging, Engagement, Cost Centers, imports and read-only Fleet Integration. Community-specific defaults and privacy/security constraints still take precedence.
 
 This repository remains private while the first Community build is being prepared and verified.
