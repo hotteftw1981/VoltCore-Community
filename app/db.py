@@ -292,14 +292,6 @@ def init_db():
                 PRIMARY KEY(user_id, charge_point_id)
             );
             CREATE INDEX IF NOT EXISTS idx_user_charge_point_access_cp ON user_charge_point_access(charge_point_id,user_id);
-            CREATE TABLE IF NOT EXISTS load_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                condition_text TEXT,
-                action_text TEXT,
-                priority TEXT NOT NULL DEFAULT 'Normal',
-                active INTEGER NOT NULL DEFAULT 1
-            );
             CREATE TABLE IF NOT EXISTS connectors (
                 charge_point_id TEXT NOT NULL,
                 connector_id INTEGER NOT NULL,
@@ -436,7 +428,6 @@ def init_db():
             CREATE TABLE IF NOT EXISTS billing_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
-                cost_center TEXT,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
             );
@@ -454,7 +445,6 @@ def init_db():
                 price_cents_per_kwh INTEGER NOT NULL,
                 valid_from TEXT NOT NULL,
                 valid_until TEXT,
-                cost_center TEXT,
                 billing_group_id INTEGER,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -468,15 +458,6 @@ def init_db():
                 note TEXT,
                 source TEXT NOT NULL DEFAULT 'admin',
                 created_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS cost_centers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                name TEXT NOT NULL,
-                description TEXT,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS diagnostic_states (
                 state_key TEXT PRIMARY KEY,
@@ -667,6 +648,22 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status,created_at DESC)")
         conn.execute("DROP TABLE IF EXISTS rfid_enrollment_sessions")
         conn.execute("DROP TABLE IF EXISTS rfid_replacement_requests")
+        conn.execute("DROP INDEX IF EXISTS idx_transactions_import_source_key")
+        conn.execute("DROP TABLE IF EXISTS load_rules")
+        conn.execute("DROP TABLE IF EXISTS cost_centers")
+        conn.execute("DELETE FROM app_settings WHERE key LIKE 'smart_charging_%' OR key LIKE 'load_management_%'")
+        for table_name, columns in (
+            ("transactions",("cost_center","import_source","import_key","imported_at","import_source_name","import_evse_id")),
+            ("tariffs",("cost_center",)),
+            ("billing_groups",("cost_center",)),
+        ):
+            existing={r[1] for r in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
+            for legacy_col in columns:
+                if legacy_col in existing:
+                    try:
+                        conn.execute(f"ALTER TABLE {table_name} DROP COLUMN {legacy_col}")
+                    except sqlite3.OperationalError:
+                        pass
         for table_name in (
             "gamification_event_rewards","gamification_event_results","bonus_usage",
             "bonus_voucher_redemptions","bonus_transfers","bonus_grants","bonus_vouchers",
@@ -818,14 +815,8 @@ def init_db():
             "tariff_source": "ALTER TABLE transactions ADD COLUMN tariff_source TEXT",
             "price_cents_per_kwh": "ALTER TABLE transactions ADD COLUMN price_cents_per_kwh INTEGER",
             "cost_cents": "ALTER TABLE transactions ADD COLUMN cost_cents INTEGER",
-            "cost_center": "ALTER TABLE transactions ADD COLUMN cost_center TEXT",
             "billing_group_id": "ALTER TABLE transactions ADD COLUMN billing_group_id INTEGER",
             "billing_group_name": "ALTER TABLE transactions ADD COLUMN billing_group_name TEXT",
-            "import_source": "ALTER TABLE transactions ADD COLUMN import_source TEXT",
-            "import_key": "ALTER TABLE transactions ADD COLUMN import_key TEXT",
-            "imported_at": "ALTER TABLE transactions ADD COLUMN imported_at TEXT",
-            "import_source_name": "ALTER TABLE transactions ADD COLUMN import_source_name TEXT",
-            "import_evse_id": "ALTER TABLE transactions ADD COLUMN import_evse_id TEXT",
             "timing_quality": "ALTER TABLE transactions ADD COLUMN timing_quality TEXT",
             "post_session_occupied_started_at": "ALTER TABLE transactions ADD COLUMN post_session_occupied_started_at TEXT",
             "unplugged_at": "ALTER TABLE transactions ADD COLUMN unplugged_at TEXT",
@@ -856,7 +847,6 @@ def init_db():
                   AND c.connector_id=transactions.connector_id
                   AND c.status='Finishing'
               )""")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_source_key ON transactions(import_source,import_key) WHERE import_source IS NOT NULL AND import_key IS NOT NULL")
 
         meter_columns = {r[1] for r in conn.execute("PRAGMA table_info(meter_samples)").fetchall()}
         for name, statement in {
@@ -938,19 +928,6 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_web_login_attempts_user_ts ON web_login_attempts(username_key,ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ocpp_auth_attempts_key_ts ON ocpp_auth_attempts(client_key,ts DESC)")
 
-        # Import already-used free-text cost centers into the new master-data table.
-        # Historical transaction snapshots remain untouched; this only gives existing
-        # installations an immediately useful central catalog after the upgrade.
-        known_cost_centers=set()
-        for table in ("transactions","tariffs","billing_groups"):
-            for row in conn.execute(f"SELECT DISTINCT TRIM(cost_center) FROM {table} WHERE COALESCE(TRIM(cost_center),'')<>''").fetchall():
-                known_cost_centers.add(str(row[0]).strip())
-        now_cc=utc_now()
-        for code in sorted(known_cost_centers,key=str.casefold):
-            conn.execute("INSERT OR IGNORE INTO cost_centers(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)",(code,code,now_cc,now_cc))
-
-        # Fresh Community installations start without organization-specific
-        # load-management rules. Administrators can define rules for their site.
         conn.commit()
 
 
@@ -3501,12 +3478,6 @@ def meter_capabilities_for_charge_point(cp_id, limit=240):
     return out
 
 
-def list_load_rules():
-    with _lock, _connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM load_rules ORDER BY id").fetchall()]
-
-
-
 def list_charge_points_admin(include_retired=True):
     with _lock, _connect() as conn:
         sql = "SELECT * FROM charge_points" if include_retired else "SELECT * FROM charge_points WHERE COALESCE(retired,0)=0 AND COALESCE(archived,0)=0"
@@ -3987,584 +3958,6 @@ def delete_system_sessions_for_user(user_id, keep_token_hash=None):
         conn.commit()
 
 
-def fleet_integration_sessions(since=None, limit=200):
-    """Read-only, versioned export surface for a future fleet-management link."""
-    try:
-        limit=max(1,min(int(limit or 200),1000))
-    except (TypeError,ValueError):
-        limit=200
-    clauses=["t.ended_at IS NOT NULL"]
-    params=[]
-    if since:
-        try:
-            parsed=_parse_iso_utc(str(since))
-            if not parsed:
-                raise ValueError()
-            clauses.append("t.started_at>=?")
-            params.append(parsed.isoformat())
-        except Exception as exc:
-            raise ValueError("Ungültiger since-Zeitpunkt; ISO-8601 erwartet") from exc
-    params.append(limit)
-    with _connect() as conn:
-        rows=conn.execute(f"""SELECT t.id,t.started_at,t.ended_at,t.status,t.energy_kwh,t.cost_cents,
-                t.charge_point_id,t.connector_id,t.vehicle_id,t.user_id,t.id_tag,
-                v.name AS vehicle_name,v.plate AS vehicle_plate,
-                u.name AS user_name
-            FROM transactions t
-            LEFT JOIN vehicles v ON v.id=t.vehicle_id
-            LEFT JOIN users u ON u.id=t.user_id
-            WHERE {' AND '.join(clauses)}
-            ORDER BY t.started_at DESC,t.id DESC LIMIT ?""",params).fetchall()
-        return [dict(r) for r in rows]
-
-
-def active_system_session_counts(user_id=None):
-    """Return active web-session counts without mutating session state."""
-    now=utc_now()
-    with _connect() as conn:
-        total=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE expires_at>=?",(now,)).fetchone()[0] or 0)
-        mine=0
-        if user_id is not None:
-            mine=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE user_id=? AND expires_at>=?",(int(user_id),now)).fetchone()[0] or 0)
-        return {"total":total,"mine":mine}
-
-
-def delete_other_system_sessions(user_id, keep_token_hash):
-    """End every other session of one account while preserving this browser."""
-    now=utc_now()
-    with _lock,_connect() as conn:
-        active_before=int(conn.execute("SELECT COUNT(*) FROM system_sessions WHERE user_id=? AND token_hash<>? AND expires_at>=?",(int(user_id),str(keep_token_hash),now)).fetchone()[0] or 0)
-        conn.execute("DELETE FROM system_sessions WHERE user_id=? AND token_hash<>?",(int(user_id),str(keep_token_hash)))
-        conn.commit()
-        return active_before
-
-
-def security_event_summary(hours=24):
-    """Small aggregate used by the security dashboard without exposing event details."""
-    hours=max(1,min(int(hours or 24),168))
-    cutoff=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
-    with _connect() as conn:
-        web_failed=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND category='web_login' AND success=0",(cutoff,)).fetchone()[0] or 0)
-        ocpp_rejected=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND category='ocpp_auth' AND success=0",(cutoff,)).fetchone()[0] or 0)
-        critical=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND severity='critical'",(cutoff,)).fetchone()[0] or 0)
-        warnings=int(conn.execute("SELECT COUNT(*) FROM security_events WHERE ts>=? AND severity='warning'",(cutoff,)).fetchone()[0] or 0)
-    return {"hours":hours,"web_failed":web_failed,"ocpp_rejected":ocpp_rejected,"critical":critical,"warnings":warnings}
-
-
-def public_charging_budgets(now=None):
-    """Return only deliberately public charging-budget fields; never RFID/internal IDs."""
-    now=now or datetime.now(timezone.utc)
-    start_utc,end_utc,month_key=_month_bounds_utc(now)
-    with _connect() as conn:
-        users=conn.execute("""SELECT DISTINCT u.id,u.name,u.monthly_kwh_limit,u.monthly_limit_mode
-            FROM users u LEFT JOIN rfid_cards r ON r.user_id=u.id AND r.status='Aktiv'
-            WHERE u.status='Aktiv' AND (r.id IS NOT NULL OR TRIM(COALESCE(u.rfid,''))<>'')
-            ORDER BY u.name COLLATE NOCASE""").fetchall()
-        result=[]
-        for u in users:
-            used=round(_user_month_energy_conn(conn,u['id'],start_utc,end_utc),3)
-            limit=u['monthly_kwh_limit']
-            if limit is None or float(limit)<=0:
-                result.append({'name':u['name'],'month':month_key,'unlimited':True,'remaining_kwh':None,'limit_kwh':None,'remaining_percent':100.0})
-                continue
-            limit=float(limit); remaining=max(0.0,limit-used); remaining_pct=max(0.0,min(100.0,remaining/limit*100.0))
-            result.append({'name':u['name'],'month':month_key,'unlimited':False,'remaining_kwh':round(remaining,1),'limit_kwh':round(limit,1),'remaining_percent':round(remaining_pct,1)})
-        return result
-
-# V0.8.8 - Activity log and notification center
-
-def add_activity(system_user_id=None, username=None, display_name=None, action="Aktion", category="system", target=None, method=None, path=None, details=None, status_code=None):
-    """Persist a concise audit entry without storing request bodies or secrets."""
-    with _lock, _connect() as conn:
-        conn.execute(
-            """INSERT INTO activity_log(ts,system_user_id,username,display_name,action,category,target,method,path,details,status_code)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-            (utc_now(), system_user_id, username, display_name, action, category, target, method, path, details, status_code),
-        )
-        conn.commit()
-
-
-def recent_activity(limit=100, category=None, query=None):
-    limit=max(1,min(int(limit or 100),500))
-    clauses=[]; values=[]
-    if category:
-        clauses.append("category=?"); values.append(str(category))
-    if query:
-        q=f"%{str(query).strip()}%"
-        clauses.append("(action LIKE ? OR target LIKE ? OR username LIKE ? OR display_name LIKE ? OR details LIKE ?)")
-        values.extend([q,q,q,q,q])
-    where=(" WHERE "+" AND ".join(clauses)) if clauses else ""
-    with _connect() as conn:
-        rows=conn.execute(
-            "SELECT * FROM activity_log"+where+" ORDER BY id DESC LIMIT ?", values+[limit]
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def _severity_rank(value):
-    return {"info":1,"warning":2,"critical":3}.get(str(value or "info"),1)
-
-
-def _upsert_notification_conn(conn, key, source, severity, title, message=None, link=None, active=True, audience="all"):
-    now=utc_now()
-    existing=conn.execute("SELECT id,severity,active,source,last_seen_at,audience,revision FROM notifications WHERE notification_key=?",(key,)).fetchone()
-    if existing:
-        reactivated=not int(existing["active"] or 0) and bool(active)
-        escalated=_severity_rank(severity)>_severity_rank(existing["severity"])
-        seen_at=existing["last_seen_at"] if source == "event" and existing["source"] == "event" else now
-        revision=int(existing["revision"] or 1)+(1 if (reactivated or escalated) else 0)
-        conn.execute("""UPDATE notifications SET last_seen_at=?,source=?,severity=?,title=?,message=?,link=?,active=?,audience=?,revision=? WHERE id=?""",
-                     (seen_at,source,severity,title,message,link,1 if active else 0,str(audience or "all"),revision,existing["id"]))
-        if reactivated or escalated:
-            conn.execute("DELETE FROM notification_reads WHERE notification_id=?",(existing["id"],))
-        return int(existing["id"])
-    cur=conn.execute("""INSERT INTO notifications(notification_key,created_at,last_seen_at,source,severity,title,message,link,active,audience,revision)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,1)""",(key,now,now,source,severity,title,message,link,1 if active else 0,str(audience or "all")))
-    return int(cur.lastrowid)
-
-
-def create_notification(key, severity, title, message=None, link=None, audience="all", source="event"):
-    """Create/update an explicit notification, optionally restricted to a role."""
-    with _lock, _connect() as conn:
-        nid=_upsert_notification_conn(conn,str(key),str(source or "event"),str(severity or "info"),str(title),message,link,True,audience)
-        conn.commit(); return nid
-
-
-def deactivate_notification(key):
-    with _lock, _connect() as conn:
-        cur=conn.execute("UPDATE notifications SET active=0 WHERE notification_key=?",(str(key),))
-        conn.commit(); return cur.rowcount>0
-
-
-def _record_diagnostic_event_conn(conn, cp_id, severity, category, code, title, message=None, connector_id=None, transaction_id=None, state="event"):
-    conn.execute("""INSERT INTO diagnostic_events(ts,charge_point_id,connector_id,transaction_id,severity,category,code,title,message,state)
-                  VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                 (utc_now(),str(cp_id),connector_id,transaction_id,severity,category,code,title,message,state))
-
-
-def _sync_diagnostic_state_conn(conn, key, cp_id, severity, category, code, title, message=None, connector_id=None, transaction_id=None):
-    now=utc_now()
-    row=conn.execute("SELECT * FROM diagnostic_states WHERE state_key=?",(key,)).fetchone()
-    if row is None:
-        conn.execute("""INSERT INTO diagnostic_states(state_key,charge_point_id,connector_id,transaction_id,active,severity,category,code,title,message,first_seen_at,last_seen_at,last_changed_at)
-                      VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?)""",
-                     (key,str(cp_id),connector_id,transaction_id,severity,category,code,title,message,now,now,now))
-        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"opened")
-        return
-    was_active=bool(row["active"])
-    changed=(str(row["severity"])!=str(severity) or str(row["message"] or "")!=str(message or "") or str(row["title"])!=str(title))
-    conn.execute("""UPDATE diagnostic_states SET active=1,severity=?,category=?,code=?,title=?,message=?,connector_id=?,transaction_id=?,last_seen_at=?,last_changed_at=CASE WHEN ? THEN ? ELSE last_changed_at END WHERE state_key=?""",
-                 (severity,category,code,title,message,connector_id,transaction_id,now,1 if (not was_active or changed) else 0,now,key))
-    if not was_active:
-        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"opened")
-    elif changed and _severity_rank(severity)>_severity_rank(row["severity"]):
-        _record_diagnostic_event_conn(conn,cp_id,severity,category,code,title,message,connector_id,transaction_id,"updated")
-
-
-def _resolve_missing_diagnostic_states_conn(conn, active_keys):
-    rows=conn.execute("SELECT * FROM diagnostic_states WHERE active=1").fetchall()
-    active=set(active_keys)
-    now=utc_now()
-    for row in rows:
-        if row["state_key"] in active:
-            continue
-        conn.execute("UPDATE diagnostic_states SET active=0,last_seen_at=?,last_changed_at=? WHERE state_key=?",(now,now,row["state_key"]))
-        _record_diagnostic_event_conn(conn,row["charge_point_id"],"info",row["category"],row["code"]+"_resolved",row["title"]+" behoben",row["message"],row["connector_id"],row["transaction_id"],"resolved")
-
-
-def active_diagnostic_states(cp_id):
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute("""SELECT * FROM diagnostic_states WHERE charge_point_id=? AND active=1
-            ORDER BY CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,last_changed_at DESC""",(str(cp_id),)).fetchall()]
-
-
-def _event_diagnostic_row(row):
-    event_type=str(row.get("event_type") or "")
-    payload=str(row.get("payload") or "")
-    low=payload.casefold()
-    severity="info"; category="communication"; title=event_type or "OCPP-Ereignis"; code="ocpp_"+event_type.casefold()
-    if event_type=="Connected": title="OCPP-Verbindung hergestellt"
-    elif event_type=="Disconnected": severity="warning"; title="OCPP-Verbindung getrennt"
-    elif event_type=="StatusNotification":
-        category="connector"; title="Connector-Status geändert"
-        if "status=faulted" in low or ("error=" in low and "error=noerror" not in low): severity="critical"; title="Connector meldet Fehler"
-    elif event_type in ("RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset"):
-        category="remote"; title=event_type
-        if "error=" in low or ("response=" in low and not any(x in low for x in ("response=accepted","response=unlocked","response=scheduled"))): severity="warning"
-    elif event_type in ("BudgetLimitReached","ZeroFlowAutoStop"):
-        category="session"; severity="warning"; title="Session-Automatik"
-    elif event_type=="Reconciled": category="session"; title="Session administrativ abgeglichen"
-    else:
-        return None
-    return {"id":"ocpp:"+str(row.get("id")),"ts":row.get("ts"),"charge_point_id":row.get("charge_point_id"),"connector_id":None,"transaction_id":row.get("transaction_id"),"severity":severity,"category":category,"code":code,"title":title,"message":payload,"state":"event"}
-
-
-def diagnostic_history(cp_id, severity=None, category=None, limit=100):
-    limit=max(1,min(int(limit or 100),250)); cp_id=str(cp_id)
-    with _connect() as conn:
-        synthetic=[dict(r) for r in conn.execute("SELECT * FROM diagnostic_events WHERE charge_point_id=? ORDER BY id DESC LIMIT 250",(cp_id,)).fetchall()]
-        event_types=("Connected","Disconnected","StatusNotification","RemoteStopTransaction","RemoteStartTransaction","UnlockConnector","ChangeAvailability","Reset","BudgetLimitReached","ZeroFlowAutoStop","Reconciled")
-        marks=','.join('?' for _ in event_types)
-        raw=[dict(r) for r in conn.execute(f"SELECT * FROM events WHERE charge_point_id=? AND event_type IN ({marks}) ORDER BY id DESC LIMIT 250",(cp_id,*event_types)).fetchall()]
-    items=synthetic+[x for x in (_event_diagnostic_row(r) for r in raw) if x]
-    if severity: items=[x for x in items if str(x.get("severity"))==str(severity)]
-    if category: items=[x for x in items if str(x.get("category"))==str(category)]
-    items.sort(key=lambda x:str(x.get("ts") or ""),reverse=True)
-    return items[:limit]
-
-
-def charge_point_health(cp_id):
-    cp_id=str(cp_id); now=datetime.now(timezone.utc)
-    with _connect() as conn:
-        cp=conn.execute("SELECT * FROM charge_points WHERE id=?",(cp_id,)).fetchone()
-        if not cp: return None
-        stamps={}
-        for kind in ("Heartbeat","StatusNotification","MeterValues"):
-            row=conn.execute("SELECT ts FROM events WHERE charge_point_id=? AND event_type=? ORDER BY id DESC LIMIT 1",(cp_id,kind)).fetchone()
-            stamps[kind]=row[0] if row else None
-        last_session=conn.execute("SELECT id,ended_at,energy_kwh FROM transactions WHERE charge_point_id=? AND status='Completed' AND ended_at IS NOT NULL ORDER BY ended_at DESC,id DESC LIMIT 1",(cp_id,)).fetchone()
-        active=conn.execute("SELECT id FROM transactions WHERE charge_point_id=? AND status='Active' AND ended_at IS NULL",(cp_id,)).fetchall()
-        connectors=[dict(r) for r in conn.execute("SELECT connector_id,status,last_error_code,last_meter_at FROM connectors WHERE charge_point_id=? ORDER BY connector_id",(cp_id,)).fetchall()]
-        issues=[dict(r) for r in conn.execute("""SELECT * FROM diagnostic_states WHERE charge_point_id=? AND active=1
-            ORDER BY CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,last_changed_at DESC""",(cp_id,)).fetchall()]
-    def age(value):
-        if not value:return None
-        try:return max(0,int((now-datetime.fromisoformat(str(value).replace('Z','+00:00')).astimezone(timezone.utc)).total_seconds()))
-        except Exception:return None
-    status=str(cp["status"] or cp["station_status"] or "Unknown")
-    severity="ok"; label="Gesund"
-    if any(str(x.get("severity"))=="critical" for x in issues) or status=="Faulted": severity="critical"; label="Fehler"
-    elif issues or status in ("Offline","Unavailable","Unknown"): severity="warning"; label="Auffällig"
-    return {"status":severity,"label":label,"station_status":status,"last_message_at":cp["last_message_at"],"last_message_type":cp["last_message_type"],"last_message_age_seconds":age(cp["last_message_at"]),"last_heartbeat":stamps["Heartbeat"],"last_heartbeat_age_seconds":age(stamps["Heartbeat"]),"last_status_notification":stamps["StatusNotification"],"last_status_age_seconds":age(stamps["StatusNotification"]),"last_meter_values":stamps["MeterValues"],"last_meter_age_seconds":age(stamps["MeterValues"]),"last_successful_session":dict(last_session) if last_session else None,"active_sessions":len(active),"connectors":connectors,"active_issues":issues}
-
-
-def sync_notifications():
-    """Refresh state based notifications and ingest important OCPP events.
-
-    This function is intentionally read-mostly and never changes OCPP/charging state.
-    """
-    start_utc,end_utc,month_key=_month_bounds_utc()
-    now=datetime.now(timezone.utc)
-    with _lock, _connect() as conn:
-        # Track state keys and deactivate only conditions that disappeared. Historical/event notifications remain available.
-        state_keys=[]
-        diagnostic_keys=[]
-
-        cps=conn.execute("""SELECT id,status,station_status,station_error_code,last_seen,last_message_at
-                            FROM charge_points WHERE COALESCE(onboarded,1)=1 AND COALESCE(ignored,0)=0
-                              AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0""").fetchall()
-        for cp in cps:
-            status=str(cp["status"] or cp["station_status"] or "Unknown")
-            if status == "Faulted" or (cp["station_error_code"] and str(cp["station_error_code"]) not in ("NoError","None","")):
-                err=str(cp["station_error_code"] or "Fehlerstatus")
-                key=f"cp:{cp['id']}:fault"; state_keys.append(key)
-                _upsert_notification_conn(conn,key,"state","critical","Ladepunkt meldet einen Fehler",
-                                          f"{cp['id']} · {err}",f"/charge-points/{cp['id']}")
-                dkey=f"health:{cp['id']}:fault"; diagnostic_keys.append(dkey)
-                _sync_diagnostic_state_conn(conn,dkey,cp['id'],"critical","connector","station_fault","Ladepunkt meldet einen Fehler",err)
-            elif status in ("Offline","Unavailable","Unknown"):
-                key=f"cp:{cp['id']}:offline"; state_keys.append(key)
-                _upsert_notification_conn(conn,key,"state","warning","Ladepunkt nicht verfügbar",
-                                          f"{cp['id']} · Status {status}",f"/charge-points/{cp['id']}")
-                dkey=f"health:{cp['id']}:offline"; diagnostic_keys.append(dkey)
-                _sync_diagnostic_state_conn(conn,dkey,cp['id'],"warning","communication","station_offline","Ladepunkt nicht verfügbar",f"Status {status}")
-
-        users=conn.execute("SELECT id,name,monthly_kwh_limit,monthly_limit_mode FROM users WHERE status='Aktiv'").fetchall()
-        for user in users:
-            if user["monthly_kwh_limit"] is None:
-                continue
-            used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
-            state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
-            pct=float(state.get("percent") or 0)
-            if pct < 70:
-                continue
-            if pct >= 100:
-                threshold=100
-                if state.get("blocked"):
-                    sev,title="critical","Monatslimit erreicht – Laden gesperrt"
-                else:
-                    sev,title="critical","Monatsbudget vollständig verbraucht"
-            elif pct >= 90:
-                threshold=90; sev,title="warning","Monatsbudget bei mindestens 90 %"
-            else:
-                threshold=70; sev,title="warning","Monatsbudget bei mindestens 70 %"
-            remaining=state.get("remaining_kwh")
-            msg=f"{user['name']} · {pct:.0f} % verbraucht"
-            if remaining is not None:
-                msg+=f" · {float(remaining):.1f} kWh verbleibend"
-            key=f"budget:{month_key}:{user['id']}:{threshold}"; state_keys.append(key)
-            _upsert_notification_conn(conn,key,"state",sev,title,msg,"/users")
-
-        active_rows=conn.execute("""SELECT t.id,t.started_at,t.charge_point_id,t.connector_id,u.name AS user_name,c.last_meter_at,cp.status AS cp_status
-                                    FROM transactions t LEFT JOIN users u ON u.id=t.user_id
-                                    LEFT JOIN connectors c ON c.charge_point_id=t.charge_point_id AND c.connector_id=t.connector_id
-                                    LEFT JOIN charge_points cp ON cp.id=t.charge_point_id
-                                    WHERE t.status='Active' AND t.ended_at IS NULL""").fetchall()
-        for tx in active_rows:
-            try:
-                started=datetime.fromisoformat(str(tx["started_at"]).replace("Z","+00:00"))
-                hours=(now-started.astimezone(timezone.utc)).total_seconds()/3600.0
-            except Exception:
-                hours=0
-            if hours >= 4:
-                key=f"session:{tx['id']}:long"; state_keys.append(key)
-                _upsert_notification_conn(conn,key,"state","warning","Ungewöhnlich langer Ladevorgang",
-                                          f"{tx['user_name'] or 'Unbekannter Benutzer'} · {tx['charge_point_id']} · seit {hours:.1f} h",
-                                          f"/transactions/{tx['id']}")
-            cp_status=str(tx['cp_status'] or 'Unknown')
-            if cp_status not in ('Offline','Unavailable','Unknown','Faulted') and hours*3600 >= 300:
-                try:
-                    meter_age=(now-datetime.fromisoformat(str(tx['last_meter_at']).replace('Z','+00:00')).astimezone(timezone.utc)).total_seconds() if tx['last_meter_at'] else hours*3600
-                except Exception:
-                    meter_age=hours*3600
-                if meter_age >= 300:
-                    mins=max(5,int(meter_age//60)); sev='critical' if meter_age>=900 else 'warning'
-                    title='Keine Live-Messwerte während aktiver Session'
-                    msg=f"{tx['charge_point_id']} · Connector {tx['connector_id']} · seit {mins} min keine MeterValues"
-                    key=f"session:{tx['id']}:meter-stale"; state_keys.append(key)
-                    _upsert_notification_conn(conn,key,'state',sev,title,msg,f"/charge-points/{tx['charge_point_id']}?tab=diagnostics")
-                    dkey=f"meter:{tx['id']}"; diagnostic_keys.append(dkey)
-                    _sync_diagnostic_state_conn(conn,dkey,tx['charge_point_id'],sev,'telemetry','meter_values_stale',title,msg,int(tx['connector_id'] or 0),int(tx['id']))
-
-
-        if state_keys:
-            marks=','.join('?' for _ in state_keys)
-            conn.execute(f"UPDATE notifications SET active=0 WHERE source='state' AND notification_key NOT IN ({marks})", state_keys)
-        else:
-            conn.execute("UPDATE notifications SET active=0 WHERE source='state'")
-
-        _resolve_missing_diagnostic_states_conn(conn,diagnostic_keys)
-
-        event_cutoff=(now-timedelta(hours=24)).isoformat()
-        events=conn.execute("SELECT id,ts,charge_point_id,event_type,payload,transaction_id FROM events WHERE ts>=? ORDER BY id DESC LIMIT 250",(event_cutoff,)).fetchall()
-        for ev in events:
-            payload=str(ev["payload"] or "")
-            severity=title=message=link=None
-            if ev["event_type"] == "Authorize" and "accepted=False" in payload:
-                severity="warning"; title="RFID-Autorisierung abgelehnt"; message=f"{ev['charge_point_id']} · {payload}"
-            elif ev["event_type"] == "StartTransaction" and "rejected=true" in payload:
-                severity="warning"; title="Ladevorgang abgelehnt"; message=f"{ev['charge_point_id']} · {payload}"
-            elif ev["event_type"] == "BudgetLimitReached":
-                severity="critical"; title="Monatslimit während Ladevorgang erreicht"; message=f"{ev['charge_point_id']} · RemoteStop wird ausgelöst"
-            elif ev["event_type"] == "RemoteStopTransaction" and "error=" in payload:
-                severity="critical"; title="RemoteStop fehlgeschlagen"; message=f"{ev['charge_point_id']} · {payload}"
-            if severity:
-                link=f"/transactions/{ev['transaction_id']}" if ev["transaction_id"] else f"/charge-points/{ev['charge_point_id']}"
-                _upsert_notification_conn(conn,f"event:{ev['id']}","event",severity,title,message,link,True)
-        cleanup_cutoff=(now-timedelta(days=7)).isoformat()
-        conn.execute("UPDATE notifications SET active=0 WHERE source='event' AND created_at<?",(cleanup_cutoff,))
-        conn.commit()
-
-
-def _notification_role_conn(conn, user_id):
-    row=conn.execute("SELECT role FROM system_users WHERE id=?",(int(user_id),)).fetchone()
-    return str(row[0] if row else "viewer")
-
-
-def notifications_for_user(user_id, limit=12):
-    sync_notifications()
-    limit=max(1,min(int(limit or 12),100))
-    with _connect() as conn:
-        role=_notification_role_conn(conn,user_id)
-        audience=("all",role)
-        visible="""n.active=1 AND n.audience IN (?,?)
-            AND NOT EXISTS (
-                SELECT 1 FROM notification_dismissals d
-                WHERE d.notification_id=n.id AND d.user_id=? AND d.revision>=n.revision
-            )"""
-        unread=int(conn.execute(f"""SELECT COUNT(*) FROM notifications n
-                                  LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
-                                  WHERE {visible} AND r.notification_id IS NULL""",(user_id,*audience,user_id)).fetchone()[0])
-        rows=conn.execute(f"""SELECT n.*, CASE WHEN r.notification_id IS NULL THEN 0 ELSE 1 END AS is_read
-                            FROM notifications n LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
-                            WHERE {visible} ORDER BY CASE WHEN r.notification_id IS NULL THEN 0 ELSE 1 END ASC,
-                                     CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,
-                                     n.last_seen_at DESC LIMIT ?""",(user_id,*audience,user_id,limit)).fetchall()
-        return {"unread":unread,"items":[dict(r) for r in rows]}
-
-
-def mark_notification_read(notification_id, user_id):
-    with _lock, _connect() as conn:
-        role=_notification_role_conn(conn,user_id)
-        if not conn.execute("SELECT 1 FROM notifications WHERE id=? AND active=1 AND audience IN ('all',?)",(notification_id,role)).fetchone():
-            return False
-        conn.execute("INSERT OR REPLACE INTO notification_reads(notification_id,user_id,read_at) VALUES(?,?,?)",
-                     (notification_id,user_id,utc_now()))
-        conn.commit(); return True
-
-
-def dismiss_notification(notification_id, user_id):
-    """Hide one notification only for this system user and current notification revision."""
-    with _lock,_connect() as conn:
-        role=_notification_role_conn(conn,user_id)
-        row=conn.execute("SELECT id,revision FROM notifications WHERE id=? AND active=1 AND audience IN ('all',?)",(int(notification_id),role)).fetchone()
-        if not row:
-            return False
-        conn.execute("""INSERT INTO notification_dismissals(notification_id,user_id,revision,dismissed_at)
-            VALUES(?,?,?,?) ON CONFLICT(notification_id,user_id) DO UPDATE SET revision=excluded.revision,dismissed_at=excluded.dismissed_at""",
-            (int(notification_id),int(user_id),int(row["revision"] or 1),utc_now()))
-        conn.commit(); return True
-
-
-def dismiss_read_notifications(user_id):
-    """Hide all currently visible/read notifications for this user without deleting shared/system data."""
-    with _lock,_connect() as conn:
-        role=_notification_role_conn(conn,user_id)
-        now=utc_now()
-        rows=conn.execute("""SELECT n.id,n.revision FROM notifications n
-            JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=?
-            WHERE n.active=1 AND n.audience IN ('all',?)
-              AND NOT EXISTS (
-                SELECT 1 FROM notification_dismissals d
-                WHERE d.notification_id=n.id AND d.user_id=? AND d.revision>=n.revision
-              )""",(int(user_id),role,int(user_id))).fetchall()
-        conn.executemany("""INSERT INTO notification_dismissals(notification_id,user_id,revision,dismissed_at)
-            VALUES(?,?,?,?) ON CONFLICT(notification_id,user_id) DO UPDATE SET revision=excluded.revision,dismissed_at=excluded.dismissed_at""",
-            [(int(r["id"]),int(user_id),int(r["revision"] or 1),now) for r in rows])
-        conn.commit(); return len(rows)
-
-
-def _normalize_push_severity(value):
-    value=str(value or "warning").strip().lower()
-    return value if value in {"info","warning","critical"} else "warning"
-
-
-def save_web_push_subscription(user_id, endpoint, p256dh, auth, min_severity="warning", user_agent=""):
-    endpoint=str(endpoint or "").strip()
-    p256dh=str(p256dh or "").strip()
-    auth=str(auth or "").strip()
-    if not endpoint or not p256dh or not auth:
-        raise ValueError("Unvollständige Push-Subscription")
-    severity=_normalize_push_severity(min_severity)
-    now=utc_now()
-    with _lock,_connect() as conn:
-        existing=conn.execute("SELECT id FROM web_push_subscriptions WHERE endpoint=?",(endpoint,)).fetchone()
-        if existing:
-            sid=int(existing["id"])
-            conn.execute("""UPDATE web_push_subscriptions SET user_id=?,p256dh=?,auth=?,min_severity=?,
-                user_agent=?,updated_at=?,last_error=NULL WHERE id=?""",
-                (int(user_id),p256dh,auth,severity,str(user_agent or "")[:500],now,sid))
-        else:
-            cur=conn.execute("""INSERT INTO web_push_subscriptions(
-                user_id,endpoint,p256dh,auth,min_severity,user_agent,created_at,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?)""",
-                (int(user_id),endpoint,p256dh,auth,severity,str(user_agent or "")[:500],now,now))
-            sid=int(cur.lastrowid)
-        role=_notification_role_conn(conn,user_id)
-        rows=conn.execute("""SELECT n.id,n.revision FROM notifications n
-            WHERE n.active=1 AND n.audience IN ('all',?)""",(role,)).fetchall()
-        conn.executemany("""INSERT OR IGNORE INTO web_push_deliveries(
-            subscription_id,notification_id,revision,delivered_at
-        ) VALUES(?,?,?,?)""",[(sid,int(x["id"]),int(x["revision"] or 1),now) for x in rows])
-        conn.commit()
-        return {"id":sid,"min_severity":severity}
-
-
-def update_web_push_preference(user_id, endpoint, min_severity):
-    severity=_normalize_push_severity(min_severity)
-    with _lock,_connect() as conn:
-        cur=conn.execute("""UPDATE web_push_subscriptions SET min_severity=?,updated_at=?,last_error=NULL
-            WHERE user_id=? AND endpoint=?""",(severity,utc_now(),int(user_id),str(endpoint or "").strip()))
-        conn.commit()
-        return int(cur.rowcount or 0)>0
-
-
-def remove_web_push_subscription(user_id, endpoint):
-    endpoint=str(endpoint or "").strip()
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT id FROM web_push_subscriptions WHERE user_id=? AND endpoint=?",(int(user_id),endpoint)).fetchone()
-        if not row:
-            return False
-        sid=int(row["id"])
-        conn.execute("DELETE FROM web_push_deliveries WHERE subscription_id=?",(sid,))
-        conn.execute("DELETE FROM web_push_subscriptions WHERE id=?",(sid,))
-        conn.commit()
-        return True
-
-
-def remove_web_push_subscription_by_id(subscription_id):
-    with _lock,_connect() as conn:
-        sid=int(subscription_id)
-        conn.execute("DELETE FROM web_push_deliveries WHERE subscription_id=?",(sid,))
-        cur=conn.execute("DELETE FROM web_push_subscriptions WHERE id=?",(sid,))
-        conn.commit()
-        return int(cur.rowcount or 0)>0
-
-
-def web_push_subscriptions_for_user(user_id):
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute("""SELECT id,endpoint,min_severity,created_at,updated_at,
-            last_success_at,last_error FROM web_push_subscriptions WHERE user_id=? ORDER BY updated_at DESC""",
-            (int(user_id),)).fetchall()]
-
-
-def web_push_subscription_for_user_endpoint(user_id, endpoint):
-    with _connect() as conn:
-        row=conn.execute("""SELECT * FROM web_push_subscriptions WHERE user_id=? AND endpoint=?""",
-            (int(user_id),str(endpoint or "").strip())).fetchone()
-        return dict(row) if row else None
-
-
-def pending_web_push_deliveries(limit=50):
-    try: limit=max(1,min(250,int(limit or 50)))
-    except (TypeError,ValueError): limit=50
-    try:
-        sync_notifications()
-    except Exception:
-        pass
-    with _connect() as conn:
-        rows=conn.execute("""SELECT s.id AS subscription_id,s.user_id,s.endpoint,s.p256dh,s.auth,
-                   s.min_severity,s.user_agent,u.role,
-                   n.id AS notification_id,n.revision,n.severity,n.title,n.message,n.link,n.last_seen_at
-            FROM web_push_subscriptions s
-            JOIN system_users u ON u.id=s.user_id AND u.active=1
-            JOIN notifications n ON n.active=1 AND n.audience IN ('all',u.role)
-            LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.user_id=s.user_id
-            LEFT JOIN web_push_deliveries d ON d.subscription_id=s.id AND d.notification_id=n.id AND d.revision=n.revision
-            WHERE r.notification_id IS NULL AND d.subscription_id IS NULL
-              AND CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END >=
-                  CASE s.min_severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END
-            ORDER BY CASE n.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,
-                     n.last_seen_at ASC LIMIT ?""",(limit,)).fetchall()
-        return [dict(r) for r in rows]
-
-
-def mark_web_push_delivery(subscription_id, notification_id, revision):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("""INSERT OR REPLACE INTO web_push_deliveries(
-            subscription_id,notification_id,revision,delivered_at
-        ) VALUES(?,?,?,?)""",(int(subscription_id),int(notification_id),int(revision or 1),now))
-        conn.execute("""UPDATE web_push_subscriptions SET last_success_at=?,last_error=NULL,updated_at=?
-            WHERE id=?""",(now,now,int(subscription_id)))
-        conn.commit()
-
-
-def mark_web_push_success(subscription_id):
-    now=utc_now()
-    with _lock,_connect() as conn:
-        conn.execute("""UPDATE web_push_subscriptions SET last_success_at=?,last_error=NULL,updated_at=?
-            WHERE id=?""",(now,now,int(subscription_id)))
-        conn.commit()
-
-
-def mark_web_push_error(subscription_id, error):
-    with _lock,_connect() as conn:
-        conn.execute("UPDATE web_push_subscriptions SET last_error=?,updated_at=? WHERE id=?",
-            (str(error or "")[:600],utc_now(),int(subscription_id)))
-        conn.commit()
-
-
-def mark_all_notifications_read(user_id):
-    with _lock, _connect() as conn:
-        role=_notification_role_conn(conn,user_id)
-        rows=conn.execute("SELECT id FROM notifications WHERE active=1 AND audience IN ('all',?)",(role,)).fetchall()
-        now=utc_now()
-        conn.executemany("INSERT OR REPLACE INTO notification_reads(notification_id,user_id,read_at) VALUES(?,?,?)",
-                         [(r[0],user_id,now) for r in rows])
-        conn.commit(); return len(rows)
-
-
 # V0.8.9.2 tariff and billing helpers. Prices are integer euro cents per kWh.
 def _iso_dt(value):
     from datetime import datetime
@@ -4575,19 +3968,6 @@ def _iso_dt(value):
     except ValueError as exc:
         raise ValueError("Ungültiger Gültigkeitszeitpunkt") from exc
 
-def _validate_cost_center_conn(conn,cost_center):
-    code=str(cost_center or "").strip()
-    if not code: return None
-    row=conn.execute("SELECT code,active FROM cost_centers WHERE code=? COLLATE NOCASE",(code,)).fetchone()
-    if row:
-        if not int(row[1] or 0): raise ValueError("Kostenstelle ist deaktiviert")
-        return row[0]
-    # Backward compatibility for older API clients/configurations: an unknown
-    # free-text code is promoted into the central master-data catalog once.
-    now=utc_now()
-    conn.execute("INSERT INTO cost_centers(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)",(code,code,now,now))
-    return code
-
 def list_billing_groups():
     with _lock, _connect() as conn:
         groups=[dict(r) for r in conn.execute("SELECT g.*,COUNT(ubg.user_id) AS user_count FROM billing_groups g LEFT JOIN user_billing_groups ubg ON ubg.group_id=g.id GROUP BY g.id ORDER BY g.name").fetchall()]
@@ -4595,26 +3975,23 @@ def list_billing_groups():
             group["members"]=[dict(r) for r in conn.execute("SELECT u.id,u.name,u.status,u.department FROM user_billing_groups x JOIN users u ON u.id=x.user_id WHERE x.group_id=? ORDER BY u.name",(group["id"],)).fetchall()]
         return groups
 
-def create_billing_group(name, cost_center=None):
+def create_billing_group(name):
     name=str(name or "").strip()
     if not name: raise ValueError("Gruppenname ist erforderlich")
     with _lock, _connect() as conn:
         try:
-            cost_center=_validate_cost_center_conn(conn,cost_center)
-            cur=conn.execute("INSERT INTO billing_groups(name,cost_center,created_at) VALUES(?,?,?)",(name,cost_center,utc_now())); conn.commit(); return cur.lastrowid
+            cur=conn.execute("INSERT INTO billing_groups(name,created_at) VALUES(?,?)",(name,utc_now())); conn.commit(); return cur.lastrowid
         except sqlite3.IntegrityError as exc:
             raise ValueError("Diese Abrechnungsgruppe existiert bereits") from exc
 
-def update_billing_group(group_id, name, cost_center=None, active=True):
+def update_billing_group(group_id, name, active=True):
     name=str(name or "").strip()
     if not name: raise ValueError("Gruppenname ist erforderlich")
     with _lock,_connect() as conn:
         row=conn.execute("SELECT id FROM billing_groups WHERE id=?",(int(group_id),)).fetchone()
         if not row: return False
         try:
-            cost_center=_validate_cost_center_conn(conn,cost_center)
-            conn.execute("UPDATE billing_groups SET name=?,cost_center=?,active=? WHERE id=?",
-                         (name,cost_center,1 if active else 0,int(group_id)))
+            conn.execute("UPDATE billing_groups SET name=?,active=? WHERE id=?",(name,1 if active else 0,int(group_id)))
             conn.commit(); return True
         except sqlite3.IntegrityError as exc:
             raise ValueError("Diese Abrechnungsgruppe existiert bereits") from exc
@@ -4674,7 +4051,7 @@ def _validate_tariff_dates(valid_from, valid_until):
     end=_iso_dt(valid_until) if valid_until else None
     if end and end<=start: raise ValueError("Gültig bis muss nach Gültig ab liegen")
 
-def create_tariff(name, scope, target_id, price_cents_per_kwh, valid_from, valid_until=None, cost_center=None, billing_group_id=None):
+def create_tariff(name, scope, target_id, price_cents_per_kwh, valid_from, valid_until=None, billing_group_id=None):
     if scope not in {"global","charge_point","user_group","user"}: raise ValueError("Ungültige Tarifebene")
     name=str(name or "").strip()
     if not name: raise ValueError("Tarifname ist erforderlich")
@@ -4683,11 +4060,10 @@ def create_tariff(name, scope, target_id, price_cents_per_kwh, valid_from, valid
     _validate_tariff_dates(valid_from,valid_until)
     with _lock, _connect() as conn:
         target_id=_validate_tariff_target_conn(conn,scope,target_id)
-        cost_center=_validate_cost_center_conn(conn,cost_center)
         if billing_group_id is not None and not conn.execute("SELECT id FROM billing_groups WHERE id=? AND active=1",(billing_group_id,)).fetchone(): raise ValueError("Abrechnungsgruppe nicht gefunden")
-        cur=conn.execute("INSERT INTO tariffs(name,scope,target_id,price_cents_per_kwh,valid_from,valid_until,cost_center,billing_group_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)",(name,scope,target_id,cents,valid_from,valid_until or None,cost_center,billing_group_id,utc_now())); conn.commit(); return cur.lastrowid
+        cur=conn.execute("INSERT INTO tariffs(name,scope,target_id,price_cents_per_kwh,valid_from,valid_until,billing_group_id,created_at) VALUES(?,?,?,?,?,?,?,?)",(name,scope,target_id,cents,valid_from,valid_until or None,billing_group_id,utc_now())); conn.commit(); return cur.lastrowid
 
-def create_tariff_version(tariff_id, name, price_cents_per_kwh, valid_from, valid_until=None, cost_center=None, billing_group_id=None):
+def create_tariff_version(tariff_id, name, price_cents_per_kwh, valid_from, valid_until=None, billing_group_id=None):
     name=str(name or "").strip()
     if not name: raise ValueError("Tarifname ist erforderlich")
     cents=int(price_cents_per_kwh)
@@ -4697,13 +4073,12 @@ def create_tariff_version(tariff_id, name, price_cents_per_kwh, valid_from, vali
         old=conn.execute("SELECT * FROM tariffs WHERE id=?",(tariff_id,)).fetchone()
         if not old: raise ValueError("Tarif nicht gefunden")
         if _iso_dt(valid_from)<=_iso_dt(old["valid_from"]): raise ValueError("Die neue Tarifversion muss nach dem Start der bisherigen Version beginnen")
-        cost_center=_validate_cost_center_conn(conn,cost_center)
         if billing_group_id is not None and not conn.execute("SELECT id FROM billing_groups WHERE id=? AND active=1",(billing_group_id,)).fetchone(): raise ValueError("Abrechnungsgruppe nicht gefunden")
         # Historical versions remain queryable. We only close the previous validity window; session snapshots are immutable.
         old_until=old["valid_until"]
         if not old_until or _iso_dt(old_until)>_iso_dt(valid_from):
             conn.execute("UPDATE tariffs SET valid_until=? WHERE id=?",(valid_from,tariff_id))
-        cur=conn.execute("INSERT INTO tariffs(name,scope,target_id,price_cents_per_kwh,valid_from,valid_until,cost_center,billing_group_id,active,created_at) VALUES(?,?,?,?,?,?,?,?,1,?)",(name,old["scope"],old["target_id"],cents,valid_from,valid_until or None,cost_center,billing_group_id,utc_now()))
+        cur=conn.execute("INSERT INTO tariffs(name,scope,target_id,price_cents_per_kwh,valid_from,valid_until,billing_group_id,active,created_at) VALUES(?,?,?,?,?,?,?,1,?)",(name,old["scope"],old["target_id"],cents,valid_from,valid_until or None,billing_group_id,utc_now()))
         conn.commit(); return cur.lastrowid
 
 def delete_tariff(tariff_id):
@@ -4711,7 +4086,7 @@ def delete_tariff(tariff_id):
         cur=conn.execute("UPDATE tariffs SET active=0 WHERE id=?",(tariff_id,)); conn.commit(); return cur.rowcount > 0
 
 def _select_tariff_conn(conn, user_id, cp_id, at):
-    rows=conn.execute("SELECT t.*,g.name AS billing_group_name,g.cost_center AS billing_group_cost_center FROM tariffs t LEFT JOIN billing_groups g ON g.id=t.billing_group_id WHERE t.active=1 AND t.valid_from<=? AND (t.valid_until IS NULL OR t.valid_until>?) ORDER BY t.valid_from DESC,t.id DESC",(at,at)).fetchall()
+    rows=conn.execute("SELECT t.*,g.name AS billing_group_name FROM tariffs t LEFT JOIN billing_groups g ON g.id=t.billing_group_id WHERE t.active=1 AND t.valid_from<=? AND (t.valid_until IS NULL OR t.valid_until>?) ORDER BY t.valid_from DESC,t.id DESC",(at,at)).fetchall()
     groups={int(r[0]) for r in conn.execute("SELECT x.group_id FROM user_billing_groups x JOIN billing_groups g ON g.id=x.group_id WHERE x.user_id=? AND g.active=1",(user_id,)).fetchall()} if user_id else set()
     for scope,target in (("user",str(user_id) if user_id else None),("user_group",groups),("charge_point",str(cp_id)),("global",None)):
         for row in rows:
@@ -4723,11 +4098,10 @@ def _select_tariff_conn(conn, user_id, cp_id, at):
             # accounting group was selected in the tariff, snapshot the target
             # group itself so reporting does not lose that assignment.
             if scope=="user_group" and not result.get("billing_group_id"):
-                group=conn.execute("SELECT id,name,cost_center FROM billing_groups WHERE id=?",(int(row["target_id"]),)).fetchone()
+                group=conn.execute("SELECT id,name FROM billing_groups WHERE id=?",(int(row["target_id"]),)).fetchone()
                 if group:
                     result["billing_group_id"]=group["id"]
                     result["billing_group_name"]=group["name"]
-                    if not result.get("cost_center"): result["billing_group_cost_center"]=group["cost_center"]
             result["source"]={"user":"Benutzer","user_group":"Gruppe","charge_point":"Ladepunkt","global":"Global"}[scope]; return result
     return None
 
@@ -4741,7 +4115,7 @@ def resolve_tariff(user_id=None, id_tag=None, cp_id=None, at=None):
 def _apply_tariff_to_tx_conn(conn, tx_id, user_id, cp_id, started_at):
     tariff=_select_tariff_conn(conn,user_id,cp_id,started_at)
     if not tariff: return
-    conn.execute("UPDATE transactions SET tariff_id=?,tariff_name=?,tariff_source=?,price_cents_per_kwh=?,cost_center=?,billing_group_id=?,billing_group_name=? WHERE id=?",(tariff["id"],tariff["name"],tariff["source"],tariff["price_cents_per_kwh"],tariff.get("cost_center") or tariff.get("billing_group_cost_center"),tariff.get("billing_group_id"),tariff.get("billing_group_name"),tx_id))
+    conn.execute("UPDATE transactions SET tariff_id=?,tariff_name=?,tariff_source=?,price_cents_per_kwh=?,billing_group_id=?,billing_group_name=? WHERE id=?",(tariff["id"],tariff["name"],tariff["source"],tariff["price_cents_per_kwh"],tariff.get("billing_group_id"),tariff.get("billing_group_name"),tx_id))
 
 def _update_tx_cost_conn(conn, tx_id):
     """Freeze the chargeable session cost after the configured monthly allowance."""
@@ -5114,71 +4488,6 @@ def user_has_active_rfid(user_id):
     return active_rfid_count(user_id)>0
 
 
-def import_history_stats(source="lade.cloud"):
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT COUNT(*) AS sessions,COALESCE(SUM(energy_kwh),0) AS energy,MIN(started_at) AS first_at,MAX(started_at) AS last_at FROM transactions WHERE import_source=?",(source,)).fetchone()
-        return dict(row) if row else {"sessions":0,"energy":0,"first_at":None,"last_at":None}
-
-
-def import_ladecloud_rows(rows, user_mapping, charge_point_mapping):
-    """Import normalized lade.cloud rows without inventing missing telemetry.
-
-    user_mapping maps source RFID tags to existing backend user IDs.
-    charge_point_mapping maps source charge point names to existing OCPP charge point IDs.
-    """
-    imported=duplicates=0
-    imported_energy=0.0
-    touched_users=set()
-    rfid_created=[]
-    with _lock,_connect() as conn:
-        # Validate mappings before the first write.
-        user_cache={}
-        for tag,user_id in user_mapping.items():
-            user=conn.execute("SELECT id,name,status FROM users WHERE id=?",(int(user_id),)).fetchone()
-            if not user: raise ValueError(f"Zielbenutzer für RFID {tag} wurde nicht gefunden.")
-            user_cache[str(tag)]=dict(user)
-        for source_cp,target_cp in charge_point_mapping.items():
-            if not conn.execute("SELECT id FROM charge_points WHERE id=?",(str(target_cp),)).fetchone():
-                raise ValueError(f"Ziel-Ladepunkt für {source_cp} wurde nicht gefunden.")
-
-        # RFID cards are created only when unambiguous. Existing conflicting cards stop the import.
-        card_cache={}
-        for tag,user in user_cache.items():
-            existing=conn.execute("SELECT * FROM rfid_cards WHERE uid=?",(tag,)).fetchone()
-            if existing and existing["user_id"] not in (None,int(user["id"])):
-                other=conn.execute("SELECT name FROM users WHERE id=?",(existing["user_id"],)).fetchone()
-                raise ValueError(f"RFID {tag} ist bereits {other[0] if other else 'einem anderen Benutzer'} zugeordnet.")
-            if existing:
-                card_id=int(existing["id"])
-                if existing["user_id"] is None:
-                    conn.execute("UPDATE rfid_cards SET user_id=?,status='Aktiv' WHERE id=?",(int(user["id"]),card_id))
-            else:
-                cur=conn.execute("INSERT INTO rfid_cards(uid,label,user_id,status,created_at) VALUES(?,?,?,'Aktiv',?)",(tag,"lade.cloud Import",int(user["id"]),utc_now()))
-                card_id=int(cur.lastrowid); rfid_created.append(tag)
-            card_cache[tag]=card_id
-
-        for item in rows:
-            tag=str(item.get("rfid_tag") or "").strip()
-            source_cp=str(item.get("source_charge_point") or "").strip()
-            if tag not in user_cache: raise ValueError(f"Keine Benutzerzuordnung für RFID {tag}.")
-            if source_cp not in charge_point_mapping: raise ValueError(f"Keine Ladepunktzuordnung für {source_cp}.")
-            if conn.execute("SELECT id FROM transactions WHERE import_source='lade.cloud' AND import_key=?",(item["import_key"],)).fetchone():
-                duplicates += 1; continue
-            user=user_cache[tag]
-            price=item.get("price_cents_per_kwh")
-            # Imported lade.cloud history belongs to the free monthly allowance.
-            cost=0
-            cur=conn.execute("""INSERT INTO transactions(
-                charge_point_id,connector_id,transaction_id,id_tag,user_id,rfid_card_id,started_at,ended_at,
-                energy_kwh,max_power_kw,status,stop_reason,charging_seconds,stand_seconds,connection_seconds,
-                price_cents_per_kwh,cost_cents,tariff_source,import_source,import_key,imported_at,import_source_name,import_evse_id,timing_quality
-            ) VALUES(?,?,?,?,?,?,?,?,?,0,'Completed','Imported',0,0,?,?,?,?,?,?,?,?,?,?)""",
-                (str(charge_point_mapping[source_cp]),int(item.get("connector_id") or 1),None,tag,int(user["id"]),card_cache[tag],item["started_at"],item["ended_at"],float(item.get("energy_kwh") or 0),float(item.get("duration_seconds") or 0),price,cost,"lade.cloud" if price is not None else None,"lade.cloud",item["import_key"],utc_now(),item.get("source_user_name"),item.get("evse_id"),"connection_only"))
-            imported += 1; imported_energy += float(item.get("energy_kwh") or 0); touched_users.add(int(user["id"]))
-        conn.commit()
-    return {"imported":imported,"duplicates":duplicates,"energy_kwh":round(imported_energy,3),"rfid_created":rfid_created,"users_updated":len(touched_users)}
-
-
 def admin_reconcile_transaction(tx_id, reason="AdminReconciled"):
     tx=get_transaction(int(tx_id))
     if not tx: raise ValueError("Ladevorgang nicht gefunden")
@@ -5195,12 +4504,11 @@ def _report_row_amounts(row):
     return energy, (int(cost) if cost is not None else None)
 
 
-def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, charge_point_id=None, cost_center=None, billing_group_id=None):
+def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, charge_point_id=None, billing_group_id=None):
     """Return immutable accounting/reporting data from completed transactions.
 
-    Tariff, billing group and cost-center values are intentionally read from the
-    transaction snapshot. Later tariff changes therefore do not rewrite old
-    accounting periods.
+    Tariff and billing-group values are read from the transaction snapshot so
+    later tariff changes do not rewrite old accounting periods.
     """
     with _lock, _connect() as conn:
         clauses=["t.ended_at IS NOT NULL", "COALESCE(t.status,'') <> 'Active'"]
@@ -5215,10 +4523,6 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
             clauses.append("t.vehicle_id = ?"); params.append(int(vehicle_id))
         if charge_point_id:
             clauses.append("t.charge_point_id = ?"); params.append(str(charge_point_id))
-        if cost_center == "__none__":
-            clauses.append("COALESCE(TRIM(t.cost_center),'') = ''")
-        elif cost_center:
-            clauses.append("t.cost_center = ?"); params.append(str(cost_center))
         if billing_group_id == "__none__":
             clauses.append("t.billing_group_id IS NULL")
         elif billing_group_id is not None:
@@ -5227,8 +4531,8 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
         rows=[dict(r) for r in conn.execute(f"""
             SELECT t.id,t.started_at,t.ended_at,t.charge_point_id,t.connector_id,t.energy_kwh,
                    t.charging_seconds,t.stand_seconds,t.connection_seconds,t.user_id,t.vehicle_id,
-                   t.tariff_name,t.tariff_source,t.price_cents_per_kwh,t.cost_cents,t.cost_center,
-                   t.billing_group_id,t.billing_group_name,t.import_source,t.timing_quality,
+                   t.tariff_name,t.tariff_source,t.price_cents_per_kwh,t.cost_cents,
+                   t.billing_group_id,t.billing_group_name,t.timing_quality,
                    u.name AS user_name,u.department AS user_department,
                    v.name AS vehicle_name,v.plate AS vehicle_plate
               FROM transactions t
@@ -5288,69 +4592,23 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
         summary=aggregate(rows)
         summary["unassigned_user_sessions"]=sum(1 for x in rows if x.get("user_id") is None)
         summary["unassigned_vehicle_sessions"]=sum(1 for x in rows if x.get("vehicle_id") is None)
-        summary["unassigned_cost_center_sessions"]=sum(1 for x in rows if not str(x.get("cost_center") or "").strip())
 
         options={
             "users":[dict(r) for r in conn.execute("SELECT id,name FROM users ORDER BY name COLLATE NOCASE").fetchall()],
             "vehicles":[dict(r) for r in conn.execute("SELECT id,name,plate FROM vehicles WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
             "charge_points":[dict(r) for r in conn.execute("SELECT id FROM charge_points WHERE COALESCE(ignored,0)=0 AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0 ORDER BY id COLLATE NOCASE").fetchall()],
-            "cost_centers":[r[0] for r in conn.execute("SELECT DISTINCT cost_center FROM transactions WHERE COALESCE(TRIM(cost_center),'')<>'' ORDER BY cost_center COLLATE NOCASE").fetchall()],
-            "billing_groups":[dict(r) for r in conn.execute("SELECT id,name,cost_center FROM billing_groups WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
+            "billing_groups":[dict(r) for r in conn.execute("SELECT id,name FROM billing_groups WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
         }
         return {
             "summary":summary,
             "by_user":group_by(lambda x:x.get("user_id") if x.get("user_id") is not None else "unassigned", lambda x:x.get("user_name") or "Nicht zugeordnet"),
             "by_vehicle":group_by(lambda x:x.get("vehicle_id") if x.get("vehicle_id") is not None else "unassigned", lambda x:(x.get("vehicle_name") or "Nicht zugeordnet") + ((" · "+x.get("vehicle_plate")) if x.get("vehicle_plate") else "")),
             "by_charge_point":group_by(lambda x:x.get("charge_point_id") or "unassigned", lambda x:x.get("charge_point_id") or "Nicht zugeordnet"),
-            "by_cost_center":group_by(lambda x:x.get("cost_center") or "__none__", lambda x:x.get("cost_center") or "Ohne Kostenstelle"),
             "by_billing_group":group_by(lambda x:x.get("billing_group_id") if x.get("billing_group_id") is not None else "unassigned", lambda x:x.get("billing_group_name") or "Ohne Abrechnungsgruppe"),
             "by_month":by_month,
             "transactions":rows,
             "options":options,
         }
-
-# V0.9.7.6 - cost-center master data, global search and Smart Charging state.
-def list_cost_centers(include_inactive=True):
-    with _lock,_connect() as conn:
-        where="" if include_inactive else " WHERE cc.active=1"
-        rows=conn.execute(f"""SELECT cc.*,
-            (SELECT COUNT(*) FROM tariffs t WHERE t.active=1 AND t.cost_center=cc.code) AS active_tariff_count,
-            (SELECT COUNT(*) FROM billing_groups g WHERE g.active=1 AND g.cost_center=cc.code) AS active_group_count,
-            (SELECT COUNT(*) FROM transactions tx WHERE tx.cost_center=cc.code) AS historical_session_count
-            FROM cost_centers cc{where} ORDER BY cc.active DESC,cc.code COLLATE NOCASE""").fetchall()
-        return [dict(r) for r in rows]
-
-def get_cost_center(cost_center_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT * FROM cost_centers WHERE id=?",(int(cost_center_id),)).fetchone()
-        return dict(row) if row else None
-
-def create_cost_center(code,name,description=None):
-    code=str(code or "").strip(); name=str(name or "").strip()
-    if not code: raise ValueError("Kostenstellen-Code ist erforderlich")
-    if not name: raise ValueError("Bezeichnung ist erforderlich")
-    if len(code)>40: raise ValueError("Kostenstellen-Code ist zu lang")
-    now=utc_now()
-    with _lock,_connect() as conn:
-        try:
-            cur=conn.execute("INSERT INTO cost_centers(code,name,description,active,created_at,updated_at) VALUES(?,?,?,1,?,?)",(code,name,str(description or "").strip() or None,now,now)); conn.commit(); return int(cur.lastrowid)
-        except sqlite3.IntegrityError as exc: raise ValueError("Diese Kostenstelle existiert bereits") from exc
-
-def update_cost_center(cost_center_id,code,name,description=None,active=True):
-    code=str(code or "").strip(); name=str(name or "").strip()
-    if not code or not name: raise ValueError("Code und Bezeichnung sind erforderlich")
-    with _lock,_connect() as conn:
-        old=conn.execute("SELECT * FROM cost_centers WHERE id=?",(int(cost_center_id),)).fetchone()
-        if not old: return False
-        try:
-            conn.execute("UPDATE cost_centers SET code=?,name=?,description=?,active=?,updated_at=? WHERE id=?",(code,name,str(description or "").strip() or None,1 if active else 0,utc_now(),int(cost_center_id)))
-            # Current configuration follows a renamed master code; historical transaction snapshots stay immutable.
-            if str(old['code']).casefold()!=code.casefold():
-                conn.execute("UPDATE tariffs SET cost_center=? WHERE cost_center=? AND active=1",(code,old['code']))
-                conn.execute("UPDATE billing_groups SET cost_center=? WHERE cost_center=? AND active=1",(code,old['code']))
-            conn.commit(); return True
-        except sqlite3.IntegrityError as exc: raise ValueError("Diese Kostenstelle existiert bereits") from exc
-
 
 # V0.9.7.9 - production security / OCPP access protection
 OCPP_SECRET_ITERATIONS = 260000
