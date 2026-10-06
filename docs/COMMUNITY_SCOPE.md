@@ -16,7 +16,6 @@ This document records the agreed initial feature scope for VoltCore Community.
 - Charging session history
 - Basic user / vehicle / RFID assignment
 - Dashboard
-- Basic LiveView
 - Basic reports
 - CSV export
 - Backup / restore
