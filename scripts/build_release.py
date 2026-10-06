@@ -11,10 +11,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALLOW_ROOT_FILES = [
     ".dockerignore",
+    ".env.example",
     "CHANGELOG.md",
     "Dockerfile",
     "README.md",
+    "README.en.md",
     "docker-compose.yml",
+    "docker-compose.portainer.yml",
     "requirements.txt",
 ]
 
@@ -36,6 +39,8 @@ def copy_tree(target: Path) -> None:
         target / "app",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
     )
+    shutil.copytree(ROOT / "docs", target / "docs")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -44,8 +49,8 @@ def main() -> None:
     dist = (ROOT / args.dist).resolve() if not Path(args.dist).is_absolute() else Path(args.dist)
     dist.mkdir(parents=True, exist_ok=True)
     ver = version()
-    folder = f"voltcore_v{ver.replace('.', '')}_work"
-    archive = dist / f"VoltCore_V{ver.replace('.', '_')}_Portainer_FINAL.zip"
+    folder = f"voltcore-community-v{ver}"
+    archive = dist / f"VoltCore_Community_V{ver.replace('.', '_')}.zip"
     with tempfile.TemporaryDirectory(prefix="ocpp-release-") as tmp:
         release_root = Path(tmp) / folder
         release_root.mkdir()
