@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Einstellungen - {{ branding.product_name }}{% endblock %}
 {% block heading %}Einstellungen{% endblock %}
-{% block subtitle %}Community-Konfiguration, Branding, LiveView und E-Mail{% endblock %}
+{% block subtitle %}Community-Konfiguration, Branding und E-Mail{% endblock %}
 {% block content %}
 <section class="settings-grid">
   <div class="panel branding-panel">
@@ -21,28 +21,6 @@
         <label class="branding-upload">Favicon / App-Icon<div class="branding-preview" id="previewFavicon"></div><input name="favicon" type="file" accept="image/png,image/jpeg,image/webp"><span class="branding-remove"><input name="remove_favicon" type="checkbox" value="1"> Vorhandenes entfernen</span></label>
       </div>
       <div class="branding-actions"><button class="primary" type="submit">Branding speichern</button><div id="brandingMessage" class="form-message"></div></div>
-    </form>
-  </div>
-
-  <div class="panel liveview-settings-panel">
-    <div class="panelhead"><div><h2>Basic LiveView</h2><span>Community Wallboard</span></div><a class="secondary button" href="/liveview" target="_blank" rel="noopener">Vorschau öffnen ↗</a></div>
-    <p class="detail-note">Community enthält eine bewusst klare LiveView. Pro- und People-Ansichten sind nicht Bestandteil dieser Edition.</p>
-    <form id="liveviewSettingsForm">
-      <div class="form-grid liveview-options-grid">
-        <label>Sortierung<select id="liveviewSort"><option value="auto">Automatisch · Störung / Aktiv / Frei</option><option value="active">Aktive zuerst</option><option value="name">Nach Ladepunktname</option></select></label>
-        <label>Spalten<select id="liveviewColumns"><option value="auto">Automatisch</option><option value="2">2 Spalten</option><option value="3">3 Spalten</option><option value="4">4 Spalten</option></select></label>
-        <label>Aktualisierung<select id="liveviewRefresh"><option value="1">1 Sekunde</option><option value="2">2 Sekunden</option><option value="3">3 Sekunden</option><option value="5">5 Sekunden</option><option value="10">10 Sekunden</option><option value="15">15 Sekunden</option><option value="30">30 Sekunden</option></select></label>
-      </div>
-      <div class="liveview-option-checks">
-        <label class="check"><input id="liveviewVehicle" type="checkbox"> Fahrzeug anzeigen</label>
-        <label class="check"><input id="liveviewUser" type="checkbox"> Ladebenutzer anzeigen</label>
-        <label class="check"><input id="liveviewSoc" type="checkbox"> SoC anzeigen</label>
-        <label class="check"><input id="liveviewEnergy" type="checkbox"> Energie anzeigen</label>
-        <label class="check"><input id="liveviewDiagnostics" type="checkbox"> Diagnosehinweis anzeigen</label>
-        <label class="check"><input id="liveviewClock" type="checkbox"> Uhrzeit anzeigen</label>
-        <label class="check"><input id="liveviewTechnicalId" type="checkbox"> Technische Ladepunkt-ID anzeigen</label>
-      </div>
-      <div class="branding-actions"><button class="primary" type="submit">LiveView speichern</button><div id="liveviewMessage" class="form-message"></div></div>
     </form>
   </div>
 
@@ -95,11 +73,6 @@
 {% endblock %}
 {% block scripts %}
 <script>
-const liveviewForm=document.getElementById('liveviewSettingsForm'),liveviewMsg=document.getElementById('liveviewMessage');
-function fillLiveview(d){document.getElementById('liveviewSort').value=d.sort||'auto';document.getElementById('liveviewColumns').value=d.columns||'auto';document.getElementById('liveviewRefresh').value=String(d.refresh_seconds||2);document.getElementById('liveviewVehicle').checked=!!d.show_vehicle;document.getElementById('liveviewUser').checked=!!d.show_user;document.getElementById('liveviewSoc').checked=!!d.show_soc;document.getElementById('liveviewEnergy').checked=!!d.show_energy;document.getElementById('liveviewDiagnostics').checked=!!d.show_diagnostics;document.getElementById('liveviewClock').checked=!!d.show_clock;document.getElementById('liveviewTechnicalId').checked=!!d.show_technical_id}
-fetch('/api/settings/liveview').then(r=>r.json()).then(fillLiveview);
-liveviewForm.onsubmit=async e=>{e.preventDefault();const payload={preset:'standard',sort:document.getElementById('liveviewSort').value,columns:document.getElementById('liveviewColumns').value,refresh_seconds:Number(document.getElementById('liveviewRefresh').value||2),show_vehicle:document.getElementById('liveviewVehicle').checked,show_user:document.getElementById('liveviewUser').checked,show_soc:document.getElementById('liveviewSoc').checked,show_energy:document.getElementById('liveviewEnergy').checked,show_diagnostics:document.getElementById('liveviewDiagnostics').checked,show_clock:document.getElementById('liveviewClock').checked,show_technical_id:document.getElementById('liveviewTechnicalId').checked};const r=await fetch('/api/settings/liveview',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));liveviewMsg.textContent=r.ok?'LiveView-Einstellungen gespeichert.':(d.detail||'Speichern fehlgeschlagen.');liveviewMsg.className='form-message '+(r.ok?'success':'error');if(r.ok)fillLiveview(d)};
-
 const mailForm=document.getElementById('mailSettingsForm'),mailMsg=document.getElementById('mailSettingsMessage'),mailTestMsg=document.getElementById('mailTestMessage'),mailTestTemplate=document.getElementById('mailTestTemplate');
 function fillMail(d){document.getElementById('mailEnabled').checked=!!d.enabled;document.getElementById('mailHost').value=d.host||'';document.getElementById('mailPort').value=d.port||587;document.getElementById('mailSecurity').value=d.security||'starttls';document.getElementById('mailUsername').value=d.username||'';document.getElementById('mailFromEmail').value=d.from_email||'';document.getElementById('mailFromName').value=d.from_name||'';document.getElementById('mailAdminRecipients').value=d.admin_recipients||'';document.getElementById('mailPublicBaseUrl').value=d.public_base_url||'';document.getElementById('mailPasswordState').textContent=d.password_configured?'Passwort ist hinterlegt. Leer lassen = unverändert.':'Noch kein Passwort hinterlegt.';document.getElementById('mailEventBackup').checked=!!d.events?.backup_failures;document.getElementById('mailEventSecurity').checked=!!d.events?.security_warnings;mailTestTemplate.innerHTML=(d.templates||[]).map(x=>'<option value="'+x.key+'">'+x.label+'</option>').join('')}
 fetch('/api/settings/mail').then(r=>r.json()).then(fillMail);
