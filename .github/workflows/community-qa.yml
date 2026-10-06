@@ -60,3 +60,37 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Build release archive
+        run: python scripts/build_release.py --dist dist
+
+      - name: Verify release archive
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          archives=list(Path("dist").glob("VoltCore_Community_V*.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected one Community ZIP, found {len(archives)}")
+          required={
+              ".env.example",
+              "CHANGELOG.md",
+              "Dockerfile",
+              "README.md",
+              "README.en.md",
+              "docker-compose.yml",
+              "docker-compose.portainer.yml",
+              "requirements.txt",
+          }
+          with zipfile.ZipFile(archives[0]) as zf:
+              names=zf.namelist()
+              top=names[0].split("/",1)[0]
+              missing=sorted(x for x in required if f"{top}/{x}" not in names)
+              if missing:
+                  raise SystemExit("Release archive missing: "+", ".join(missing))
+              if not any(x.startswith(f"{top}/app/") for x in names):
+                  raise SystemExit("Release archive missing app/")
+              if not any(x.startswith(f"{top}/docs/") for x in names):
+                  raise SystemExit("Release archive missing docs/")
+          print("Community release archive OK:", archives[0])
+          PY
