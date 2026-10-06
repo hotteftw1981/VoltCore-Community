@@ -266,5 +266,47 @@ class CommunityBackendOnlyTests(unittest.TestCase):
             self.assertNotIn(stale, readme_de)
             self.assertNotIn(stale, readme_en)
 
+
+    def test_technical_surfaces_have_no_removed_feature_zombies(self):
+        css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+        info = (ROOT / "app" / "templates" / "_info_modal.html").read_text(encoding="utf-8")
+        first_run = (ROOT / "app" / "templates" / "first_run.html").read_text(encoding="utf-8")
+        login_2fa = (ROOT / "app" / "templates" / "login_2fa.html").read_text(encoding="utf-8")
+        charge_points = (ROOT / "app" / "templates" / "charge_points.html").read_text(encoding="utf-8")
+        charge_point = (ROOT / "app" / "templates" / "charge_point.html").read_text(encoding="utf-8")
+        settings = (ROOT / "app" / "templates" / "settings.html").read_text(encoding="utf-8")
+        releases = (ROOT / "docs" / "RELEASES.md").read_text(encoding="utf-8")
+
+        self.assertFalse((ROOT / "app" / "templates" / "access_request_detail.html").exists())
+        self.assertEqual(css.count("{"), css.count("}"))
+
+        for needle in (
+            "portal-", "engagement-", "achievement-", "leaderboard",
+            "voucher-", "smart-", "cost-center", "import-",
+            "registration-", "access-request", "public-budget",
+        ):
+            self.assertNotIn(needle, css)
+
+        for needle in ("DRK Ortsverein", "drk-schwelm", "Am Ochsenkamp"):
+            self.assertNotIn(needle, info)
+
+        self.assertIn("Optionales Monatslimit", first_run)
+        for needle in ("Freies Ladeguthaben", "Wochenarbeitszeit", "Arbeitgeberlogik"):
+            self.assertNotIn(needle, first_run)
+
+        self.assertIn("voltcore-community-theme", login_2fa)
+        self.assertNotIn("drk-ocpp-theme", login_2fa)
+
+        for needle in ("RFID Self-Service", "rfidSelfEnroll", "rfid_self_enroll_mode"):
+            self.assertNotIn(needle, charge_points)
+        self.assertNotIn("smart_charging", charge_point)
+
+        for needle in ("event_rfid_requests", "event_pin_reset_admin", "event_access_requests"):
+            self.assertNotIn(needle, settings)
+
+        self.assertIn("ghcr.io/hotteftw1981/voltcore-community:latest", releases)
+        self.assertNotIn("ghcr.io/hotteftw1981/drk-ocpp-backend", releases)
+        self.assertNotIn("ghcr.io/hotteftw1981/voltcore:latest", releases)
+
 if __name__ == "__main__":
     unittest.main()
