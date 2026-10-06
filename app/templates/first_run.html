@@ -38,6 +38,21 @@
     </section>
 
     <section class="first-run-section">
+      <h3>👤 Ersten Benutzer einladen</h3>
+      <div class="form-grid">
+        <label>Anzeigename<input name="invite_display_name" value="{{ values.invite_display_name if values else '' }}" maxlength="120" placeholder="optional"></label>
+        <label>E-Mail-Adresse<input name="invite_email" type="email" value="{{ values.invite_email if values else '' }}" placeholder="name@example.org"></label>
+        <label>Rolle<select name="invite_role">
+          {% set invite_role = values.invite_role if values else 'user' %}
+          <option value="user" {% if invite_role=='user' %}selected{% endif %}>Benutzer</option>
+          <option value="viewer" {% if invite_role=='viewer' %}selected{% endif %}>Nur Lesen</option>
+          <option value="admin" {% if invite_role=='admin' %}selected{% endif %}>Administrator</option>
+        </select></label>
+      </div>
+      <small>Optional. Wenn eine E-Mail-Adresse eingetragen wird, muss der E-Mail-Versand oben aktiviert und vollständig konfiguriert sein. Die Einladung ist 72 Stunden gültig.</small>
+    </section>
+
+    <section class="first-run-section">
       <h3>💶 Standardpreis</h3>
       <div class="form-grid">
         <label>Tarifname<input name="tariff_name" value="{{ values.tariff_name if values else 'Standardtarif' }}" maxlength="120"></label>
