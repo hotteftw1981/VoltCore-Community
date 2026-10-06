@@ -2686,9 +2686,7 @@ def _rfid_local_entry_conn(conn, uid, charge_point_id=None):
             used=_user_month_energy_conn(conn,int(user_id),start_utc,end_utc)
             state=_budget_status(row[5],used,row[6])
             if state.get("blocked"):
-                bonus=_bonus_wallet_conn(conn,int(user_id))
-                if float(bonus.get("available_kwh") or 0)<=1e-9:
-                    return None
+                return None
         except Exception:
             pass
     info={"status":"Accepted"}
@@ -2894,20 +2892,14 @@ def user_may_charge_at(user_id,charge_point_id):
         return bool(conn.execute("SELECT 1 FROM user_charge_point_access WHERE user_id=? AND charge_point_id=?",(int(user_id),str(charge_point_id))).fetchone())
 
 
-def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=True,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
-    """Create a neutral Community charging user.
-
-    weekly_hours and budget_source remain accepted for backwards compatibility,
-    but Community never derives charging credit from employment data.
-    """
+def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",charge_access_mode="all",allowed_charge_point_ids=None):
     limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
-        gamification = 1 if gamification_enabled else 0
         access_mode=_normalize_charge_access_mode(charge_access_mode)
         cur=conn.execute(
-            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (name,role,department,status,email,phone,limit_value,mode,gamification,None,"manual",access_mode),
+            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?)",
+            (name,role,department,status,email,phone,limit_value,mode,access_mode),
         )
         user_id=int(cur.lastrowid)
         _set_user_charge_access_conn(conn,user_id,access_mode,allowed_charge_point_ids)
@@ -2917,9 +2909,7 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
 def update_user(user_id,**fields):
     access_mode=fields.pop("charge_access_mode",None)
     access_ids=fields.pop("allowed_charge_point_ids",None)
-    fields.pop("weekly_hours",None)
-    fields.pop("budget_source",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled"}
+    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2929,12 +2919,12 @@ def update_user(user_id,**fields):
             value = None if value in (None, "") else max(0.0, float(value))
         elif k == "monthly_limit_mode":
             value = "block" if str(value).lower() == "block" else "warn"
-        elif k == "gamification_enabled":
-            value = 1 if value else 0
         updates.append((k,value))
-    if not updates and access_mode is None and access_ids is None:return False
+    if not updates and access_mode is None and access_ids is None:
+        return False
     with _lock,_connect() as conn:
-        if not conn.execute("SELECT id FROM users WHERE id=?",(user_id,)).fetchone():return False
+        if not conn.execute("SELECT id FROM users WHERE id=?",(user_id,)).fetchone():
+            return False
         card_uids=[str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(user_id,)).fetchall()]
         if updates:
             conn.execute("UPDATE users SET "+", ".join(f"{k}=?" for k,_ in updates)+" WHERE id=?",[v for _,v in updates]+[user_id])
@@ -2947,7 +2937,8 @@ def update_user(user_id,**fields):
             _set_user_charge_access_conn(conn,user_id,effective_mode,access_ids)
         if (any(k in {"status","monthly_kwh_limit","monthly_limit_mode"} for k,_ in updates) or access_changed) and card_uids:
             _rfid_local_list_bump_conn(conn,card_uids)
-        conn.commit(); return True
+        conn.commit()
+        return True
 
 def deactivate_user(user_id):
     with _lock,_connect() as conn:
@@ -2968,107 +2959,59 @@ def _user_delete_check_conn(conn, user_id):
     legacy=str(user["rfid"] or "").strip()
     if legacy and legacy not in id_tags:
         id_tags.append(legacy)
-
-    tx_where=["user_id=?"]
-    tx_args=[uid]
+    tx_where=["user_id=?"]; tx_args=[uid]
     if card_ids:
         marks=",".join("?" for _ in card_ids)
-        tx_where.append(f"(user_id IS NULL AND rfid_card_id IN ({marks}))")
-        tx_args.extend(card_ids)
+        tx_where.append(f"(user_id IS NULL AND rfid_card_id IN ({marks}))"); tx_args.extend(card_ids)
     if id_tags:
         marks=",".join("?" for _ in id_tags)
-        tx_where.append(f"(user_id IS NULL AND id_tag IN ({marks}))")
-        tx_args.extend(id_tags)
-    tx_rows=conn.execute(
-        "SELECT id,status,ended_at FROM transactions WHERE "+(" OR ".join(tx_where)),
-        tx_args,
-    ).fetchall()
+        tx_where.append(f"(user_id IS NULL AND id_tag IN ({marks}))"); tx_args.extend(id_tags)
+    tx_rows=conn.execute("SELECT id,status,ended_at FROM transactions WHERE "+(" OR ".join(tx_where)),tx_args).fetchall()
     transaction_ids=[int(r["id"]) for r in tx_rows]
     transactions=len(transaction_ids)
     active_transactions=sum(1 for r in tx_rows if str(r["status"] or "")=="Active" and not r["ended_at"])
-
-    checks={
-        "transactions":transactions,
-        "bonus_grants":int(conn.execute("SELECT COUNT(*) FROM bonus_grants WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_usage":int(conn.execute("SELECT COUNT(*) FROM bonus_usage WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "voucher_redemptions":int(conn.execute("SELECT COUNT(*) FROM bonus_voucher_redemptions WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_transfers":int(conn.execute("SELECT COUNT(*) FROM bonus_transfers WHERE from_user_id=? OR to_user_id=?",(uid,uid)).fetchone()[0] or 0),
-        "event_rewards":int(conn.execute("SELECT COUNT(*) FROM gamification_event_rewards WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "event_results":int(conn.execute("SELECT COUNT(*) FROM gamification_event_results WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-    }
-    blockers={k:v for k,v in checks.items() if v>0}
-    labels={
-        "transactions":"Ladevorgänge",
-        "bonus_grants":"Bonusgutschriften",
-        "bonus_usage":"Bonusverbrauch",
-        "voucher_redemptions":"Gutschein-Einlösungen",
-        "bonus_transfers":"Bonusübertragungen",
-        "event_rewards":"Event-Prämien",
-        "event_results":"historische Event-Ergebnisse",
-    }
-    reasons=[f"{labels.get(k,k)}: {v}" for k,v in blockers.items()]
-
-    purge_reasons=[]
-    if active_transactions:
-        purge_reasons.append(f"Aktive Ladevorgänge: {active_transactions}")
-    if checks["bonus_transfers"]:
-        purge_reasons.append(f"Bonusübertragungen mit anderen Benutzern: {checks['bonus_transfers']}")
-    can_purge=(active_transactions==0 and checks["bonus_transfers"]==0)
-
     meter_samples=transaction_events=diagnostic_events=0
     if transaction_ids:
         marks=",".join("?" for _ in transaction_ids)
         meter_samples=int(conn.execute(f"SELECT COUNT(*) FROM meter_samples WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
         transaction_events=int(conn.execute(f"SELECT COUNT(*) FROM events WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
         diagnostic_events=int(conn.execute(f"SELECT COUNT(*) FROM diagnostic_events WHERE transaction_id IN ({marks})",transaction_ids).fetchone()[0] or 0)
-
-    grant_ids=[int(r[0]) for r in conn.execute("SELECT id FROM bonus_grants WHERE user_id=?",(uid,)).fetchall()]
-    removable={
-        "transactions":transactions,
-        "meter_samples":meter_samples,
-        "transaction_events":transaction_events,
-        "diagnostic_events":diagnostic_events,
-        "rfid_cards":len(card_ids),
-        "vehicle_links":int(conn.execute("SELECT COUNT(*) FROM user_vehicles WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "charge_point_links":int(conn.execute("SELECT COUNT(*) FROM user_charge_point_access WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "billing_group_links":int(conn.execute("SELECT COUNT(*) FROM user_billing_groups WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "achievements":int(conn.execute("SELECT COUNT(*) FROM achievement_awards WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "portal_sessions":int(conn.execute("SELECT COUNT(*) FROM portal_sessions WHERE user_id=?",(uid,)).fetchone()[0] or 0),
-        "bonus_grants":checks["bonus_grants"],
-        "bonus_usage":checks["bonus_usage"],
-        "voucher_redemptions":checks["voucher_redemptions"],
-        "event_rewards":checks["event_rewards"],
-        "event_results":checks["event_results"],
-    }
     return {
-        "user_id":int(user["id"]),
-        "name":user["name"],
-        "status":user["status"],
-        "can_delete":not bool(blockers),
-        "can_purge":can_purge,
+        "user_id":uid,"name":user["name"],"status":user["status"],
+        "can_delete":transactions==0,"can_purge":active_transactions==0,
         "active_transactions":active_transactions,
-        "blockers":blockers,
-        "reasons":reasons,
-        "purge_reasons":purge_reasons,
-        "removable":removable,
-        "card_ids":card_ids,
-        "card_uids":id_tags,
-        "transaction_ids":transaction_ids,
-        "grant_ids":grant_ids,
+        "blockers":({"transactions":transactions} if transactions else {}),
+        "reasons":([f"Ladevorgänge: {transactions}"] if transactions else []),
+        "purge_reasons":([f"Aktive Ladevorgänge: {active_transactions}"] if active_transactions else []),
+        "removable":{
+            "transactions":transactions,"meter_samples":meter_samples,
+            "transaction_events":transaction_events,"diagnostic_events":diagnostic_events,
+            "rfid_cards":len(card_ids),
+            "vehicle_links":int(conn.execute("SELECT COUNT(*) FROM user_vehicles WHERE user_id=?",(uid,)).fetchone()[0] or 0),
+            "charge_point_links":int(conn.execute("SELECT COUNT(*) FROM user_charge_point_access WHERE user_id=?",(uid,)).fetchone()[0] or 0),
+        },
+        "card_ids":card_ids,"card_uids":id_tags,"transaction_ids":transaction_ids,
     }
-
 
 def _public_user_delete_check(check):
     if check is None:
         return None
-    hidden={"card_ids","card_uids","transaction_ids","grant_ids"}
+    hidden={"card_ids","card_uids","transaction_ids"}
     return {k:v for k,v in check.items() if k not in hidden}
-
 
 def user_delete_check(user_id):
     with _lock,_connect() as conn:
         return _public_user_delete_check(_user_delete_check_conn(conn,user_id))
 
+def _delete_user_core_links_conn(conn, uid, card_ids):
+    if card_ids:
+        marks=",".join("?" for _ in card_ids)
+        conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
+        conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
+    conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
+    conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
+    conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
+    conn.execute("DELETE FROM users WHERE id=?",(uid,))
 
 def delete_user_permanently(user_id):
     with _lock,_connect() as conn:
@@ -3077,100 +3020,41 @@ def delete_user_permanently(user_id):
             return False,"not_found",None
         if not check["can_delete"]:
             return False,"history",_public_user_delete_check(check)
-
-        uid=int(user_id)
-        card_ids=list(check.get("card_ids") or [])
-        card_uids=list(check.get("card_uids") or [])
+        uid=int(user_id); card_ids=list(check.get("card_ids") or []); card_uids=list(check.get("card_uids") or [])
         try:
-            if card_ids:
-                marks=",".join("?" for _ in card_ids)
-                conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
-                conn.execute(f"DELETE FROM rfid_replacement_requests WHERE card_id IN ({marks}) OR user_id=?",card_ids+[uid])
-                conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
-            else:
-                conn.execute("DELETE FROM rfid_replacement_requests WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_sessions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_pin_reset_tokens WHERE user_id=?",(uid,))
-            conn.execute("UPDATE portal_pin_reset_requests SET user_id=NULL WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
-            conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM users WHERE id=?",(uid,))
-            if card_uids:
-                _rfid_local_list_bump_conn(conn,card_uids)
+            _delete_user_core_links_conn(conn,uid,card_ids)
+            if card_uids: _rfid_local_list_bump_conn(conn,card_uids)
             conn.commit()
         except Exception:
-            conn.rollback()
-            raise
+            conn.rollback(); raise
         return True,"deleted",_public_user_delete_check(check)
 
-
 def purge_user_with_history(user_id):
-    """Destructive admin-only cleanup for explicit test/error data.
-
-    The caller must provide its own authorization and confirmation. Active charging
-    sessions and cross-user bonus transfers deliberately block this operation.
-    """
+    """Destructive admin-only cleanup for explicit test/error data."""
     with _lock,_connect() as conn:
         check=_user_delete_check_conn(conn,user_id)
         if check is None:
             return False,"not_found",None
         if not check["can_purge"]:
             return False,"unsafe",_public_user_delete_check(check)
-
-        uid=int(user_id)
-        card_ids=list(check.get("card_ids") or [])
-        card_uids=list(check.get("card_uids") or [])
+        uid=int(user_id); card_ids=list(check.get("card_ids") or []); card_uids=list(check.get("card_uids") or [])
         transaction_ids=list(check.get("transaction_ids") or [])
         try:
             if transaction_ids:
                 marks=",".join("?" for _ in transaction_ids)
                 conn.execute(f"UPDATE charge_points SET transaction_id=NULL,power_kw=0 WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"UPDATE connectors SET transaction_id=NULL,power_kw=0 WHERE transaction_id IN ({marks})",transaction_ids)
-                conn.execute(f"DELETE FROM bonus_usage WHERE user_id=? OR transaction_id IN ({marks})",[uid]+transaction_ids)
                 conn.execute(f"DELETE FROM meter_samples WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM events WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM diagnostic_events WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"UPDATE diagnostic_states SET transaction_id=NULL WHERE transaction_id IN ({marks})",transaction_ids)
                 conn.execute(f"DELETE FROM transactions WHERE id IN ({marks})",transaction_ids)
-            else:
-                conn.execute("DELETE FROM bonus_usage WHERE user_id=?",(uid,))
-
-            conn.execute("DELETE FROM gamification_event_rewards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM gamification_event_results WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM bonus_voucher_redemptions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM bonus_grants WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM achievement_awards WHERE user_id=?",(uid,))
-
-            if card_ids:
-                marks=",".join("?" for _ in card_ids)
-                conn.execute(f"DELETE FROM rfid_card_events WHERE card_id IN ({marks})",card_ids)
-                conn.execute(f"DELETE FROM rfid_replacement_requests WHERE card_id IN ({marks}) OR user_id=?",card_ids+[uid])
-                conn.execute(f"UPDATE rfid_cards SET replacement_for_id=NULL WHERE replacement_for_id IN ({marks})",card_ids)
-            else:
-                conn.execute("DELETE FROM rfid_replacement_requests WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_cards WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_vehicles WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_charge_point_access WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM user_billing_groups WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_sessions WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM portal_pin_reset_tokens WHERE user_id=?",(uid,))
-            conn.execute("UPDATE portal_pin_reset_requests SET user_id=NULL WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM rfid_enrollment_sessions WHERE user_id=?",(uid,))
-            conn.execute("UPDATE access_requests SET user_id=NULL WHERE user_id=?",(uid,))
-            conn.execute("DELETE FROM users WHERE id=?",(uid,))
-            if card_uids:
-                _rfid_local_list_bump_conn(conn,card_uids)
+            _delete_user_core_links_conn(conn,uid,card_ids)
+            if card_uids: _rfid_local_list_bump_conn(conn,card_uids)
             conn.commit()
         except Exception:
-            conn.rollback()
-            raise
+            conn.rollback(); raise
         return True,"purged",_public_user_delete_check(check)
-
 
 def _rfid_log_event_conn(conn, card_id, event_type, old_status=None, new_status=None, note=None, source="admin"):
     conn.execute("INSERT INTO rfid_card_events(card_id,event_type,old_status,new_status,note,source,created_at) VALUES(?,?,?,?,?,?,?)",
@@ -3189,7 +3073,6 @@ def list_rfid_cards():
         rows=conn.execute("""SELECT r.*,u.name AS user_name,v.name AS vehicle_name,v.plate AS vehicle_plate,
             (SELECT COUNT(*) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS session_count,
             (SELECT COALESCE(SUM(t.energy_kwh),0) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS energy_kwh,
-            (SELECT COUNT(*) FROM rfid_replacement_requests q WHERE q.card_id=r.id AND q.status IN ('Offen','In Bearbeitung')) AS open_request_count,
             (SELECT id FROM rfid_cards n WHERE n.replacement_for_id=r.id ORDER BY n.id DESC LIMIT 1) AS replaced_by_id
             FROM rfid_cards r LEFT JOIN users u ON u.id=r.user_id LEFT JOIN vehicles v ON v.id=r.vehicle_id ORDER BY r.uid""").fetchall()
         return [dict(r) for r in rows]
@@ -3269,10 +3152,9 @@ def rfid_card_detail(card_id):
             FROM rfid_cards r LEFT JOIN users u ON u.id=r.user_id LEFT JOIN vehicles v ON v.id=r.vehicle_id WHERE r.id=?""",(card_id,)).fetchone()
         if not card:return None
         history=[dict(r) for r in conn.execute("SELECT * FROM rfid_card_events WHERE card_id=? ORDER BY id DESC LIMIT 50",(card_id,)).fetchall()]
-        requests=[dict(r) for r in conn.execute("SELECT * FROM rfid_replacement_requests WHERE card_id=? ORDER BY id DESC",(card_id,)).fetchall()]
         tx=[dict(r) for r in conn.execute("""SELECT id,started_at,ended_at,charge_point_id,connector_id,energy_kwh,status FROM transactions
             WHERE rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=(SELECT uid FROM rfid_cards WHERE id=?)) ORDER BY id DESC LIMIT 20""",(card_id,card_id)).fetchall()]
-        return {"card":dict(card),"history":history,"requests":requests,"transactions":tx}
+        return {"card":dict(card),"history":history,"transactions":tx}
 
 
 def replace_rfid_card(card_id,new_uid,label=None,expires_at=None,notes=None,source="admin"):
@@ -3291,11 +3173,6 @@ def replace_rfid_card(card_id,new_uid,label=None,expires_at=None,notes=None,sour
         _rfid_log_event_conn(conn,card_id,"replaced",old["status"],"Ersetzt",f"Ersetzt durch Karte #{new_id}",source)
         _rfid_log_event_conn(conn,new_id,"created",None,"Aktiv",f"Ersatz für Karte #{card_id}",source)
         _rfid_local_list_bump_conn(conn,[old["uid"],new_uid])
-        open_req_ids=[int(r[0]) for r in conn.execute("SELECT id FROM rfid_replacement_requests WHERE card_id=? AND status IN ('Offen','In Bearbeitung')",(card_id,)).fetchall()]
-        conn.execute("""UPDATE rfid_replacement_requests SET status='Erledigt',updated_at=?,resolved_at=?,resolution_note=COALESCE(resolution_note,'Ersatzkarte ausgegeben')
-            WHERE card_id=? AND status IN ('Offen','In Bearbeitung')""",(now,now,card_id))
-        for rid in open_req_ids:
-            conn.execute("UPDATE notifications SET active=0 WHERE notification_key=?",(f"rfid-request:{rid}",))
         conn.commit();return new_id
 
 
@@ -3348,19 +3225,9 @@ def user_monthly_budget(user_id, now=None):
         limit_value=user["monthly_kwh_limit"]
         mode=user["monthly_limit_mode"] or "warn"
         state=_budget_status(limit_value,used,mode)
-        bonus=_bonus_wallet_conn(conn,user_id,now=now)
-        # A hard monthly limit blocks only when both the regular monthly budget
-        # and all valid bonus kWh are exhausted. Bonus never lowers the regular
-        # progress bar: the monthly budget is consumed first, then FEFO bonus.
-        if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-            state["blocked"]=False
-            state["status"]="bonus"
-            state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
-        base_used=used if limit_value is None else min(max(0.0,used),max(0.0,float(limit_value)))
         return {
             "month":month_key,"limit_kwh":None if limit_value is None else float(limit_value),
-            "used_kwh":round(used,3),"base_used_kwh":round(base_used,3),"mode":mode,
-            "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"],**state
+            "used_kwh":round(used,3),"mode":mode,**state
         }
 
 def user_budget_summary(now=None):
@@ -3371,10 +3238,8 @@ def user_budget_summary(now=None):
         for user in users:
             used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
             state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
-            bonus=_bonus_wallet_conn(conn,user["id"],now=now)
-            effective_blocked=bool(state["blocked"] and bonus["available_kwh"] <= 1e-9)
             if state["status"] == "unlimited": summary["unlimited"] += 1
-            elif effective_blocked: summary["blocked"] += 1
+            elif state["blocked"]: summary["blocked"] += 1
             elif (state["percent"] or 0) >= 70: summary["warning"] += 1
             else: summary["ok"] += 1
         return summary
@@ -3580,8 +3445,6 @@ def user_analytics(user_id, now=None):
 
 
 
-_PORTAL_MONTH_NAMES = ["Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"]
-
 def charge_point_analytics(cp_id, now=None):
     with _lock,_connect() as conn:
         cp=conn.execute("SELECT connector_count FROM charge_points WHERE id=?",(cp_id,)).fetchone()
@@ -3604,8 +3467,6 @@ def list_users_rich():
         result=[]
         for row in rows:
             item=dict(row)
-            item.pop("portal_pin_hash", None)
-            item["portal_pin_set"] = bool(item.get("portal_pin_set_at"))
             item["charge_access_mode"]=_normalize_charge_access_mode(item.get("charge_access_mode"))
             item["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(item["id"],)).fetchall()]
             cost_row=conn.execute("""SELECT COALESCE(SUM(COALESCE(t.cost_cents,0)),0)
@@ -3614,16 +3475,12 @@ def list_users_rich():
             item["costs"]=round(float((cost_row or [0])[0] or 0)/100.0,2)
             used=_user_month_energy_conn(conn,item["id"],start_utc,end_utc)
             state=_budget_status(item.get("monthly_kwh_limit"),used,item.get("monthly_limit_mode") or "warn")
-            bonus=_bonus_wallet_conn(conn,item["id"])
-            if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                state["blocked"]=False; state["status"]="bonus"; state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
             item.update({
                 "budget_month":month_key,"month_energy_kwh":round(used,3),
                 "monthly_limit_kwh":None if item.get("monthly_kwh_limit") is None else float(item.get("monthly_kwh_limit")),
                 "monthly_limit_mode":item.get("monthly_limit_mode") or "warn",
                 "budget_status":state["status"],"status_label":state["status_label"],
-                "percent":state["percent"],"remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"],
-                "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"]
+                "percent":state["percent"],"remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"]
             })
             result.append(item)
         return result
@@ -3679,8 +3536,6 @@ def user_details(user_id, transaction_page=1, transaction_page_size=10):
             tx["timing"]=_transaction_time_breakdown_conn(conn,int(tx["id"])) or {"charging_seconds":float(tx.get("charging_seconds") or 0),"stand_seconds":float(tx.get("stand_seconds") or 0),"connection_seconds":float(tx.get("connection_seconds") or 0)}
         st=conn.execute("""SELECT COUNT(*) sessions,COALESCE(SUM(energy_kwh),0) energy,COALESCE(SUM(COALESCE(cost_cents,0)),0)/100.0 costs,MAX(started_at) last_used_at FROM transactions WHERE user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?)))""",(user_id,user_id,user_id)).fetchone()
         user=dict(u)
-        user.pop("portal_pin_hash", None)
-        user["portal_pin_set"] = bool(user.get("portal_pin_set_at"))
         user["charge_access_mode"]=_normalize_charge_access_mode(user.get("charge_access_mode"))
         user["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(int(user_id),)).fetchall()]
         used=_user_month_energy_conn(conn,user_id,start_utc,end_utc)
@@ -3784,7 +3639,7 @@ def list_charge_points_admin(include_retired=True):
             cp["connectors"] = [dict(r) for r in conn.execute("SELECT * FROM connectors WHERE charge_point_id=? ORDER BY connector_id", (cp["id"],)).fetchall()]
         return rows
 
-def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number=None, firmware=None, ocpp_version="1.6J", location=None, connector_count=1, connector_type="Type 2", max_power_kw=22, notes=None, rfid_self_enroll_mode="auto"):
+def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number=None, firmware=None, ocpp_version="1.6J", location=None, connector_count=1, connector_type="Type 2", max_power_kw=22, notes=None):
     cp_id = (cp_id or "").strip()
     if not cp_id:
         raise ValueError("Charge Point ID darf nicht leer sein")
@@ -3807,7 +3662,7 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
         conn.execute(
             """INSERT INTO charge_points(
                 id,vendor,model,serial_number,firmware,status,last_seen,power_kw,energy_kwh,
-                connector_count,max_power_kw,simulated,location,connector_type,ocpp_version,notes,rfid_self_enroll_mode,retired,source_type
+                connector_count,max_power_kw,simulated,location,connector_type,ocpp_version,notes,retired,source_type
             ) VALUES(?,?,?,?,?,'Unknown',NULL,0,0,?,?,0,?,?,?,?,?,0,?)""",
             (cp_id, vendor, model, serial_number, firmware, count, maxkw, location, connector_type or "Type 2", ocpp_version or "1.6J", notes, enroll_mode, 'manual')
         )
@@ -3820,7 +3675,7 @@ def create_charge_point(cp_id, name=None, vendor=None, model=None, serial_number
         return True
 
 def update_charge_point(cp_id, **fields):
-    allowed={"vendor","model","serial_number","firmware","ocpp_version","location","connector_type","max_power_kw","connector_count","notes","rfid_self_enroll_mode"}
+    allowed={"vendor","model","serial_number","firmware","ocpp_version","location","connector_type","max_power_kw","connector_count","notes"}
     if "rfid_self_enroll_mode" in fields:
         mode=str(fields.get("rfid_self_enroll_mode") or "auto").strip().lower()
         if mode not in {"auto","enabled","disabled"}: raise ValueError("Ungültiger RFID-Self-Service-Modus")
@@ -4525,13 +4380,10 @@ def sync_notifications():
                 continue
             if pct >= 100:
                 threshold=100
-                bonus=_bonus_wallet_conn(conn,user["id"])
-                if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                    sev,title="warning","Monatsbudget verbraucht – Bonus aktiv"
-                elif state.get("blocked"):
+                if state.get("blocked"):
                     sev,title="critical","Monatslimit erreicht – Laden gesperrt"
                 else:
-                    sev,title="critical","Monatsbudget vollständig verbraucht"
+                    sev,title="critical","Monatslimit vollständig erreicht"
             elif pct >= 90:
                 threshold=90; sev,title="warning","Monatsbudget bei mindestens 90 %"
             else:
@@ -5058,92 +4910,55 @@ def _report_row_amounts(row):
     return energy, (int(cost) if cost is not None else None)
 
 
-def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, charge_point_id=None, cost_center=None, billing_group_id=None):
-    """Return immutable accounting/reporting data from completed transactions.
-
-    Tariff, billing group and cost-center values are intentionally read from the
-    transaction snapshot. Later tariff changes therefore do not rewrite old
-    accounting periods.
-    """
+def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, charge_point_id=None):
+    """Return immutable Community reporting data from completed transactions."""
     with _lock, _connect() as conn:
-        clauses=["t.ended_at IS NOT NULL", "COALESCE(t.status,'') <> 'Active'"]
-        params=[]
-        if start_at:
-            clauses.append("t.started_at >= ?"); params.append(start_at)
-        if end_at:
-            clauses.append("t.started_at < ?"); params.append(end_at)
-        if user_id is not None:
-            clauses.append("t.user_id = ?"); params.append(int(user_id))
-        if vehicle_id is not None:
-            clauses.append("t.vehicle_id = ?"); params.append(int(vehicle_id))
-        if charge_point_id:
-            clauses.append("t.charge_point_id = ?"); params.append(str(charge_point_id))
-        if cost_center == "__none__":
-            clauses.append("COALESCE(TRIM(t.cost_center),'') = ''")
-        elif cost_center:
-            clauses.append("t.cost_center = ?"); params.append(str(cost_center))
-        if billing_group_id == "__none__":
-            clauses.append("t.billing_group_id IS NULL")
-        elif billing_group_id is not None:
-            clauses.append("t.billing_group_id = ?"); params.append(int(billing_group_id))
+        clauses=["t.ended_at IS NOT NULL", "COALESCE(t.status,'') <> 'Active'"]; params=[]
+        if start_at: clauses.append("t.started_at >= ?"); params.append(start_at)
+        if end_at: clauses.append("t.started_at < ?"); params.append(end_at)
+        if user_id is not None: clauses.append("t.user_id = ?"); params.append(int(user_id))
+        if vehicle_id is not None: clauses.append("t.vehicle_id = ?"); params.append(int(vehicle_id))
+        if charge_point_id: clauses.append("t.charge_point_id = ?"); params.append(str(charge_point_id))
         where=" AND ".join(clauses)
         rows=[dict(r) for r in conn.execute(f"""
             SELECT t.id,t.started_at,t.ended_at,t.charge_point_id,t.connector_id,t.energy_kwh,
                    t.charging_seconds,t.stand_seconds,t.connection_seconds,t.user_id,t.vehicle_id,
-                   t.tariff_name,t.tariff_source,t.price_cents_per_kwh,t.cost_cents,t.cost_center,
-                   t.billing_group_id,t.billing_group_name,t.import_source,t.timing_quality,
+                   t.tariff_name,t.tariff_source,t.price_cents_per_kwh,t.cost_cents,t.timing_quality,
                    u.name AS user_name,u.department AS user_department,
                    v.name AS vehicle_name,v.plate AS vehicle_plate
-              FROM transactions t
-              LEFT JOIN users u ON u.id=t.user_id
+              FROM transactions t LEFT JOIN users u ON u.id=t.user_id
               LEFT JOIN vehicles v ON v.id=t.vehicle_id
-             WHERE {where}
-             ORDER BY t.started_at DESC,t.id DESC
+             WHERE {where} ORDER BY t.started_at DESC,t.id DESC
         """, params).fetchall()]
 
         def aggregate(items):
-            sessions=len(items)
-            energy=round(sum(float(x.get("energy_kwh") or 0) for x in items),3)
+            sessions=len(items); energy=round(sum(float(x.get("energy_kwh") or 0) for x in items),3)
             known=[x for x in items if x.get("cost_cents") is not None]
-            known_energy=sum(float(x.get("energy_kwh") or 0) for x in known)
-            cost_cents=sum(int(x.get("cost_cents") or 0) for x in known)
-            charging=sum(float(x.get("charging_seconds") or 0) for x in items)
-            connection=sum(float(x.get("connection_seconds") or 0) for x in items)
-            stand=sum(float(x.get("stand_seconds") or 0) for x in items)
-            return {
-                "sessions":sessions,"energy_kwh":round(energy,2),"cost_cents":cost_cents,"cost_eur":round(cost_cents/100.0,2),
+            known_energy=sum(float(x.get("energy_kwh") or 0) for x in known); cost_cents=sum(int(x.get("cost_cents") or 0) for x in known)
+            charging=sum(float(x.get("charging_seconds") or 0) for x in items); connection=sum(float(x.get("connection_seconds") or 0) for x in items); stand=sum(float(x.get("stand_seconds") or 0) for x in items)
+            return {"sessions":sessions,"energy_kwh":round(energy,2),"cost_cents":cost_cents,"cost_eur":round(cost_cents/100.0,2),
                 "cost_known_sessions":len(known),"cost_missing_sessions":sessions-len(known),
                 "cost_coverage_pct":round(len(known)/sessions*100.0,1) if sessions else 100.0,
-                "known_cost_energy_kwh":round(known_energy,2),
-                "avg_price_cents_per_kwh":round(cost_cents/known_energy,2) if known_energy>0 else None,
+                "known_cost_energy_kwh":round(known_energy,2),"avg_price_cents_per_kwh":round(cost_cents/known_energy,2) if known_energy>0 else None,
                 "avg_energy_kwh":round(energy/sessions,2) if sessions else 0.0,
-                "charging_hours":round(charging/3600.0,2),"connection_hours":round(connection/3600.0,2),"stand_hours":round(stand/3600.0,2),
-            }
+                "charging_hours":round(charging/3600.0,2),"connection_hours":round(connection/3600.0,2),"stand_hours":round(stand/3600.0,2)}
 
-        def group_by(key_fn, label_fn=None):
+        def group_by(key_fn,label_fn):
             groups={}
             for row in rows:
-                key=key_fn(row)
-                label=label_fn(row) if label_fn else key
-                bucket=groups.setdefault(str(key),{"key":key,"label":label,"rows":[]})
-                bucket["rows"].append(row)
+                key=key_fn(row); groups.setdefault(str(key),{"key":key,"label":label_fn(row),"rows":[]})["rows"].append(row)
             result=[]
             for bucket in groups.values():
-                item={"key":bucket["key"],"label":bucket["label"]}
-                item.update(aggregate(bucket["rows"]))
-                result.append(item)
+                item={"key":bucket["key"],"label":bucket["label"]}; item.update(aggregate(bucket["rows"])); result.append(item)
             result.sort(key=lambda x:(-float(x.get("cost_cents") or 0),-float(x.get("energy_kwh") or 0),str(x.get("label") or "").lower()))
             return result
 
-        berlin=ZoneInfo("Europe/Berlin")
-        monthly={}
+        berlin=ZoneInfo("Europe/Berlin"); monthly={}
         for row in rows:
             dt=_parse_iso_utc(row.get("started_at"))
             if not dt: continue
-            local=dt.astimezone(berlin)
-            key=local.strftime("%Y-%m")
-            bucket=monthly.setdefault(key,{"key":key,"label":local.strftime("%m/%Y"),"rows":[]})
-            bucket["rows"].append(row)
+            local=dt.astimezone(berlin); key=local.strftime("%Y-%m")
+            monthly.setdefault(key,{"key":key,"label":local.strftime("%m/%Y"),"rows":[]})["rows"].append(row)
         by_month=[]
         for key in sorted(monthly):
             bucket=monthly[key]; item={"key":key,"label":bucket["label"]}; item.update(aggregate(bucket["rows"])); by_month.append(item)
@@ -5151,26 +4966,14 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
         summary=aggregate(rows)
         summary["unassigned_user_sessions"]=sum(1 for x in rows if x.get("user_id") is None)
         summary["unassigned_vehicle_sessions"]=sum(1 for x in rows if x.get("vehicle_id") is None)
-        summary["unassigned_cost_center_sessions"]=sum(1 for x in rows if not str(x.get("cost_center") or "").strip())
-
-        options={
-            "users":[dict(r) for r in conn.execute("SELECT id,name FROM users ORDER BY name COLLATE NOCASE").fetchall()],
-            "vehicles":[dict(r) for r in conn.execute("SELECT id,name,plate FROM vehicles WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
-            "charge_points":[dict(r) for r in conn.execute("SELECT id FROM charge_points WHERE COALESCE(ignored,0)=0 AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0 ORDER BY id COLLATE NOCASE").fetchall()],
-            "cost_centers":[r[0] for r in conn.execute("SELECT DISTINCT cost_center FROM transactions WHERE COALESCE(TRIM(cost_center),'')<>'' ORDER BY cost_center COLLATE NOCASE").fetchall()],
-            "billing_groups":[dict(r) for r in conn.execute("SELECT id,name,cost_center FROM billing_groups WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
-        }
-        return {
-            "summary":summary,
-            "by_user":group_by(lambda x:x.get("user_id") if x.get("user_id") is not None else "unassigned", lambda x:x.get("user_name") or "Nicht zugeordnet"),
-            "by_vehicle":group_by(lambda x:x.get("vehicle_id") if x.get("vehicle_id") is not None else "unassigned", lambda x:(x.get("vehicle_name") or "Nicht zugeordnet") + ((" · "+x.get("vehicle_plate")) if x.get("vehicle_plate") else "")),
-            "by_charge_point":group_by(lambda x:x.get("charge_point_id") or "unassigned", lambda x:x.get("charge_point_id") or "Nicht zugeordnet"),
-            "by_cost_center":group_by(lambda x:x.get("cost_center") or "__none__", lambda x:x.get("cost_center") or "Ohne Kostenstelle"),
-            "by_billing_group":group_by(lambda x:x.get("billing_group_id") if x.get("billing_group_id") is not None else "unassigned", lambda x:x.get("billing_group_name") or "Ohne Abrechnungsgruppe"),
-            "by_month":by_month,
-            "transactions":rows,
-            "options":options,
-        }
+        options={"users":[dict(r) for r in conn.execute("SELECT id,name FROM users ORDER BY name COLLATE NOCASE").fetchall()],
+                 "vehicles":[dict(r) for r in conn.execute("SELECT id,name,plate FROM vehicles WHERE active=1 ORDER BY name COLLATE NOCASE").fetchall()],
+                 "charge_points":[dict(r) for r in conn.execute("SELECT id FROM charge_points WHERE COALESCE(ignored,0)=0 AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0 ORDER BY id COLLATE NOCASE").fetchall()]}
+        return {"summary":summary,
+            "by_user":group_by(lambda x:x.get("user_id") if x.get("user_id") is not None else "unassigned",lambda x:x.get("user_name") or "Nicht zugeordnet"),
+            "by_vehicle":group_by(lambda x:x.get("vehicle_id") if x.get("vehicle_id") is not None else "unassigned",lambda x:(x.get("vehicle_name") or "Nicht zugeordnet")+((" · "+x.get("vehicle_plate")) if x.get("vehicle_plate") else "")),
+            "by_charge_point":group_by(lambda x:x.get("charge_point_id") or "unassigned",lambda x:x.get("charge_point_id") or "Nicht zugeordnet"),
+            "by_month":by_month,"transactions":rows,"options":options}
 
 # V0.9.7.9 - production security / OCPP access protection
 OCPP_SECRET_ITERATIONS = 260000
