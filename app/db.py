@@ -4553,7 +4553,6 @@ BRANDING_DEFAULTS = {
     "organization_name":"Ihre Organisation",
     "display_name":"VoltCore Community",
     "product_subtitle":"Community Edition · OCPP Charging Management",
-    "voucher_prefix":"VOLT",
     "primary_color":"#2563eb",
     "logo_light_url":"",
     "logo_dark_url":"",
