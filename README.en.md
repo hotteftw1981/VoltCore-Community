@@ -45,6 +45,8 @@ It covers requirements, startup, ports, persistent data, updates, backup notes a
 
 ## ⚡ Community scope
 
+> **Backend-only:** VoltCore Community provides the administrative backend only. There is no personal charging portal, PIN login, public user registration, or RFID self-service for charging users.
+
 The Community edition includes, among other things:
 
 - 🔌 OCPP 1.6J
