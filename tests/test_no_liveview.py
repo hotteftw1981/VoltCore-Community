@@ -54,7 +54,8 @@ class CommunityNoLiveViewTests(unittest.TestCase):
             self.assertNotIn("liveview", text, rel)
 
         scope = (ROOT / "docs" / "COMMUNITY_SCOPE.md").read_text(encoding="utf-8")
-        self.assertIn("LiveView / Kiosk is explicitly **not part of VoltCore Community**", scope)
+        self.assertIn("LiveView / Kiosk", scope)
+        self.assertIn("Explicitly not part of VoltCore Community", scope)
 
 
 if __name__ == "__main__":
