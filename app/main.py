@@ -498,7 +498,7 @@ async def first_run_submit(request: Request):
     organization=str(form.get("organization_name") or "").strip()
     display_name=str(form.get("display_name") or "").strip()
     if not organization or not display_name:
-        return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error="Organisation und Anzeigename sind erforderlich.")
+        return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error="Name der Installation und Anzeigename sind erforderlich.")
     try:
         db.set_setting("branding_organization_name",organization[:120])
         db.set_setting("branding_display_name",display_name[:120])
@@ -2432,7 +2432,7 @@ async def delete_user_permanent(request:Request,user_id:int):
             target.unlink()
     _schedule_local_list_sync("Ladebenutzer endgültig gelöscht")
     auth=getattr(request.state,"auth_user",None) or {}
-    db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebenutzer endgültig gelöscht",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details="Keine schützenswerte Lade-/Bonus-/Eventhistorie vorhanden; Stammdaten und technische Zuordnungen entfernt")
+    db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebenutzer endgültig gelöscht",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details="Keine schützenswerte Ladehistorie vorhanden; Stammdaten und technische Zuordnungen entfernt")
     return {"ok":True,"mode":"deleted","removed":(check or {}).get("removable",{})}
 
 class UserHistoryPurgePayload(BaseModel):
