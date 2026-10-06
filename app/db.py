@@ -1141,18 +1141,13 @@ def init_db():
         now_setting=utc_now()
         for key,value in (("ocpp_auth_mode","off"),("ocpp_reject_unknown","0"),("ocpp_require_tls","0"),("ocpp_require_subprotocol","0"),
                           ("rfid_local_list_version","1"),
-                          ("registration_enabled","0"),("registration_reference_hours","39"),("registration_reference_kwh","0"),
+                          ("registration_enabled","0"),("registration_reference_kwh","0"),
                           ("registration_limit_mode","warn"),("registration_budget_mode","fixed")):
             conn.execute("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES(?,?,?)",(key,value,now_setting))
         current_local_version=int((conn.execute("SELECT value FROM app_settings WHERE key='rfid_local_list_version'").fetchone() or [1])[0] or 1)
 
-        # V0.9.7.62: All existing charging history belongs to the monthly free
-        # allowance. Reset historical billing amounts exactly once; tariff price
-        # snapshots stay intact for traceability.
-        cost_reset=conn.execute("SELECT value FROM app_settings WHERE key='cost_allowance_reset_v09762'").fetchone()
-        if not cost_reset:
-            conn.execute("UPDATE transactions SET cost_cents=0")
-            conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES('cost_allowance_reset_v09762','1',?)",(now_setting,))
+        # Community does not rewrite historical billing data during initialization.
+        # Existing transaction costs and tariff snapshots are preserved verbatim.
 
         conn.execute("""INSERT OR IGNORE INTO charge_point_local_list_state(charge_point_id,backend_version,pending,status)
             SELECT id,?,1,'Ausstehend' FROM charge_points WHERE COALESCE(onboarded,1)=1 AND COALESCE(ignored,0)=0 AND COALESCE(retired,0)=0 AND COALESCE(archived,0)=0""",(current_local_version,))
@@ -1174,15 +1169,8 @@ def init_db():
         for code in sorted(known_cost_centers,key=str.casefold):
             conn.execute("INSERT OR IGNORE INTO cost_centers(code,name,active,created_at,updated_at) VALUES(?,?,1,?,?)",(code,code,now_cc,now_cc))
 
-        if conn.execute("SELECT COUNT(*) FROM load_rules").fetchone()[0] == 0:
-            conn.executemany(
-                "INSERT INTO load_rules(name,condition_text,action_text,priority) VALUES(?,?,?,?)",
-                [
-                    ("Gesamtlast begrenzen", "Wenn Standortlast > 120 kW", "Leistung dynamisch verteilen", "Hoch"),
-                    ("Einsatzfahrzeuge priorisieren", "Wenn Einsatzfahrzeug lädt", "Mindestleistung reservieren", "Höchste"),
-                    ("Nachtladung", "22:00 - 06:00 Uhr", "Freie Leistung bevorzugt nutzen", "Normal"),
-                ],
-            )
+        # Fresh Community installations start without organization-specific
+        # load-management rules. Administrators can define rules for their site.
         conn.commit()
 
 
