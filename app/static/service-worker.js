@@ -1,5 +1,5 @@
 const CACHE='ocpp-pwa-v74';
-const STATIC=['/static/pwa-icon-192.png','/static/pwa-icon-512.png'];
+const STATIC=['/static/branding/voltcore-community-app-icon.svg','/static/branding/voltcore-community-app-icon.svg'];
 self.addEventListener('install',event=>{event.waitUntil(caches.open(CACHE).then(c=>c.addAll(STATIC)));self.skipWaiting()});
 self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))));self.clients.claim()});
 self.addEventListener('fetch',event=>{
@@ -18,8 +18,8 @@ self.addEventListener('push',event=>{
   const title=data.title||data.product||'VoltCore';
   const options={
     body:data.body||'',
-    icon:data.icon||'/static/pwa-icon-192.png',
-    badge:data.badge||'/static/pwa-icon-192.png',
+    icon:data.icon||'/static/branding/voltcore-community-app-icon.svg',
+    badge:data.badge||'/static/branding/voltcore-community-app-icon.svg',
     tag:data.tag||'voltcore-notification',
     renotify:data.severity==='critical'||data.severity==='warning',
     data:{url:data.url||'/'}
