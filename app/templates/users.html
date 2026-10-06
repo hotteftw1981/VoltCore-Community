@@ -71,6 +71,17 @@
         <div id="chargePointAccessList" class="form-grid" hidden></div>
         <small class="budget-help" id="chargeAccessHint">Alle aktuellen und zukünftigen Ladepunkte sind freigegeben.</small>
       </div>
+      {% if auth_user and auth_user.role == 'admin' %}
+      <div class="portal-admin-card">
+        <div class="budget-form-head"><div><strong>Persönlicher Ladeportal-Zugang</strong><small>6-stellige PIN für den privaten Self-Service-Bereich.</small></div><span id="portalStatus" class="state muted">Nicht eingerichtet</span></div>
+        <div class="portal-pin-row">
+          <label>Neue PIN<input id="portalPinInput" type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 Ziffern" autocomplete="new-password"></label>
+          <button class="secondary" id="setPortalPin" type="button">PIN setzen</button>
+          <button class="danger-outline" id="togglePortalEnabled" type="button">Portal deaktivieren</button>
+        </div>
+        <small class="budget-help">Die PIN wird ausschließlich als sicherer Hash gespeichert. Bei vergessener PIN kann der Benutzer den Reset per E-Mail auslösen.</small>
+      </div>
+      {% endif %}
       <div class="form-actions"><button class="secondary" id="cancelUser" type="button">Abbrechen</button><button class="primary write-action" type="submit">Speichern</button></div>
     </form>
   </div>
@@ -164,12 +175,48 @@ function fillUser(v){
   $('userId').value=v?.id||'';$('userName').value=v?.name||'';$('userRole').value=v?.role||'Fahrer';$('department').value=v?.department||'';$('userStatus').value=v?.status||'Aktiv';$('email').value=v?.email||'';$('phone').value=v?.phone||'';$('budgetSource').value='manual';
   const unlimited=v?.monthly_kwh_limit==null && v?.monthly_limit_kwh==null;$('budgetUnlimited').checked=unlimited;$('monthlyKwhLimit').value=unlimited?'':(v?.monthly_kwh_limit??v?.monthly_limit_kwh??'');$('monthlyLimitMode').value=v?.monthly_limit_mode||'warn';toggleBudgetInput();
   $('chargeAccessMode').value=v?.charge_access_mode==='selected'?'selected':'all';renderChargePointAccess(v?.allowed_charge_point_ids||[]);
+  loadPortalStatus(v?.id||0);
+}
+async function loadPortalStatus(id){
+  if(!$('portalStatus'))return;
+  if(!id){
+    $('portalStatus').className='state muted';
+    $('portalStatus').textContent='Nach dem Speichern einrichten';
+    $('togglePortalEnabled').disabled=true;
+    return;
+  }
+  try{
+    const r=await fetch('/api/portal-admin/users/'+id);
+    if(!r.ok)throw new Error();
+    const d=await r.json();
+    $('portalStatus').className='state '+(d.portal_enabled?'green':'muted');
+    $('portalStatus').textContent=d.portal_enabled?(d.portal_pin_set?'Aktiv · PIN gesetzt':'Aktiv · PIN fehlt'):'Deaktiviert';
+    $('togglePortalEnabled').disabled=false;
+    $('togglePortalEnabled').textContent=d.portal_enabled?'Portal deaktivieren':'Portal aktivieren';
+    $('togglePortalEnabled').dataset.enabled=d.portal_enabled?'1':'0';
+  }catch(_){
+    $('portalStatus').className='state muted';
+    $('portalStatus').textContent='Status nicht verfügbar';
+  }
+}
+async function setPortalPin(){
+  const id=Number($('userId').value||0);
+  if(!id)return showToast('Benutzer zuerst speichern.','error');
+  const pin=$('portalPinInput').value.trim();
+  if(!/^\d{6}$/.test(pin))return showToast('Bitte genau 6 Ziffern eingeben.','error');
+  const r=await fetch('/api/portal-admin/users/'+id+'/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin,enabled:true})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)return showToast(d.detail||'PIN konnte nicht gesetzt werden.','error');
+  $('portalPinInput').value='';
+  await loadPortalStatus(id);
+  await load();
+  showToast('Portal-PIN gespeichert.');
 }
 function renderUsers(){
   $('userGrid').innerHTML=users.map(u=>{
     const pct=budgetPercent(u), cls=budgetClass(u.budget_status); const bstatus=u.status_label||'Im Limit';
     return `<article class="user-card clickable" data-user="${u.id}">
-      <div class="user-card-top"><div class="avatar user-photo-small">${u.image_path?`<img src="${esc(u.image_path)}" alt="">`:esc((u.name||'?').slice(0,1).toUpperCase())}</div><div class="user-main"><h2>${esc(u.name)}</h2><p>${esc(u.role||'Fahrer')} · ${esc(u.department||'Keine Abteilung')}</p></div><div class="user-card-states"><span class="state ${u.status==='Aktiv'?'green':''}">${esc(u.status||'Aktiv')}</span>${u.charge_access_mode==='selected'?(`<span class="state warn">${Number((u.allowed_charge_point_ids||[]).length)} Ladepunkt${Number((u.allowed_charge_point_ids||[]).length)===1?'':'e'}</span>`):'<span class="state green">Alle Ladepunkte</span>'}</div></div>
+      <div class="user-card-top"><div class="avatar user-photo-small">${u.image_path?`<img src="${esc(u.image_path)}" alt="">`:esc((u.name||'?').slice(0,1).toUpperCase())}</div><div class="user-main"><h2>${esc(u.name)}</h2><p>${esc(u.role||'Fahrer')} · ${esc(u.department||'Keine Abteilung')}</p></div><div class="user-card-states"><span class="state ${u.status==='Aktiv'?'green':''}">${esc(u.status||'Aktiv')}</span>${u.portal_enabled?'<span class="state green">Portal</span>':''}${u.charge_access_mode==='selected'?(`<span class="state warn">${Number((u.allowed_charge_point_ids||[]).length)} Ladepunkt${Number((u.allowed_charge_point_ids||[]).length)===1?'':'e'}</span>`):'<span class="state green">Alle Ladepunkte</span>'}</div></div>
       <div class="user-stats"><div><span>RFID</span><b>${u.rfid_count||0}</b></div><div><span>Fahrzeuge</span><b>${u.vehicle_count||0}</b></div><div><span>Sessions</span><b>${u.session_count||0}</b></div><div><span>Monat</span><b>${Number(u.month_energy_kwh||0).toFixed(1)} kWh</b></div><div><span>Gesamt</span><b>${Number(u.energy_kwh||0).toFixed(1)} kWh</b></div></div>
       <div class="budget-mini ${cls}"><div><span>Monatslimit</span><b>${esc(budgetLabel(u))}</b></div><span class="budget-status">${esc(bstatus)}</span>${u.percent==null?'':`<div class="budget-bar"><i style="width:${pct}%"></i></div><small>${Number(u.percent).toFixed(0)} % · ${Number(u.remaining_kwh||0).toFixed(1)} kWh verbleibend</small>`}</div>
       <div class="user-card-actions"><button class="secondary" type="button" data-action="details" data-id="${u.id}">Details</button><button class="secondary write-action" type="button" data-action="edit" data-id="${u.id}">Bearbeiten</button><button class="stop write-action" type="button" data-action="delete" data-id="${u.id}">Entfernen</button></div>
@@ -212,6 +259,15 @@ $('budgetUnlimited').onchange=toggleBudgetInput;$('chargeAccessMode').onchange=(
 $('addUser').onclick=()=>{fillUser();$('userModalTitle').textContent='Benutzer hinzufügen';openM('userModal');setTimeout(()=>$('userName').focus(),0)};
 $('addCard').onclick=()=>{fillCard();$('cardModalTitle').textContent='RFID-Karte hinzufügen';openM('cardModal');setTimeout(()=>$('cardUid').focus(),0)};
 $('userClose').onclick=()=>closeM('userModal');$('cancelUser').onclick=()=>closeM('userModal');$('cardClose').onclick=()=>closeM('cardModal');$('cancelCard').onclick=()=>closeM('cardModal');$('cardDetailClose').onclick=()=>closeM('cardDetailModal');$('replaceCardClose').onclick=()=>closeM('replaceCardModal');$('replaceCardCancel').onclick=()=>closeM('replaceCardModal');$('detailClose').onclick=()=>closeM('detailModal');$('deleteClose').onclick=()=>closeM('deleteModal');$('deleteCancel').onclick=()=>closeM('deleteModal');
+if($('setPortalPin'))$('setPortalPin').onclick=()=>setPortalPin();
+if($('togglePortalEnabled'))$('togglePortalEnabled').onclick=async()=>{
+  const id=Number($('userId').value||0);
+  if(!id)return showToast('Benutzer zuerst speichern.','error');
+  const enabled=$('togglePortalEnabled').dataset.enabled!=='1';
+  const r=await fetch('/api/portal-admin/users/'+id+'/enabled',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+  if(!r.ok)return showToast('Portalstatus konnte nicht geändert werden.','error');
+  await loadPortalStatus(id);await load();showToast(enabled?'Portal aktiviert':'Portal deaktiviert');
+};
 $('userForm').onsubmit=async e=>{e.preventDefault();const id=$('userId').value;const unlimited=$('budgetUnlimited').checked;const limitRaw=$('monthlyKwhLimit').value;const accessMode=$('chargeAccessMode').value,allowed=accessMode==='selected'?[...document.querySelectorAll('[data-charge-point-access]:checked')].map(x=>x.value):[];const p={name:$('userName').value.trim(),role:$('userRole').value,department:$('department').value.trim()||null,status:$('userStatus').value,email:$('email').value.trim()||null,phone:$('phone').value.trim()||null,monthly_kwh_limit:unlimited?null:(limitRaw===''?null:Number(limitRaw)),monthly_limit_mode:$('monthlyLimitMode').value,charge_access_mode:accessMode,allowed_charge_point_ids:allowed};const r=await fetch(id?'/api/users/'+id:'/api/users',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok){const d=await r.json().catch(()=>({}));return showToast(d.detail||'Benutzer konnte nicht gespeichert werden.','error')}closeM('userModal');await load()};
 $('cardForm').onsubmit=async e=>{e.preventDefault();const id=$('cardId').value,p={uid:$('cardUid').value.trim(),label:$('cardLabel').value.trim()||null,user_id:$('cardUser').value?Number($('cardUser').value):null,vehicle_id:$('cardVehicle').value?Number($('cardVehicle').value):null,status:$('cardStatus').value,expires_at:$('cardExpires').value||null,notes:$('cardNotes').value.trim()||null},r=await fetch(id?'/api/rfid/'+id:'/api/rfid',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});if(!r.ok){const d=await r.json().catch(()=>({}));return showToast(d.detail||'RFID-Karte konnte nicht gespeichert werden.','error')}closeM('cardModal');await load()};
 $('userGrid').onclick=e=>{const b=e.target.closest('[data-action]'),card=e.target.closest('[data-user]');if(b){e.stopPropagation();const id=Number(b.dataset.id),u=users.find(x=>x.id===id);if(b.dataset.action==='details')return showDetails(id);if(b.dataset.action==='edit'){fillUser(u);$('userModalTitle').textContent='Benutzer bearbeiten';return openM('userModal')}if(b.dataset.action==='delete')return openUserDelete(id)}if(card)showDetails(Number(card.dataset.user))};
