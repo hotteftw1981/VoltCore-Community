@@ -36,12 +36,14 @@ jobs:
         run: |
           set -o pipefail
           docker run --rm --entrypoint python -e DATA_DIR=/tmp/unit-data \
-            -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -v "$PWD:/work:ro" -w /work \
-            community-core-recovery -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee qa-evidence/unit-tests.txt
-      - name: Start isolated test instance
+            -v "$PWD:/work:ro" -w /work community-core-recovery \
+            -m unittest discover -s tests -p 'test_*.py' -v 2>&1 | tee qa-evidence/unit-tests.txt
+      - name: Start isolated test instance without external update requests
         run: |
+          python scripts/prepare_community_qa.py
           docker run -d --name community-core-recovery -p 127.0.0.1:18010:8000 \
-            -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -e COOKIE_SECURE=0 community-core-recovery
+            -v "$RUNNER_TEMP/community-runtime-data:/data" \
+            -e COOKIE_SECURE=0 community-core-recovery
       - name: Real first-run and API test
         shell: bash
         run: |
