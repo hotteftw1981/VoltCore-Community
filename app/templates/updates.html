@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Update-Center - {{ branding.product_name }}{% endblock %}
+{% block heading %}Update-Center{% endblock %}
+{% block subtitle %}Freigegebene Versionen erkennen, Changelog prüfen und kontrolliert installieren{% endblock %}
+{% block content %}
+<section class="stats three">
+  <div class="stat"><span>Installiert</span><b>V{{ app_version }}</b><small>aktueller Container</small></div>
+  <div class="stat"><span>Verfügbar</span><b id="latestVersion">—</b><small id="latestHint">Noch nicht geprüft</small></div>
+  <div class="stat"><span>Update-Status</span><b id="updateState">—</b><small id="lastCheck">—</small></div>
+</section>
+<section class="settings-grid">
+  <div class="panel">
+    <div class="panelhead"><div><h2>GitHub Release-Prüfung</h2><span>Privates Repository – Zugangsdaten bleiben ausschließlich unter /data.</span></div><span id="githubState" class="state">—</span></div>
+    <form id="updateSettingsForm">
+      <label class="toggle-line"><input id="checkEnabled" type="checkbox"><span><b>Automatisch nach freigegebenen Updates suchen</b><small>Alle sechs Stunden und zusätzlich beim Öffnen dieser Seite.</small></span></label>
+      <label>GitHub Fine-grained Token<input id="githubToken" type="password" autocomplete="new-password" placeholder="Leer lassen = vorhandenen Token beibehalten"></label>
+      <label class="toggle-line"><input id="clearGithubToken" type="checkbox"><span><b>Gespeicherten GitHub-Token entfernen</b></span></label>
+      <div class="detail-note">Der Token benötigt nur Lesezugriff auf <code>{{ update_repository }}</code>. Ein Schreib-Token ist nicht erforderlich.</div>
+      <h3 style="margin-top:22px">Ein-Klick-Installation über Portainer</h3>
+      <label>Portainer Stack-Webhook<input id="portainerWebhook" type="password" autocomplete="off" placeholder="https://portainer:9443/api/stacks/webhooks/..."></label>
+      <label class="toggle-line"><input id="clearPortainerWebhook" type="checkbox"><span><b>Gespeicherten Portainer-Webhook entfernen</b></span></label>
+      <label class="toggle-line"><input id="portainerTlsVerify" type="checkbox"><span><b>TLS-Zertifikat des Portainers prüfen</b><small>Nur bei internem selbstsigniertem Zertifikat deaktivieren.</small></span></label>
+      <div class="detail-note">Wenn deine Portainer-Installation Stack-Webhooks unterstützt, kann das Backend damit das exakt freigegebene GHCR-Image ziehen und den Stack neu starten. Ohne Webhook bleibt die Update-Erkennung vollständig nutzbar.</div>
+      <div id="settingsMessage" class="form-message"></div>
+      <div class="form-actions"><button class="secondary" id="checkNow" type="button">↻ Jetzt prüfen</button><button class="primary" type="submit">Einstellungen speichern</button></div>
+    </form>
+  </div>
+  <div class="panel">
+    <div class="panelhead"><div><h2 id="releaseTitle">Freigegebenes Update</h2><span id="releaseMeta">Noch keine Release-Daten geladen.</span></div><span id="releaseBadge" class="state">—</span></div>
+    <div id="releaseNotes" class="detail-note" style="white-space:pre-wrap;max-height:360px;overflow:auto">Nach der ersten erfolgreichen Prüfung erscheint hier der Changelog.</div>
+    <div class="detail-note" style="margin-top:14px"><b>Sicherheitsnetz:</b> Vor jeder Ein-Klick-Installation wird zwingend ein lokales Pre-Update-Backup erstellt. Erst danach wird Portainer zum Redeploy aufgefordert.</div>
+    <div id="installMessage" class="form-message"></div>
+    <div class="form-actions"><button id="installUpdate" class="primary" type="button" disabled>Update installieren</button></div>
+  </div>
+</section>
+<div class="modal" id="updateConfirmModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="updateConfirmTitle" style="max-width:560px">
+    <div class="panelhead modal-title-row">
+      <div><h2 id="updateConfirmTitle">Update installieren?</h2><span id="updateConfirmSubtitle">Bitte Vorgang bestätigen.</span></div>
+      <button class="modal-close" id="updateConfirmClose" type="button" aria-label="Schließen">&times;</button>
+    </div>
+    <div class="detail-note" style="margin-top:14px">
+      <b id="updateConfirmVersion">—</b><br>
+      Vor der Installation wird automatisch ein lokales Pre-Update-Backup erstellt. Anschließend startet Portainer den Stack neu; die Verbindung kann kurz unterbrochen werden.
+    </div>
+    <div class="form-actions" style="margin-top:18px">
+      <button class="secondary" id="updateConfirmCancel" type="button">Abbrechen</button>
+      <button class="primary" id="updateConfirmRun" type="button">Update jetzt installieren</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $=id=>document.getElementById(id);
+let statusData=null;
+const fmt=v=>v?window.ocppLocalTime(v):'—';
+function renderStatus(d){
+  statusData=d||{};
+  $('latestVersion').textContent=d.latest_version?('V'+d.latest_version):'—';
+  $('latestHint').textContent=d.release_name||d.message||'Noch nicht geprüft';
+  $('lastCheck').textContent=d.checked_at?('geprüft '+fmt(d.checked_at)):'noch nicht geprüft';
+  $('githubState').textContent=d.configured?'Verbunden':'Nicht eingerichtet';
+  $('githubState').className='state '+(d.configured?'green':'');
+  const available=!!d.update_available;
+  $('updateState').textContent=available?'Update verfügbar':(d.up_to_date?'Aktuell':(d.ahead_of_release?'Entwicklungsstand':'Nicht geprüft'));
+  $('releaseBadge').textContent=available?'Verfügbar':(d.latest_version?'Aktuell':'—');
+  $('releaseBadge').className='state '+(!available&&d.latest_version?'green':'');
+  $('releaseTitle').textContent=d.latest_version?('V'+d.latest_version):'Freigegebenes Update';
+  $('releaseMeta').textContent=[d.published_at?fmt(d.published_at):'',d.release_url?'GitHub Release':''].filter(Boolean).join(' · ')||'Noch keine Release-Daten geladen.';
+  $('releaseNotes').textContent=d.notes||d.message||'Nach der ersten erfolgreichen Prüfung erscheint hier der Changelog.';
+  $('installUpdate').disabled=!(available&&d.install_ready);
+  $('installUpdate').textContent=available?(d.install_ready?'V'+d.latest_version+' installieren':'Portainer-Webhook fehlt'):'Kein Update erforderlich';
+}
+async function loadSettings(){
+  const r=await fetch('/api/updates/settings',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(!r.ok)return;
+  $('checkEnabled').checked=!!d.check_enabled;$('portainerTlsVerify').checked=!!d.portainer_tls_verify;
+  $('githubState').textContent=d.github_token_configured?'Token gespeichert':'Token fehlt';$('githubState').className='state '+(d.github_token_configured?'green':'');
+  $('githubToken').placeholder=d.github_token_configured?'Token gespeichert – leer lassen zum Beibehalten':'GitHub Fine-grained Token';
+  $('portainerWebhook').placeholder=d.portainer_webhook_configured?'Webhook gespeichert – leer lassen zum Beibehalten':'https://portainer:9443/api/stacks/webhooks/...';
+}
+async function check(force=true){
+  const m=$('installMessage');m.textContent='Prüfe GitHub Release …';m.className='form-message';
+  const r=await fetch('/api/updates/status?force='+(force?'1':'0'),{cache:'no-store'}),d=await r.json().catch(()=>({}));
+  if(!r.ok){m.textContent=d.detail||'Update-Prüfung fehlgeschlagen.';m.className='form-message error';return}
+  m.textContent='';renderStatus(d);
+}
+$('updateSettingsForm').onsubmit=async e=>{
+  e.preventDefault();const m=$('settingsMessage');m.textContent='Speichere …';m.className='form-message';
+  const payload={check_enabled:$('checkEnabled').checked,github_token:$('githubToken').value||null,clear_github_token:$('clearGithubToken').checked,portainer_webhook:$('portainerWebhook').value||null,clear_portainer_webhook:$('clearPortainerWebhook').checked,portainer_tls_verify:$('portainerTlsVerify').checked};
+  const r=await fetch('/api/updates/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));
+  if(!r.ok){m.textContent=d.detail||'Einstellungen konnten nicht gespeichert werden.';m.className='form-message error';return}
+  $('githubToken').value='';$('portainerWebhook').value='';$('clearGithubToken').checked=false;$('clearPortainerWebhook').checked=false;
+  m.textContent='Update-Einstellungen gespeichert.';m.className='form-message success';await loadSettings();await check(true);
+};
+$('checkNow').onclick=()=>check(true);
+function closeUpdateConfirm(){$('updateConfirmModal').hidden=true}
+$('installUpdate').onclick=()=>{
+  const target=statusData?.latest_version;if(!target||!statusData?.update_available)return;
+  $('updateConfirmVersion').textContent='V{{ app_version }} → V'+target;
+  $('updateConfirmSubtitle').textContent='Freigegebenes Update V'+target;
+  $('updateConfirmModal').hidden=false;
+  $('updateConfirmRun').focus();
+};
+$('updateConfirmClose').onclick=closeUpdateConfirm;
+$('updateConfirmCancel').onclick=closeUpdateConfirm;
+$('updateConfirmModal').onclick=e=>{if(e.target===$('updateConfirmModal'))closeUpdateConfirm()};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('updateConfirmModal').hidden)closeUpdateConfirm()});
+$('updateConfirmRun').onclick=async()=>{
+  const target=statusData?.latest_version;if(!target||!statusData?.update_available)return closeUpdateConfirm();
+  closeUpdateConfirm();
+  const m=$('installMessage');m.textContent='Erstelle Pre-Update-Backup …';m.className='form-message';$('installUpdate').disabled=true;
+  const r=await fetch('/api/updates/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_version:target})}),d=await r.json().catch(()=>({}));
+  if(!r.ok){m.textContent=d.detail||'Update konnte nicht gestartet werden.';m.className='form-message error';$('installUpdate').disabled=false;return}
+  m.textContent='Backup erstellt. Portainer wird jetzt zum Redeploy aufgefordert. Die Verbindung kann kurz abbrechen …';m.className='form-message success';
+  let tries=0;const poll=setInterval(async()=>{tries++;try{const h=await fetch('/health?update_poll='+Date.now(),{cache:'no-store'});if(h.ok){const x=await h.json();if(x.version===target){clearInterval(poll);location.reload();}}}catch(_){}
+    if(tries>=36){clearInterval(poll);m.textContent='Update wurde ausgelöst. Bitte die Seite in einigen Augenblicken neu laden.';}},5000);
+};
+Promise.all([loadSettings(),check(false)]);
+</script>
+{% endblock %}

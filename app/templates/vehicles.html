@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Fahrzeuge - {{ branding.product_name }}{% endblock %}
+{% block heading %}Fahrzeuge{% endblock %}
+{% block subtitle %}Fahrzeugstammdaten, Zuordnung und Ladehistorie{% endblock %}
+{% block content %}
+<section class="stats five">
+  <div class="stat"><span>Fahrzeuge</span><b id="count">0</b><small>aktiv</small></div>
+  <div class="stat"><span>E-Fahrzeuge</span><b id="electric">0</b><small>elektrisch</small></div>
+  <div class="stat"><span>Energie Monat</span><b id="energy">0 kWh</b><small>geladen</small></div>
+  <div class="stat"><span>Aktive Ladevorgänge</span><b id="active">0</b><small>live</small></div>
+  <div class="stat"><span>Zuordnung</span><b id="assignedCount">0</b><small>mit Ladepunkt</small></div>
+</section>
+<div class="toolbar">
+  <div><h2>Fahrzeugflotte</h2><p>Stammdaten und Ladezuordnung</p></div>
+  <button class="primary write-action" id="addVehicle" type="button">+ Fahrzeug hinzufügen</button>
+</div>
+<div id="grid" class="vehicle-grid"></div>
+
+<div class="modal" id="vehicleModal" hidden>
+  <div class="modal-card vehicle-modal-card">
+    <div class="panelhead modal-title-row"><div><h2 id="modalTitle">Fahrzeug</h2><span id="modalSubtitle">Stammdaten</span></div><button class="modal-close" id="vehicleClose" type="button" aria-label="Schließen">&times;</button></div>
+    <form id="vehicleForm" class="vehicle-form">
+      <input type="hidden" id="vehicleId">
+      <div class="form-grid">
+        <label>Bezeichnung<input id="name" required placeholder="z. B. ELW 1"></label>
+        <label>Hersteller<input id="make" placeholder="Volkswagen"></label>
+        <label>Modell<input id="model" placeholder="ID. Buzz"></label>
+        <label>Kennzeichen<input id="plate" placeholder="EN-RK 101"></label>
+        <label>Batterie (kWh)<input id="battery" type="number" min="0" step="0.1" placeholder="77"></label>
+        <label>Max. AC (kW)<input id="acPower" type="number" min="0" step="0.1" placeholder="22"></label>
+        <label>Max. DC (kW)<input id="dcPower" type="number" min="0" step="0.1" placeholder="0"></label>
+        <label>Antriebsart<input id="drivetrain" placeholder="BEV"></label>
+        <label>Reichweite (km)<input id="range" type="number" min="0" step="1" placeholder="420"></label>
+        <label>Fahrer<input id="driver" placeholder="Max Mustermann"></label>
+        <label>Ladepunkt<input id="assigned" placeholder="optional"></label>
+      </div>
+      <div class="vehicle-image-upload">
+        <div class="image-upload-copy"><strong>Fahrzeugbild</strong><small>JPG, PNG oder WebP · maximal 5 MB</small></div>
+        <div class="image-upload-row"><div id="imagePreview" class="image-preview">🚗</div><div class="image-upload-controls"><input id="vehicleImage" type="file" accept="image/jpeg,image/png,image/webp"><button class="secondary write-action" id="removeVehicleImage" type="button" hidden>Bild entfernen</button></div></div>
+      </div>
+      <div class="form-actions"><button class="secondary" id="cancelVehicle" type="button">Abbrechen</button><button class="primary write-action" type="submit">Speichern</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="modal" id="deleteVehicleModal" hidden aria-hidden="true">
+  <div class="modal-card confirm-modal-card" role="dialog" aria-modal="true" aria-labelledby="deleteVehicleTitle">
+    <div class="panelhead modal-title-row"><div><h2 id="deleteVehicleTitle">Fahrzeug entfernen</h2><span>Diese Aktion wird im Backend ausgeführt.</span></div><button class="modal-close" id="deleteVehicleClose" type="button" aria-label="Schließen">&times;</button></div>
+    <div class="confirm-content">
+      <div class="confirm-icon">!</div>
+      <div><p id="deleteVehicleMessage">Möchtest du dieses Fahrzeug wirklich entfernen?</p><small>Das Fahrzeug wird aus der aktiven Fahrzeugliste entfernt. Bereits gespeicherte Ladevorgänge bleiben erhalten.</small></div>
+    </div>
+    <div class="form-actions"><button class="secondary" id="deleteVehicleCancel" type="button">Abbrechen</button><button class="stop write-action" id="deleteVehicleConfirm" type="button">Fahrzeug entfernen</button></div>
+  </div>
+</div>
+
+<div class="modal" id="userAssignModal" hidden aria-hidden="true">
+  <div class="modal-card assignment-modal-card" role="dialog" aria-modal="true" aria-labelledby="userAssignTitle">
+    <div class="panelhead modal-title-row"><div><h2 id="userAssignTitle">Benutzer zuweisen</h2><span id="userAssignSubtitle">Fahrzeugzuordnung</span></div><button class="modal-close" id="userAssignClose" type="button" aria-label="Schließen">&times;</button></div>
+    <div class="assignment-form"><label class="field-label" for="vehicleUserSelect">Benutzer<select id="vehicleUserSelect"></select></label><label class="primary-user-option"><input id="vehicleUserPrimary" type="checkbox"><span><strong>Als Hauptbenutzer festlegen</strong><small>Der Hauptbenutzer wird beim Fahrzeug bevorzugt angezeigt.</small></span></label></div>
+    <div class="form-actions"><button class="secondary" id="userAssignCancel" type="button">Abbrechen</button><button class="primary write-action" id="userAssignConfirm" type="button">Zuweisen</button></div>
+  </div>
+</div>
+
+<div class="modal" id="detailModal" hidden>
+  <div class="modal-card vehicle-detail-card">
+    <div class="panelhead modal-title-row"><div><h2 id="detailTitle">Fahrzeugdetails</h2><span id="detailSubtitle">Ladehistorie</span></div><button class="modal-close" id="detailClose" type="button" aria-label="Schließen">&times;</button></div>
+    <div id="detailBody"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $=id=>document.getElementById(id); let vehicles=[];
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function cpLabel(v){return v?.assigned_charge_point ? v.assigned_charge_point : '—';}
+function fillForm(v){
+  $('vehicleId').value=v?.id||'';
+  $('vehicleImage').value=''; $('imagePreview').innerHTML=v?.image_path?`<img src="${esc(v.image_path)}" alt="Aktuelles Fahrzeugbild">`:'🚗'; $('removeVehicleImage').hidden=!v?.image_path;$('name').value=v?.name||'';$('make').value=v?.make||'';$('model').value=v?.model||'';$('plate').value=v?.plate||'';$('battery').value=v?.battery_kwh??'';$('acPower').value=v?.ac_power_kw??'';$('dcPower').value=v?.dc_power_kw??'';$('range').value=v?.range_km??'';$('drivetrain').value=v?.drivetrain||'';$('driver').value=v?.driver||'';$('assigned').value=v?.assigned_charge_point||'';
+}
+function openEditor(v){fillForm(v);$('modalTitle').textContent=v?'Fahrzeug bearbeiten':'Fahrzeug hinzufügen';$('modalSubtitle').textContent=v?'Stammdaten bearbeiten':'Neue Fahrzeuganlage';$('vehicleModal').hidden=false;setTimeout(()=>$('name').focus(),0);}
+function render(){
+  $('grid').innerHTML=vehicles.map(v=>`<article class="vehicle-card vehicle-card-clickable" data-id="${v.id}">
+    <div class="car-image">${v.image_path?`<img src="${esc(v.image_path)}" alt="Fahrzeugbild">`:`🚗`}</div><div class="vehicle-main"><div class="cardtop"><div><h2>${esc(v.name)}</h2><p>${esc((v.make||'')+' '+(v.model||''))}</p></div><span class="badge ${v.charge_point_status==='Charging'?'Charging':'Available'}">${esc(v.charge_point_status||'Frei')}</span></div>
+    <div class="vehicle-facts"><span>Kennzeichen</span><b>${esc(v.plate||'—')}</b><span>Batterie</span><b>${v.battery_kwh?Number(v.battery_kwh).toFixed(1)+' kWh':'—'}</b><span>Reichweite</span><b>${v.range_km?Number(v.range_km).toFixed(0)+' km':'—'}</b><span>Fahrer</span><b>${esc(v.driver||'—')}</b><span>Ladepunkt</span><b>${esc(cpLabel(v))}</b></div>
+    <div class="vehicle-card-actions"><button type="button" class="secondary" data-action="details" data-id="${v.id}">Details</button><button type="button" class="secondary write-action" data-action="edit" data-id="${v.id}">Bearbeiten</button><button type="button" class="stop write-action" data-action="delete" data-id="${v.id}">Entfernen</button></div></div></article>`).join('') || '<div class="empty">Noch keine Fahrzeuge angelegt.</div>';
+}
+async function load(){const [vr,sr]=await Promise.all([fetch('/api/vehicles').then(r=>r.json()),fetch('/api/status').then(r=>r.json())]);vehicles=vr.vehicles||[];$('count').textContent=vehicles.length;$('electric').textContent=vehicles.length;$('energy').textContent=formatEnergyKwh(sr.analytics.month_energy_kwh||0,1,3);$('active').textContent=sr.charging;$('assignedCount').textContent=vehicles.filter(v=>v.assigned_charge_point).length;render();}
+async function openAssignUserModal(vehicleId){
+  const v=vehicles.find(x=>x.id===Number(vehicleId));
+  if(!v)return;
+
+  // Open the modal immediately. The data requests below are asynchronous;
+  // opening first prevents a fast follow-up click on another action from
+  // being overtaken by a late assignment-modal response.
+  $('userAssignSubtitle').textContent='Benutzer für '+(v.name||'Fahrzeug')+' zuordnen';
+  $('vehicleUserSelect').innerHTML='<option value=\"\">Benutzer werden geladen ...</option>';
+  $('vehicleUserSelect').disabled=true;
+  $('vehicleUserPrimary').checked=false;
+  $('userAssignModal').dataset.vehicleId=String(vehicleId);
+  $('userAssignModal').hidden=false;
+  $('userAssignModal').setAttribute('aria-hidden','false');
+
+  try {
+    const assignedRes=await fetch('/api/vehicles/'+vehicleId+'/users');
+    if(!assignedRes.ok)throw new Error('assigned');
+    const assigned=(await assignedRes.json()).users||[];
+    const allUsers=window._allUsers||await fetch('/api/users').then(r=>r.json()).then(x=>x.users||[]);
+    window._allUsers=allUsers;
+    const available=allUsers.filter(u=>!assigned.some(a=>Number(a.id)===Number(u.id)));
+    $('vehicleUserSelect').innerHTML='<option value=\"\">Benutzer auswählen ...</option>'+available.map(u=>`<option value=\"${u.id}\">${esc(u.name)}${u.department?' · '+esc(u.department):''}</option>`).join('');
+    $('vehicleUserSelect').disabled=false;
+    $('vehicleUserSelect').focus();
+  } catch(_) {
+    $('vehicleUserSelect').innerHTML='<option value=\"\">Benutzer konnten nicht geladen werden</option>';
+    $('vehicleUserSelect').disabled=true;
+    showToast('Benutzer konnten nicht geladen werden.','error');
+  }
+}
+function closeAssignUserModal(){
+  $('userAssignModal').hidden=true;
+  $('userAssignModal').setAttribute('aria-hidden','true');
+  $('userAssignModal').dataset.vehicleId='';
+}
+async function confirmAssignUser(){
+  const vehicleId=Number($('userAssignModal').dataset.vehicleId||0);
+  const userId=Number($('vehicleUserSelect').value||0);
+  if(!vehicleId||!userId){showToast('Bitte einen Benutzer auswählen.','error');return;}
+  const r=await fetch('/api/vehicles/'+vehicleId+'/users/'+userId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({primary:$('vehicleUserPrimary').checked})});
+  if(!r.ok){let msg='Benutzer konnte nicht zugeordnet werden.';try{const d=await r.json();if(d.detail)msg=d.detail;}catch(_){}showToast(msg,'error');return;}
+  closeAssignUserModal();
+  await showDetails(vehicleId);
+}
+
+async function showDetails(id){const d=await fetch('/api/vehicles/'+id).then(r=>r.json());const usersRes=await fetch('/api/vehicles/'+id+'/users').then(r=>r.json());const allUsers=window._allUsers||await fetch('/api/users').then(r=>r.json()).then(x=>x.users||[]);window._allUsers=allUsers;const v=d.vehicle,st=d.stats||{},assignedUsers=usersRes.users||[];$('detailTitle').textContent=v.name;$('detailTitle').dataset.vehicleId=v.id;$('detailSubtitle').textContent=((v.make||'')+' '+(v.model||'')).trim()||'Fahrzeug';$('detailBody').innerHTML=`<div class="vehicle-detail-hero"><div class="car-image large-car">${v.image_path?`<img src="${esc(v.image_path)}" alt="Fahrzeugbild">`:`🚗`}</div><div><h2>${esc(v.name)}</h2><p>${esc(v.plate||'Kein Kennzeichen')}</p><div class="detail-badges"><span class="badge Available">${esc(v.driver||'Kein Fahrer')}</span><span class="badge">${esc(cpLabel(v))}</span></div></div></div><div class="metric-grid"><div><span>Batterie</span><b>${v.battery_kwh?Number(v.battery_kwh).toFixed(1)+' kWh':'—'}</b></div><div><span>Reichweite</span><b>${v.range_km?Number(v.range_km).toFixed(0)+' km':'—'}</b></div><div><span>Max. AC / DC</span><b>${v.ac_power_kw?Number(v.ac_power_kw).toFixed(1):'—'} / ${v.dc_power_kw?Number(v.dc_power_kw).toFixed(1):'—'} kW</b></div><div><span>Sessions</span><b>${Number(st.sessions||0)}</b></div><div><span>Energie</span><b>${formatEnergyKwh(st.energy||0,2,3)}</b></div><div><span>Kosten</span><b>${Number(st.costs||0).toFixed(2)} €</b></div><div><span>Ø Peak</span><b>${Number(st.avg_peak||0).toFixed(1)} kW</b></div></div><div class="panel inline-panel"><div class="panelhead"><div><h3>Zugeordnete Benutzer</h3><span>${assignedUsers.length} Benutzer</span></div><button class="secondary write-action" type="button" data-assign-user="${v.id}">+ Benutzer zuweisen</button></div><div class="stack-list">${assignedUsers.map(u=>`<div class="stack-item"><div><b>${esc(u.name)}</b><small>${esc(u.role||'Fahrer')}${u.department?' · '+esc(u.department):''}${Number(u.primary_vehicle)===1?' · Hauptbenutzer':''}</small></div><button class="mini-remove write-action" type="button" data-unassign-user="${u.id}" title="Benutzerzuordnung entfernen">&times;</button></div>`).join('')||'<div class="empty">Keine Benutzer zugeordnet.</div>'}</div></div><div class="panel inline-panel"><div class="panelhead"><h3>Letzte Ladevorgänge</h3><span>${d.transactions.length}</span></div><div class="table-panel"><table><thead><tr><th>#</th><th>Start</th><th>Ladepunkt</th><th>RFID</th><th>Energie</th><th>Kosten</th><th>Status</th></tr></thead><tbody>${d.transactions.map(t=>`<tr><td>#${t.id}</td><td>${esc(t.started_at)}</td><td>${esc((t.charge_point_id||''))}</td><td>${esc(t.id_tag||'—')}</td><td>${formatEnergyKwh(t.energy_kwh||0,2,3)}</td><td>${t.cost_cents==null?'—':(Number(t.cost_cents)/100).toFixed(2)+' €'}</td><td><span class="state ${t.status==='Active'?'blue':''}">${esc(t.status)}</span></td></tr>`).join('')||'<tr><td colspan="7" class="empty">Keine Ladevorgänge.</td></tr>'}</tbody></table></div></div><div class="detail-actions"><button class="secondary write-action" type="button" data-detail-edit="${v.id}">Bearbeiten</button><button class="stop write-action" type="button" data-detail-delete="${v.id}">Fahrzeug entfernen</button></div>`;$('detailModal').hidden=false;}
+$('addVehicle').onclick=()=>openEditor();$('vehicleClose').onclick=()=>$('vehicleModal').hidden=true;$('cancelVehicle').onclick=()=>$('vehicleModal').hidden=true;$('detailClose').onclick=()=>$('detailModal').hidden=true;
+$('vehicleModal').onclick=e=>{if(e.target===$('vehicleModal'))$('vehicleModal').hidden=true};$('detailModal').onclick=e=>{if(e.target===$('detailModal'))$('detailModal').hidden=true};
+async function uploadImage(id){const file=$('vehicleImage').files[0];if(!file)return true;const fd=new FormData();fd.append('image',file);const r=await fetch('/api/vehicles/'+id+'/image',{method:'POST',body:fd});if(!r.ok){let msg='Fahrzeugbild konnte nicht hochgeladen werden.';try{const d=await r.json();if(d.detail)msg=d.detail;}catch(_){}alert(msg);return false;}return true;}
+$('vehicleImage').onchange=()=>{const file=$('vehicleImage').files[0];if(!file)return;const url=URL.createObjectURL(file);$('imagePreview').innerHTML=`<img src="${url}" alt="Vorschau Fahrzeugbild">`;};
+$('removeVehicleImage').onclick=async()=>{const id=$('vehicleId').value;if(!id){$('vehicleImage').value='';$('imagePreview').innerHTML='🚗';$('removeVehicleImage').hidden=true;return;}const r=await fetch('/api/vehicles/'+id+'/image',{method:'DELETE'});if(r.ok){$('imagePreview').innerHTML='🚗';$('removeVehicleImage').hidden=true;}else{alert('Fahrzeugbild konnte nicht entfernt werden.');}};
+$('vehicleForm').onsubmit=async e=>{e.preventDefault();const id=$('vehicleId').value;const payload={name:$('name').value.trim(),make:$('make').value.trim()||null,model:$('model').value.trim()||null,plate:$('plate').value.trim()||null,battery_kwh:$('battery').value?Number($('battery').value):null,ac_power_kw:$('acPower').value?Number($('acPower').value):null,dc_power_kw:$('dcPower').value?Number($('dcPower').value):null,range_km:$('range').value?Number($('range').value):null,drivetrain:$('drivetrain').value.trim()||null,assigned_charge_point:$('assigned').value.trim()||null,driver:$('driver').value.trim()||null};const res=await fetch(id?'/api/vehicles/'+id:'/api/vehicles',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!res.ok){alert('Fahrzeug konnte nicht gespeichert werden.');return;}const saved=await res.json();const savedId=id||saved.id;if(!(await uploadImage(savedId)))return;$('vehicleModal').hidden=true;await load();};
+$('grid').onclick=async e=>{const b=e.target.closest('button[data-action]'),card=e.target.closest('.vehicle-card[data-id]');if(b){e.stopPropagation();const id=Number(b.dataset.id),v=vehicles.find(x=>x.id===id);if(b.dataset.action==='details')return showDetails(id);if(b.dataset.action==='edit')return openEditor(v);if(b.dataset.action==='delete'){return openDeleteModal(id);}return;}if(card)return showDetails(Number(card.dataset.id));};
+let deleteVehicleId=null;let deleteFromDetail=false;
+function openDeleteModal(id,fromDetail=false){const v=vehicles.find(x=>x.id===Number(id));if(!v)return;deleteVehicleId=Number(id);deleteFromDetail=fromDetail;$('deleteVehicleMessage').innerHTML='Möchtest du <strong>'+esc(v.name)+'</strong> wirklich entfernen?';$('deleteVehicleModal').hidden=false;$('deleteVehicleModal').setAttribute('aria-hidden','false');setTimeout(()=>$('deleteVehicleConfirm').focus(),0);}
+function closeDeleteModal(){$('deleteVehicleModal').hidden=true;$('deleteVehicleModal').setAttribute('aria-hidden','true');deleteVehicleId=null;deleteFromDetail=false;}
+$('deleteVehicleClose').onclick=closeDeleteModal;$('deleteVehicleCancel').onclick=closeDeleteModal;$('deleteVehicleModal').onclick=e=>{if(e.target===$('deleteVehicleModal'))closeDeleteModal()};$('deleteVehicleConfirm').onclick=async()=>{if(!deleteVehicleId)return;const id=deleteVehicleId;const fromDetail=deleteFromDetail;const r=await fetch('/api/vehicles/'+id,{method:'DELETE'});if(r.ok){closeDeleteModal();if(fromDetail)$('detailModal').hidden=true;await load();}else{$('deleteVehicleMessage').textContent='Das Fahrzeug konnte nicht entfernt werden.';}};
+document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;if(!$('deleteVehicleModal').hidden)closeDeleteModal();else if(!$('userAssignModal').hidden)closeAssignUserModal();else if(!$('vehicleModal').hidden)$('vehicleModal').hidden=true;else if(!$('detailModal').hidden)$('detailModal').hidden=true;});
+$('userAssignClose').onclick=closeAssignUserModal;
+$('userAssignCancel').onclick=closeAssignUserModal;
+$('userAssignConfirm').onclick=confirmAssignUser;
+$('userAssignModal').onclick=e=>{if(e.target===$('userAssignModal'))closeAssignUserModal()};
+$('detailBody').onclick=async e=>{
+  const target=e.target;
+  const assign=target.closest('[data-assign-user]');
+  const edit=target.closest('[data-detail-edit]');
+  const del=target.closest('[data-detail-delete]');
+  const unassign=target.closest('[data-unassign-user]');
+  if(assign){e.preventDefault();e.stopPropagation();return openAssignUserModal(Number(assign.dataset.assignUser));}
+  if(edit){e.preventDefault();e.stopPropagation();const v=vehicles.find(x=>x.id===Number(edit.dataset.detailEdit));if(v){$('detailModal').hidden=true;openEditor(v);}return;}
+  if(del){e.preventDefault();e.stopPropagation();return openDeleteModal(Number(del.dataset.detailDelete),true);}
+  if(unassign){e.preventDefault();e.stopPropagation();const vid=Number($('detailTitle').dataset.vehicleId||0);const uid=Number(unassign.dataset.unassignUser);if(!vid||!uid)return;const r=await fetch('/api/vehicles/'+vid+'/users/'+uid,{method:'DELETE'});if(r.ok)return showDetails(vid);return showToast('Zuordnung konnte nicht entfernt werden.','error');}
+};
+const oldShowDetails=showDetails;showDetails=async function(id){window._vehicleCurrentId=Number(id);return oldShowDetails(id);};
+load().then(()=>{const id=Number(new URLSearchParams(location.search).get('vehicle')||0);if(id)showDetails(id)});
+</script>
+{% endblock %}
