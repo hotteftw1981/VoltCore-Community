@@ -52,6 +52,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
 APP_VERSION = "0.9.7.74"
+APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
 ENABLE_API_DOCS = str(os.getenv("ENABLE_API_DOCS", "0")).strip().lower() in {"1","true","yes","on"}
@@ -208,6 +209,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 def render(request: Request, template_name: str, status_code: int = 200, **context):
     context.setdefault("app_version", APP_VERSION)
+    context.setdefault("app_edition", APP_EDITION)
     context.setdefault("branding", db.branding_settings())
     auth_user=getattr(request.state, "auth_user", None)
     context.setdefault("auth_user", auth_user)
