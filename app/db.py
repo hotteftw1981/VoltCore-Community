@@ -3134,7 +3134,6 @@ def list_rfid_cards():
         rows=conn.execute("""SELECT r.*,u.name AS user_name,v.name AS vehicle_name,v.plate AS vehicle_plate,
             (SELECT COUNT(*) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS session_count,
             (SELECT COALESCE(SUM(t.energy_kwh),0) FROM transactions t WHERE t.rfid_card_id=r.id OR (t.rfid_card_id IS NULL AND t.id_tag=r.uid)) AS energy_kwh,
-            (SELECT COUNT(*) FROM rfid_replacement_requests q WHERE q.card_id=r.id AND q.status IN ('Offen','In Bearbeitung')) AS open_request_count,
             (SELECT id FROM rfid_cards n WHERE n.replacement_for_id=r.id ORDER BY n.id DESC LIMIT 1) AS replaced_by_id
             FROM rfid_cards r LEFT JOIN users u ON u.id=r.user_id LEFT JOIN vehicles v ON v.id=r.vehicle_id ORDER BY r.uid""").fetchall()
         return [dict(r) for r in rows]
