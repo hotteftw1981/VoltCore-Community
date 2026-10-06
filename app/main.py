@@ -120,13 +120,13 @@ async def _update_worker():
     while True:
         try:
             cfg=updates.settings()
-            if cfg.get("check_enabled") and cfg.get("github_token_configured"):
+            if cfg.get("check_enabled"):
                 await asyncio.to_thread(updates.check_latest,APP_VERSION,True)
         except asyncio.CancelledError:
             raise
         except Exception:
             logging.warning("Automatische Update-Prüfung fehlgeschlagen",exc_info=True)
-        await asyncio.sleep(30*60)
+        await asyncio.sleep(6*60*60)
 
 
 async def _backup_worker():
@@ -871,9 +871,6 @@ class UpdateSettingsPayload(BaseModel):
     check_enabled: bool = True
     github_token: str | None = None
     clear_github_token: bool = False
-    portainer_webhook: str | None = None
-    clear_portainer_webhook: bool = False
-    portainer_tls_verify: bool = True
 
 
 class UpdateInstallPayload(BaseModel):
@@ -904,8 +901,8 @@ async def api_update_status(force: bool=False):
         raise HTTPException(502,f"Update-Prüfung fehlgeschlagen: {type(exc).__name__}")
 
 
-@app.post("/api/updates/install",status_code=202)
-async def api_install_update(payload: UpdateInstallPayload, request: Request, background_tasks: BackgroundTasks):
+@app.post("/api/updates/install")
+async def api_install_update(payload: UpdateInstallPayload):
     try:
         status=await asyncio.to_thread(updates.check_latest,APP_VERSION,True)
     except Exception as exc:
@@ -915,19 +912,11 @@ async def api_install_update(payload: UpdateInstallPayload, request: Request, ba
         raise HTTPException(409,"Es ist kein neueres freigegebenes Update verfügbar.")
     if target != str(status.get("latest_version") or ""):
         raise HTTPException(409,"Die angeforderte Version entspricht nicht dem neuesten freigegebenen Release.")
-    cfg=updates.settings()
-    if not cfg.get("portainer_webhook_configured"):
-        raise HTTPException(409,"Für die Ein-Klick-Installation ist noch kein Portainer-Stack-Webhook hinterlegt.")
-    try:
-        pre=await asyncio.to_thread(backup.create_backup,f"pre-update-v{target}",True)
-    except Exception as exc:
-        logging.exception("Pre-Update-Backup fehlgeschlagen")
-        raise HTTPException(500,f"Update abgebrochen: Pre-Update-Backup fehlgeschlagen ({type(exc).__name__}).")
-    updates.mark_pending(target,pre.get("filename"))
-    auth=request.state.auth_user or {}
-    db.add_security_event("System update requested",severity="info",category="admin",system_user_id=auth.get("id"),username=auth.get("username"),remote=_client_text(request),success=True,detail=f"target={target}; backup={pre.get('filename')}")
-    background_tasks.add_task(updates.trigger_and_record,target)
-    return {"ok":True,"target_version":target,"backup":pre,"message":"Pre-Update-Backup erstellt; Portainer-Redeploy wird gestartet."}
+    raise HTTPException(
+        409,
+        "Automatische Installation ist in der Community Edition deployment-abhängig und noch nicht aktiviert. "
+        "Die Updatequelle ist GitHub Releases. Docker-Compose- und Portainer-Installationen werden über ihren jeweiligen Deployment-Weg aktualisiert."
+    )
 
 
 @app.get("/settings", response_class=HTMLResponse)
