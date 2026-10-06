@@ -375,6 +375,48 @@ def _activity_descriptor(method: str, path: str):
     return f"Änderung {verb}", "System", path
 
 
+def _generate_unique_portal_pin():
+    records=db.portal_pin_records(include_disabled=True)
+    for _ in range(100):
+        pin=f"{secrets.randbelow(1000000):06d}"
+        if not any(_portal_pin_ok(pin,r.get("portal_pin_hash") or "") for r in records):
+            return pin
+    raise RuntimeError("Es konnte keine eindeutige Portal-PIN erzeugt werden.")
+
+
+def _normalize_signature_png(data: bytes) -> bytes:
+    try:
+        with PILImage.open(io.BytesIO(data)) as source:
+            image=source.convert("RGBA")
+            alpha=image.getchannel("A")
+            normalized=PILImage.new("RGBA",image.size,(17,24,39,0))
+            normalized.putalpha(alpha)
+            out=io.BytesIO(); normalized.save(out,format="PNG",optimize=True)
+            return out.getvalue()
+    except Exception as exc:
+        raise ValueError("Die digitale Unterschrift ist ungültig.") from exc
+
+
+def _save_access_signature(data_url: str, request_id_hint: str = "new"):
+    raw=str(data_url or "")
+    prefix="data:image/png;base64,"
+    if not raw.startswith(prefix):
+        raise ValueError("Bitte unterschreiben Sie den Antrag im Signaturfeld.")
+    try:
+        data=base64.b64decode(raw[len(prefix):],validate=True)
+    except (ValueError,binascii.Error):
+        raise ValueError("Die digitale Unterschrift ist ungültig.")
+    if len(data)<100 or len(data)>300*1024 or not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Die digitale Unterschrift ist ungültig oder zu groß.")
+    data=_normalize_signature_png(data)
+    name=f"signature-{request_id_hint}-{secrets.token_hex(12)}.png"
+    target=ACCESS_SIGNATURE_DIR/name
+    target.write_bytes(data)
+    try: os.chmod(target,0o600)
+    except OSError: pass
+    return name
+
+
 def _portal_request_user(request: Request):
     token=request.cookies.get(PORTAL_COOKIE)
     return db.portal_user_for_session(_session_hash(token)) if token else None
