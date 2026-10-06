@@ -2095,6 +2095,14 @@ async def api_ocpp_monitor():
     return data
 
 
+@app.get("/api/charge-points/{cp_id}/meter-history")
+async def api_charge_point_meter_history(cp_id: str, connector_id: int | None = None, hours: int = 6, points: int = 240):
+    cp_id=unquote(cp_id)
+    if not db.get_charge_point(cp_id):
+        raise HTTPException(404,"Ladepunkt nicht gefunden")
+    return db.meter_history_for_charge_point(cp_id, connector_id=connector_id, hours=hours, max_points=points)
+
+
 @app.get("/api/ocpp-devices")
 async def api_ocpp_devices():
     devices = db.list_discovered_devices()
