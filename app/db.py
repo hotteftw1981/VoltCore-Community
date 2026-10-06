@@ -7136,16 +7136,14 @@ def _registration_default_fields():
     return json.loads(json.dumps(_REGISTRATION_BUILTIN_FIELDS,ensure_ascii=False))
 
 def registration_settings():
+    """Return Community registration settings without employment-based rules."""
     def fnum(key,default,minimum,maximum):
         try: value=float(get_setting(key,str(default)))
         except (TypeError,ValueError): value=float(default)
         return max(float(minimum),min(float(maximum),value))
     enabled=setting_bool("registration_enabled",False)
-    ref_hours=fnum("registration_reference_hours",39,1,100)
     ref_kwh=fnum("registration_reference_kwh",0,0,10000)
     limit_mode="block" if str(get_setting("registration_limit_mode","warn")).lower()=="block" else "warn"
-    budget_mode=str(get_setting("registration_budget_mode","fixed") or "fixed").lower()
-    if budget_mode not in {"hours","fixed"}: budget_mode="hours"
     raw=get_setting("registration_form_fields",None)
     try:
         fields=json.loads(raw) if raw else _registration_default_fields()
@@ -7170,26 +7168,19 @@ def registration_settings():
         if fid not in seen:
             clean.append(dict(base))
     clean.sort(key=lambda x:(int(x.get("order",100)),str(x.get("label","")).casefold()))
-    return {"enabled":enabled,"budget_mode":budget_mode,"reference_hours":ref_hours,"reference_kwh":ref_kwh,"limit_mode":limit_mode,"fields":clean,"self_service_rfid_limit":2}
+    return {"enabled":enabled,"budget_mode":"fixed","reference_hours":None,"reference_kwh":ref_kwh,"limit_mode":limit_mode,"fields":clean,"self_service_rfid_limit":2}
 
-def calculate_registration_budget(weekly_hours, settings=None):
+def calculate_registration_budget(weekly_hours=None, settings=None):
+    """Legacy-compatible helper; Community always uses the fixed configured kWh value."""
     cfg=settings or registration_settings()
     ref_kwh=float(cfg.get("reference_kwh") or 0)
-    if cfg.get("budget_mode")=="fixed": return float(Decimal(str(ref_kwh)).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
-    try: hours=max(0.0,float(weekly_hours or 0))
-    except (TypeError,ValueError): hours=0.0
-    ref_hours=max(0.01,float(cfg.get("reference_hours") or 39))
-    value=min(hours/ref_hours,1.0)*ref_kwh
-    return float(Decimal(str(value)).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
+    return float(Decimal(str(ref_kwh)).quantize(Decimal("1"),rounding=ROUND_HALF_UP))
 
 def save_registration_settings(payload):
     enabled=bool(payload.get("enabled",True))
-    budget_mode=str(payload.get("budget_mode") or "hours").lower()
-    if budget_mode not in {"hours","fixed"}: raise ValueError("Ungültige Budgetregel.")
-    try: ref_hours=float(payload.get("reference_hours",39)); ref_kwh=float(payload.get("reference_kwh",150))
-    except (TypeError,ValueError): raise ValueError("Referenzstunden und Referenzbudget müssen Zahlen sein.")
-    if not 1<=ref_hours<=100: raise ValueError("Referenz-Wochenstunden müssen zwischen 1 und 100 liegen.")
-    if not 0<=ref_kwh<=10000: raise ValueError("Referenzbudget muss zwischen 0 und 10.000 kWh liegen.")
+    try: ref_kwh=float(payload.get("reference_kwh",0))
+    except (TypeError,ValueError): raise ValueError("Das Standardbudget muss eine Zahl sein.")
+    if not 0<=ref_kwh<=10000: raise ValueError("Das Standardbudget muss zwischen 0 und 10.000 kWh liegen.")
     limit_mode="block" if str(payload.get("limit_mode") or "warn").lower()=="block" else "warn"
     fields=payload.get("fields")
     if not isinstance(fields,list): fields=registration_settings()["fields"]
@@ -7199,7 +7190,7 @@ def save_registration_settings(payload):
         fid=str(item.get("id") or "").strip()
         if not fid:
             fid="custom_"+hashlib.sha256((str(item.get("label") or "field")+str(idx)+utc_now()).encode()).hexdigest()[:10]
-        if fid in seen: continue
+        if fid=="weekly_hours" or fid in seen: continue
         is_builtin=fid in defaults
         if not is_builtin and not fid.startswith("custom_"): fid="custom_"+re.sub(r"[^a-z0-9]+","_",fid.lower()).strip("_")[:30]
         typ=str(item.get("type") or defaults.get(fid,{}).get("type") or "text").lower()
@@ -7208,32 +7199,29 @@ def save_registration_settings(payload):
         entry={"id":fid,"type":typ,"label":str(item.get("label") or defaults.get(fid,{}).get("label") or "Feld")[:80],"enabled":bool(item.get("enabled",True)),"required":bool(item.get("required",False)),"system":system,"order":int(item.get("order",(idx+1)*10) or (idx+1)*10),"help":str(item.get("help") or "")[:240]}
         if typ=="select": entry["options"]=[str(x).strip()[:80] for x in (item.get("options") or []) if str(x).strip()][:30]
         if system: entry["enabled"]=True; entry["required"]=True
-        if fid=="weekly_hours" and budget_mode=="hours": entry["enabled"]=True; entry["required"]=True
         clean.append(entry); seen.add(fid)
     for fid,base in defaults.items():
         if fid not in seen: clean.append(dict(base))
     clean.sort(key=lambda x:(int(x.get("order",100)),str(x.get("label","")).casefold()))
     with _lock,_connect() as conn:
         now=utc_now()
-        vals={"registration_enabled":"1" if enabled else "0","registration_budget_mode":budget_mode,"registration_reference_hours":str(ref_hours),"registration_reference_kwh":str(ref_kwh),"registration_limit_mode":limit_mode,"registration_form_fields":json.dumps(clean,ensure_ascii=False,separators=(",",":"))}
+        vals={
+            "registration_enabled":"1" if enabled else "0",
+            "registration_budget_mode":"fixed",
+            "registration_reference_hours":"",
+            "registration_reference_kwh":str(ref_kwh),
+            "registration_limit_mode":limit_mode,
+            "registration_form_fields":json.dumps(clean,ensure_ascii=False,separators=(",",":")),
+        }
         for key,value in vals.items():
             conn.execute("INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",(key,value,now))
-        auto_rows=conn.execute("SELECT id,weekly_hours,monthly_kwh_limit,monthly_limit_mode FROM users WHERE budget_source='auto'").fetchall(); changed=0
-        cfg={"budget_mode":budget_mode,"reference_hours":ref_hours,"reference_kwh":ref_kwh}
-        affected=[]; skipped=[]
-        for row in auto_rows:
-            if budget_mode=="hours" and row["weekly_hours"] is None:
-                skipped.append(int(row["id"])); continue
-            new_limit=calculate_registration_budget(row["weekly_hours"],cfg)
-            amount_changed=row["monthly_kwh_limit"] is None or abs(float(row["monthly_kwh_limit"])-new_limit)>1e-9
-            mode_changed=str(row["monthly_limit_mode"] or "warn")!=limit_mode
-            if amount_changed or mode_changed:
-                conn.execute("UPDATE users SET monthly_kwh_limit=?,monthly_limit_mode=? WHERE id=?",(new_limit,limit_mode,int(row["id"])))
-                uids=[str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(int(row["id"]),)).fetchall()]
-                if uids: _rfid_local_list_bump_conn(conn,uids)
-                changed+=1; affected.append(int(row["id"]))
+        conn.execute("UPDATE users SET weekly_hours=NULL,budget_source='manual' WHERE weekly_hours IS NOT NULL OR budget_source<>'manual'")
         conn.commit()
-    result=registration_settings(); result["recalculated_users"]=changed; result["recalculated_user_ids"]=affected; result["skipped_auto_users"]=len(skipped); result["skipped_auto_user_ids"]=skipped
+    result=registration_settings()
+    result["recalculated_users"]=0
+    result["recalculated_user_ids"]=[]
+    result["skipped_auto_users"]=0
+    result["skipped_auto_user_ids"]=[]
     return result
 
 # V0.9.7.20 - public access requests and self-service RFID enrollment
@@ -7264,7 +7252,7 @@ def access_request_verification(token_hash):
 
 def create_access_request(token_hash, *, name, street="", postal_code="", city="", phone="", vehicle_make_model="", vehicle_plate="", weekly_hours=None, field_values_json=None, field_schema_json=None, terms_version, terms_snapshot, signature_path, ip_hash):
     now=utc_now()
-    hours=None if weekly_hours in (None,"") else max(0.0,float(weekly_hours))
+    hours=None  # Community does not collect or evaluate employment hours.
     normalized_plate=normalize_vehicle_plate(vehicle_plate)
     try:
         values=json.loads(str(field_values_json or '{}'))
@@ -7323,24 +7311,20 @@ def set_access_request_in_review(request_id):
         conn.commit(); return cur.rowcount>0
 
 
-def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_kwh_limit=None, monthly_limit_mode="warn", admin_note=None, budget_source="auto", return_details=False):
+def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_kwh_limit=None, monthly_limit_mode="warn", admin_note=None, budget_source="manual", return_details=False):
     now=utc_now(); mode="block" if str(monthly_limit_mode).lower()=="block" else "warn"
-    source="auto" if str(budget_source or "auto").lower()=="auto" else "manual"
-    settings=registration_settings()
+    source="manual"
     with _lock,_connect() as conn:
         req=conn.execute("SELECT * FROM access_requests WHERE id=?",(int(request_id),)).fetchone()
         if not req: raise ValueError("Zugangsantrag nicht gefunden.")
         if req['status'] in ('Genehmigt','Abgelehnt'): raise ValueError("Dieser Antrag wurde bereits abgeschlossen.")
         if conn.execute("SELECT 1 FROM users WHERE LOWER(TRIM(COALESCE(email,'')))=LOWER(TRIM(?)) LIMIT 1",(req['email'],)).fetchone():
             raise ValueError("Für diese E-Mail-Adresse existiert bereits ein Ladebenutzer.")
-        if source=="auto":
-            limit_value=calculate_registration_budget(req['weekly_hours'],settings)
-        else:
-            limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
+        limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
         normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
         vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
         cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_pin_hash,portal_pin_set_at,portal_enabled,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,?, ?,1,?,?)""",(req['name'],vehicle_text,limit_value,mode,1,req['email'],req['phone'],str(portal_pin_hash),now,req['weekly_hours'],source))
+            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,?, ?,1,?,?)""",(req['name'],vehicle_text,limit_value,mode,1,req['email'],req['phone'],str(portal_pin_hash),now,None,source))
         user_id=int(cur.lastrowid)
         vehicle_id=None; vehicle_created=False
         if normalized_plate:
