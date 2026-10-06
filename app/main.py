@@ -801,9 +801,13 @@ async def public_access_request_start(request:Request, email:str=Form(...)):
     email_key=str(email or "").strip().casefold()
     if len(email_key)>254 or "@" not in email_key:
         return render(request,"access_request.html",status_code=400,page="public",step="start",error="Bitte geben Sie eine gültige E-Mail-Adresse ein.",email=email_key,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
+    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
+    ip_hash=_client_hash(request)
+    if not db.access_request_start_allowed(email_hash,ip_hash,10,5):
+        return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
     raw=secrets.token_urlsafe(32)
     expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-    db.create_access_request_verification(email_key,hashlib.sha256(email_key.encode("utf-8")).hexdigest(),_client_hash(request),_session_hash(raw),expires)
+    db.create_access_request_verification(email_key,email_hash,ip_hash,_session_hash(raw),expires)
     base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
     await asyncio.to_thread(mailer.send_template,"system",[email_key],{"subject":"VoltCore Community · E-Mail bestätigen","headline":"Registrierung bestätigen","body":"Bitte bestätigen Sie Ihre E-Mail-Adresse, um den Antrag fortzusetzen.","detail":"Der Link ist 30 Minuten gültig.","cta_label":"Registrierung fortsetzen","cta_url":f"{base}/public/access-request/form?token={raw}"},base)
     return RedirectResponse(url="/public/access-request?sent=1",status_code=303)
@@ -839,7 +843,7 @@ async def public_access_request_submit(request:Request):
         return render(request,"access_request.html",status_code=400,page="public",step="form",token=token,verified_email=record["email"],error="Bitte bestätigen Sie die Nutzungsbedingungen.",form_data=values,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg,form_fields=active_fields)
     proof=hashlib.sha256(str(form.get("signature_data") or "").encode("utf-8")).hexdigest()
     request_id=db.create_access_request(_session_hash(token),name=values.get("name",record["email"]),street=values.get("street",""),postal_code=values.get("postal_code",""),city=values.get("city",""),phone=values.get("phone",""),vehicle_make_model=values.get("vehicle_make_model",""),vehicle_plate=values.get("vehicle_plate",""),weekly_hours=None,field_values_json=json.dumps(values,ensure_ascii=False),field_schema_json=json.dumps(active_fields,ensure_ascii=False),terms_version=ACCESS_TERMS_VERSION,terms_snapshot=json.dumps(ACCESS_TERMS,ensure_ascii=False),signature_path="sha256:"+proof,ip_hash=_client_hash(request))
-    db.create_notification(f"access-request:{request_id}","info","Neuer Zugangsantrag",str(values.get("name") or record["email"]),"/access-requests",audience="admin",source="event")
+    db.create_notification(f"access-request:{request_id}","info","Neuer Zugangsantrag",str(values.get("name") or record["email"]),"/registration-requests",audience="admin",source="event")
     return render(request,"access_request.html",page="public",step="done",request_id=request_id,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
 
 
