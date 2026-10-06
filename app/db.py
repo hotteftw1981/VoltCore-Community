@@ -7269,6 +7269,26 @@ def get_access_request(request_id):
         return dict(row) if row else None
 
 
+def access_request_view(request_id):
+    item=get_access_request(request_id)
+    if not item:
+        return None
+    try:
+        item["terms"]=json.loads(item.get("terms_snapshot") or "[]")
+    except Exception:
+        item["terms"]=[]
+    try:
+        item["form_fields"]=json.loads(item.get("field_schema_json") or "[]")
+    except Exception:
+        item["form_fields"]=[]
+    try:
+        item["form_values"]=json.loads(item.get("field_values_json") or "{}")
+    except Exception:
+        item["form_values"]={}
+    item["signature_url"]=""
+    return item
+
+
 def delete_access_request(request_id):
     """Delete one access-request record while leaving any approved user intact."""
     with _lock,_connect() as conn:
