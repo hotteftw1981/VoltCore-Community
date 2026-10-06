@@ -1,4 +1,4 @@
-"""Backup and restore support for the OCPP backend.
+"""Backup and restore support for VoltCore Community.
 
 Backups are self-contained ZIP archives with a consistent SQLite snapshot and
 persistent DATA_DIR files. The backup directory and external credentials are
@@ -212,7 +212,7 @@ def create_backup(label=None, keep_local=True):
         _sqlite_snapshot(snapshot)
         manifest = {
             "format": 1,
-            "product": db.branding_settings().get("product_name") or "VoltCore",
+            "product": db.branding_settings().get("product_name") or "VoltCore Community",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "database": "database/ocpp.sqlite3",
             "data_root": "data/",
