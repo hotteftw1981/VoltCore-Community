@@ -211,32 +211,22 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 def render(request: Request, template_name: str, status_code: int = 200, **context):
     context.setdefault("app_version", APP_VERSION)
     context.setdefault("branding", db.branding_settings())
-    context.setdefault("registration", db.registration_settings())
     auth_user=getattr(request.state, "auth_user", None)
     context.setdefault("auth_user", auth_user)
-    if auth_user and auth_user.get("role")=="admin":
-        counts=db.access_request_counts()
-        context.setdefault("access_request_open_count",int(counts.get("new",0))+int(counts.get("review",0)))
-    else:
-        context.setdefault("access_request_open_count",0)
     return templates.TemplateResponse(request=request, name=template_name, context=context, status_code=status_code)
 
 
-SESSION_COOKIE = "drk_ocpp_session"
-TWO_FACTOR_COOKIE = "drk_ocpp_2fa"
+SESSION_COOKIE = "voltcore_community_session"
+TWO_FACTOR_COOKIE = "voltcore_community_2fa"
 SESSION_HOURS = int(os.getenv("SESSION_HOURS", "12"))
 TWO_FACTOR_CHALLENGE_MINUTES = max(2, int(os.getenv("TWO_FACTOR_CHALLENGE_MINUTES", "5")))
 TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "drk_charge_portal"
-PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
-PORTAL_PIN_ITERATIONS = 180000
-PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal", "/api/public/portal/gamification-reveals/ack", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/health", "/liveview", "/api/liveview", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -320,7 +310,7 @@ def _same_origin_value(value: str | None, request: Request) -> bool:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/") or path.startswith("/api/integrations/fleet/")
+    return path in PUBLIC_PATHS or path.startswith("/static/") or path.startswith("/branding/") or path.startswith("/media/") or path.startswith("/api/liveview/history/")
 
 
 def _activity_descriptor(method: str, path: str):
@@ -329,14 +319,6 @@ def _activity_descriptor(method: str, path: str):
     verb={"POST":"ausgeführt","PUT":"geändert","PATCH":"geändert","DELETE":"gelöscht"}.get(method,"ausgeführt")
     if path.startswith("/api/system-users"):
         return f"Systembenutzer {verb}", "Systembenutzer", path
-    if path.startswith("/api/users") or path.startswith("/api/rfid") or path.startswith("/api/portal-admin"):
-        return f"Ladebenutzer/RFID {verb}", "Ladebenutzer", path
-    if path.startswith("/api/access-requests"):
-        return f"Zugangsantrag {verb}", "Zugangsanträge", path
-    if path.startswith("/api/engagement"):
-        return f"Achievements/Events {verb}", "Engagement", path
-    if path.startswith("/api/import/"):
-        return f"Historienimport {verb}", "Datenimport", path
     if path.startswith("/api/remote-control/"):
         return f"OCPP-Fernsteuerung {verb}", "Remote-Steuerung", path
     if path.startswith("/api/security"):
@@ -354,10 +336,6 @@ def _activity_descriptor(method: str, path: str):
         return f"Update-Center {verb}", "Updates", path
     if path.startswith("/api/settings/"):
         return f"Systemeinstellung {verb}", "Einstellungen", path
-    if path.startswith("/api/cost-centers"):
-        return f"Kostenstelle {verb}", "Abrechnung", path
-    if path.startswith("/api/smart-charging/"):
-        return f"Lastmanagement {verb}", "Smart Charging", path
     if path.startswith("/api/vehicles"):
         return f"Fahrzeug {verb}", "Fahrzeuge", path
     if path.startswith("/api/charge-points"):
@@ -427,6 +405,12 @@ async def web_access_control(request: Request, call_next):
         return _login_redirect(request, "expired" if token else None)
     request.state.auth_user=auth
 
+    # Fresh Community installations finish their neutral first-run wizard once.
+    if db.get_setting("community_first_run_completed","0") != "1" and path not in {"/first-run","/logout"}:
+        if path.startswith("/api/"):
+            return JSONResponse({"detail":"Ersteinrichtung noch nicht abgeschlossen","first_run_required":True},status_code=409)
+        return RedirectResponse(url="/first-run",status_code=303)
+
     # Settings and system-account administration are admin-only.
     admin_only = path in {"/settings","/registration-onboarding","/security","/tariffs","/cost-centers","/engagement","/imports","/backups","/updates","/openapi.json"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/") or path.startswith("/api/portal-admin") or path.startswith("/api/engagement") or path.startswith("/api/settings/") or path.startswith("/api/import/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/admin/ladeguthaben/") or path.startswith("/access-requests") or path.startswith("/api/access-requests")
     if admin_only and auth.get("role") != "admin":
@@ -470,7 +454,7 @@ async def security_headers(request: Request, call_next):
         response.headers.setdefault("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; object-src 'none'; frame-src 'none'; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         if _request_is_https(request):
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-        if request.url.path in {"/login","/setup","/security"} or request.url.path.startswith("/api/") or request.url.path.startswith("/public/ladeguthaben") or request.url.path.startswith("/public/access-request") or not _is_public_path(request.url.path):
+        if request.url.path in {"/login","/setup","/first-run","/security"} or request.url.path.startswith("/api/") or not _is_public_path(request.url.path):
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Pragma", "no-cache")
             response.headers.setdefault("Expires", "0")
@@ -496,10 +480,87 @@ async def setup_submit(request: Request, username: str = Form(...), display_name
         return render(request, "setup.html", page="auth", error=str(exc), username=username, display_name=display_name)
     token=secrets.token_urlsafe(32); expires=datetime.now(timezone.utc)+timedelta(hours=SESSION_HOURS)
     db.create_system_session(_session_hash(token), user_id, expires.isoformat()); db.mark_system_login(user_id)
-    db.add_activity(system_user_id=user_id, username=username, display_name=display_name, action="Ersteinrichtung abgeschlossen", category="Zugriff", target="Erster Administrator")
-    response=RedirectResponse(url="/", status_code=303)
+    db.set_setting("community_first_run_completed","0")
+    db.set_setting("community_free_credit_enabled","0")
+    db.set_setting("community_default_monthly_kwh","0")
+    db.add_activity(system_user_id=user_id, username=username, display_name=display_name, action="Administrator angelegt", category="Zugriff", target="Community-Ersteinrichtung")
+    response=RedirectResponse(url="/first-run", status_code=303)
     response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_HOURS*3600, httponly=True, samesite="lax", secure=_cookie_secure(request), path="/")
     return response
+
+
+@app.get("/first-run", response_class=HTMLResponse)
+async def first_run_page(request: Request):
+    auth=request.state.auth_user or {}
+    if auth.get("role")!="admin":
+        return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
+    if db.get_setting("community_first_run_completed","0")=="1":
+        return RedirectResponse(url="/",status_code=303)
+    return render(request,"first_run.html",page="first-run",mail=mailer.settings(),values=None)
+
+
+@app.post("/first-run", response_class=HTMLResponse)
+async def first_run_submit(request: Request):
+    auth=request.state.auth_user or {}
+    if auth.get("role")!="admin":
+        return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
+    form=await request.form()
+    values={k:str(v) for k,v in form.items()}
+    values["smtp_enabled"]=form.get("smtp_enabled")=="1"
+    values["free_credit_enabled"]=form.get("free_credit_enabled")=="1"
+    organization=str(form.get("organization_name") or "").strip()
+    display_name=str(form.get("display_name") or "").strip()
+    if not organization or not display_name:
+        return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error="Organisation und Anzeigename sind erforderlich.")
+    try:
+        db.set_setting("branding_organization_name",organization[:120])
+        db.set_setting("branding_display_name",display_name[:120])
+        db.set_setting("branding_product_name","VoltCore Community")
+        db.set_setting("branding_product_subtitle","Community Edition · OCPP Charging Management")
+
+        smtp_enabled=form.get("smtp_enabled")=="1"
+        mailer.save_settings({
+            "enabled":smtp_enabled,
+            "host":form.get("smtp_host") or "",
+            "port":form.get("smtp_port") or 587,
+            "security":form.get("smtp_security") or "starttls",
+            "username":form.get("smtp_username") or "",
+            "password":form.get("smtp_password") or None,
+            "from_email":form.get("smtp_from_email") or "",
+            "from_name":display_name,
+            "admin_recipients":"",
+            "public_base_url":"",
+            "event_backup_failures":True,
+            "event_security_warnings":False,
+        })
+
+        price_text=str(form.get("price_eur_kwh") or "").strip().replace(",",".")
+        if price_text:
+            price=float(price_text)
+            if price < 0 or price > 100:
+                raise ValueError("Der Preis pro kWh ist ungültig.")
+            if not any(str(t.get("scope"))=="global" and int(t.get("active",1) or 0)==1 for t in db.list_tariffs()):
+                db.create_tariff(
+                    str(form.get("tariff_name") or "Standardtarif").strip() or "Standardtarif",
+                    "global",None,int(round(price*100)),
+                    datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+                )
+
+        credit_enabled=form.get("free_credit_enabled")=="1"
+        default_kwh=float(str(form.get("default_monthly_kwh") or "0").replace(",","."))
+        if default_kwh < 0 or default_kwh > 100000:
+            raise ValueError("Das Standard-Ladeguthaben ist ungültig.")
+        db.set_setting("community_free_credit_enabled","1" if credit_enabled else "0")
+        db.set_setting("community_default_monthly_kwh",str(round(default_kwh,3) if credit_enabled else 0))
+        db.set_setting("community_first_run_completed","1")
+        db.add_activity(
+            system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),
+            action="Community-Ersteinrichtung abgeschlossen",category="System",target=display_name,
+            details=f"SMTP: {'aktiv' if smtp_enabled else 'aus'} · Standardtarif: {'gesetzt' if price_text else 'übersprungen'} · Monatsguthaben: {'aktiv' if credit_enabled else 'aus'}",
+        )
+    except (ValueError,TypeError) as exc:
+        return render(request,"first_run.html",status_code=400,page="first-run",mail=mailer.settings(),values=values,error=str(exc))
+    return RedirectResponse(url="/",status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
