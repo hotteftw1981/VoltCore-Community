@@ -2323,10 +2323,9 @@ async def create_user(payload: UserPayload):
     if not payload.name.strip(): raise HTTPException(400,"Name ist erforderlich")
     if payload.charge_access_mode not in (None,"all","selected"): raise HTTPException(400,"Ungültige Ladeberechtigung")
     data=payload.model_dump()
-    data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
-    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); return {"ok":True,"user":user}
+    user=db.get_user(uid) or {}; return {"ok":True,"user":user}
 
 @app.put("/api/users/{user_id}")
 async def update_user(request:Request,user_id: int,payload: UserPayload):
@@ -2354,7 +2353,7 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
         before_text="Alle Ladepunkte" if before_access["mode"]=="all" else (", ".join(before_access["charge_point_ids"]) or "Keine Ladepunkte")
         after_text="Alle Ladepunkte" if after_access["mode"]=="all" else (", ".join(after_access["charge_point_ids"]) or "Keine Ladepunkte")
         db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladeberechtigung geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"{before_text} → {after_text}")
-    user.pop("portal_pin_hash",None); return {"ok":True,"user":user}
+    return {"ok":True,"user":user}
 
 @app.post("/api/users/{user_id}/image")
 async def upload_user_image(user_id:int, image:UploadFile=File(...)):
