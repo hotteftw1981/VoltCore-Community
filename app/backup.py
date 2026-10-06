@@ -592,7 +592,7 @@ def restore_backup(path: Path):
                 if not item.is_file(): continue
                 rel=item.relative_to(data_stage)
                 target=db.DATA_DIR/rel
-                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve(), (db.DATA_DIR/".update_portainer_webhook").resolve()}:
+                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}:
                     continue
                 target.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(item,target)
