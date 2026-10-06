@@ -59,7 +59,6 @@ Die Community Edition enthält unter anderem:
 - 🧾 Ladevorgänge / Historie
 - 🔗 einfache Zuordnung Benutzer / Fahrzeug / RFID
 - 📊 Dashboard
-- 🖥️ Basis-LiveView
 - 📈 einfache Reports
 - 📄 CSV-Export
 - 💾 Backup / Restore

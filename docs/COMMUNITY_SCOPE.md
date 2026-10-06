@@ -16,7 +16,6 @@ This document records the agreed initial feature scope for VoltCore Community.
 - Charging session history
 - Basic user / vehicle / RFID assignment
 - Dashboard
-- Basic LiveView
 - Basic reports
 - CSV export
 - Backup / restore
@@ -64,6 +63,8 @@ The application should:
 6. preserve database migrations and rollback safety.
 
 ## Scope notes
+
+LiveView / Kiosk is explicitly **not part of VoltCore Community**. This applies to all former variants, including Standard, Pro and People.
 
 The Community edition now includes additional neutral modules restored from the VoltCore 0.9.7.74 baseline, including Smart Charging, Engagement, Cost Centers, imports and read-only Fleet Integration. Community-specific defaults and privacy/security constraints still take precedence.
 

@@ -2,6 +2,17 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.75 — Community scope correction
+
+### Removed
+- Removed LiveView from VoltCore Community completely, including Standard, Pro and People variants.
+- Removed LiveView routes, public APIs, settings UI, template and edition-specific styles.
+- Removed obsolete LiveView settings from existing 0.9.7.74 Community databases during startup.
+
+### Release readiness
+- Added regression coverage so LiveView cannot accidentally return to the Community edition.
+- Community documentation and advertised feature scope now match the intended edition boundary.
+
 ## 0.9.7.74 — Community release candidate
 
 ### Community edition
