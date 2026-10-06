@@ -58,5 +58,40 @@ class CommunityRuntimeSmokeTests(unittest.TestCase):
             self.assertTrue({"cost_center", "billing_group_id"}.isdisjoint(tariff_columns), sorted(tariff_columns))
 
 
+    def test_free_allowance_is_opt_in_and_separate_from_limits(self):
+        user_id = db.create_user("Credit Test")
+        db.save_community_charging_credit_settings(True, 100)
+        now = db.utc_now()
+        with db._lock, db._connect() as conn:
+            conn.execute(
+                """INSERT INTO transactions(charge_point_id,connector_id,started_at,ended_at,energy_kwh,status,user_id,price_cents_per_kwh)
+                   VALUES('TEST-CREDIT',1,?,?,80,'Completed',?,50)""",
+                (now, now, user_id),
+            )
+            cur = conn.execute(
+                """INSERT INTO transactions(charge_point_id,connector_id,started_at,ended_at,energy_kwh,status,user_id,price_cents_per_kwh)
+                   VALUES('TEST-CREDIT',1,?,?,50,'Completed',?,50)""",
+                (now, now, user_id),
+            )
+            tx_id = int(cur.lastrowid)
+            db._update_tx_cost_conn(conn, tx_id)
+            cost = conn.execute("SELECT cost_cents FROM transactions WHERE id=?", (tx_id,)).fetchone()[0]
+            conn.commit()
+        self.assertEqual(cost, 1500)  # 20 kWh remain free, 30 kWh x 0.50 EUR
+
+        db.save_community_charging_credit_settings(False, 0)
+        with db._lock, db._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO transactions(charge_point_id,connector_id,started_at,ended_at,energy_kwh,status,user_id,price_cents_per_kwh)
+                   VALUES('TEST-CREDIT',1,?,?,10,'Completed',?,50)""",
+                (now, now, user_id),
+            )
+            tx_id = int(cur.lastrowid)
+            db._update_tx_cost_conn(conn, tx_id)
+            cost = conn.execute("SELECT cost_cents FROM transactions WHERE id=?", (tx_id,)).fetchone()[0]
+            conn.commit()
+        self.assertEqual(cost, 500)
+
+
 if __name__ == "__main__":
     unittest.main()
