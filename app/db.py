@@ -2927,17 +2927,20 @@ def user_may_charge_at(user_id,charge_point_id):
 
 
 def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=True,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
-    source="auto" if str(budget_source or "manual").lower()=="auto" else "manual"
-    hours=None if weekly_hours in (None,"") else max(0.0,float(weekly_hours))
-    if source=="auto":
-        limit_value=calculate_registration_budget(hours)
-    else:
-        limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
+    """Create a neutral Community charging user.
+
+    weekly_hours and budget_source remain accepted for backwards compatibility,
+    but Community never derives charging credit from employment data.
+    """
+    limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
         gamification = 1 if gamification_enabled else 0
         access_mode=_normalize_charge_access_mode(charge_access_mode)
-        cur=conn.execute("INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(name,role,department,status,email,phone,limit_value,mode,gamification,hours,source,access_mode))
+        cur=conn.execute(
+            "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (name,role,department,status,email,phone,limit_value,mode,gamification,None,"manual",access_mode),
+        )
         user_id=int(cur.lastrowid)
         _set_user_charge_access_conn(conn,user_id,access_mode,allowed_charge_point_ids)
         conn.commit()
@@ -2946,8 +2949,9 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
 def update_user(user_id,**fields):
     access_mode=fields.pop("charge_access_mode",None)
     access_ids=fields.pop("allowed_charge_point_ids",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled","weekly_hours","budget_source"}
-    auto_budget_settings=registration_settings()
+    fields.pop("weekly_hours",None)
+    fields.pop("budget_source",None)
+    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2959,22 +2963,11 @@ def update_user(user_id,**fields):
             value = "block" if str(value).lower() == "block" else "warn"
         elif k == "gamification_enabled":
             value = 1 if value else 0
-        elif k == "weekly_hours":
-            value = None if value in (None,"") else max(0.0,float(value))
-        elif k == "budget_source":
-            value = "auto" if str(value or "").lower()=="auto" else "manual"
         updates.append((k,value))
     if not updates and access_mode is None and access_ids is None:return False
     with _lock,_connect() as conn:
         if not conn.execute("SELECT id FROM users WHERE id=?",(user_id,)).fetchone():return False
         card_uids=[str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(user_id,)).fetchall()]
-        current=conn.execute("SELECT weekly_hours,budget_source FROM users WHERE id=?",(user_id,)).fetchone()
-        values={k:v for k,v in updates}
-        effective_source=values.get("budget_source", current["budget_source"] if current else "manual")
-        effective_hours=values.get("weekly_hours", current["weekly_hours"] if current else None)
-        if effective_source=="auto":
-            values["monthly_kwh_limit"]=calculate_registration_budget(effective_hours,auto_budget_settings)
-            updates=[(k,v) for k,v in updates if k!="monthly_kwh_limit"]+[("monthly_kwh_limit",values["monthly_kwh_limit"])]
         if updates:
             conn.execute("UPDATE users SET "+", ".join(f"{k}=?" for k,_ in updates)+" WHERE id=?",[v for _,v in updates]+[user_id])
         access_changed=access_mode is not None or access_ids is not None
