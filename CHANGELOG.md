@@ -38,6 +38,7 @@ All notable changes to VoltCore Community are documented here.
 - Block 3E adds a read-only Docker runtime QA workflow: fresh administrator setup, first-run configuration, authenticated pages/APIs, explicit negative authorization tests, removed-route checks and persisted data after restart.
 - Positive runtime-contract tests now detect missing shared database APIs and stale first-run variable references, complementing the existing feature-removal checks.
 - Runtime QA uses disposable loopback-only instances and random temporary credentials. Only external update checks are disabled through the existing persisted setting; production update behavior is unchanged. Browser interaction, physical chargers, external mail/push delivery and upgrade/restore scenarios require separate validation.
+- Block 3F exercises real authenticated Admin/User/Viewer sessions. The writer can mutate operational charging data but is blocked from administration, while Viewer remains read-only except for its own account/notification state; role assignments and boundaries are rechecked after an actual container restart.
 
 ## 0.9.7.75 — Community scope correction
 
