@@ -120,20 +120,17 @@ jobs:
           print("Release archive OK:", archives[0])
           PY
 
-      - name: Check existing release
-        id: existing
+      - name: Reject duplicate release version
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Release $RELEASE_TAG already exists. Bump APP_VERSION before creating another release."
+            exit 1
           fi
 
       - name: Create GitHub Release
-        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
