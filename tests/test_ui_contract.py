@@ -27,7 +27,9 @@ class CommunityUIContractTests(unittest.TestCase):
 
         for href in ("/tariffs", "/system-users", "/security", "/backups", "/updates", "/settings"):
             self.assertIn(f'href="{href}"', base)
+            self.assertIn("{% if auth_user and auth_user.role == 'admin' %}<a href=\"" + href + "\"", base)
         self.assertGreaterEqual(base.count("auth_user.role == 'admin'"), 6)
+        self.assertIn('class="readonly-banner"', base)
 
     def test_dark_mode_and_mobile_shell_stay_available(self):
         base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
@@ -37,6 +39,8 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertNotIn("drk-ocpp-theme", base)
         self.assertIn('html[data-theme="dark"]', css)
         self.assertIn("@media(max-width:700px)", css)
+        self.assertIn("@media(max-width:860px)", css)
+        self.assertIn(".readonly-banner{margin:-4px 0 14px}", css)
         self.assertIn("mobile-topbar", base)
         self.assertIn("mobile-menu-button", base)
         self.assertIn("mobile-nav-backdrop", base)
