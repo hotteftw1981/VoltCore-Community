@@ -2,7 +2,7 @@ name: Community Release
 
 on:
   workflow_run:
-    workflows: ["Community CI"]
+    workflows: ["Community Container"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
