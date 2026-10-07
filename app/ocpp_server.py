@@ -822,7 +822,7 @@ class ChargePoint(OcppChargePoint):
         db.mark_message(self.id, "Heartbeat")
         db.add_event(self.id, "Heartbeat")
         if db.refresh_local_list_for_month():
-            asyncio.create_task(sync_pending_local_lists(reason="Monatswechsel Ladebudget"))
+            asyncio.create_task(sync_pending_local_lists(reason="Monatswechsel Ladelimit"))
         return call_result.Heartbeat(current_time=datetime.now(timezone.utc).isoformat())
 
     @on(Action.status_notification)
