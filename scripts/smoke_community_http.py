@@ -66,6 +66,11 @@ class Smoke:
         self.check(f"{kwargs.get('method', 'GET')} {path}: {actual} (expected {code})", actual == code)
         return actual, headers, body
 
+    @staticmethod
+    def html(body):
+        return body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body or "")
+
+
     def reset_session(self):
         self.jar.clear()
 
@@ -165,11 +170,35 @@ class Smoke:
         self.check("admin created writer account", bool(state["writer"]["id"]))
         self.check("admin created viewer account", bool(state["viewer"]["id"]))
 
+        _, _, admin_home = self.expect("/")
+        admin_html = self.html(admin_home)
+        self.check("admin shell exposes admin role", 'data-role="admin"' in admin_html)
+        self.check("admin navigation exposes settings", 'href="/settings"' in admin_html)
+        _, _, admin_users_page = self.expect("/users")
+        self.check("admin sees LocalList administration", "Offline-Autorisierung / LocalList" in self.html(admin_users_page))
+        _, _, admin_cp_page = self.expect("/charge-points/QA-CP-001")
+        self.check("admin sees remote-control tab", 'data-tab="remote"' in self.html(admin_cp_page))
+        _, _, css_body = self.expect("/static/style.css")
+        css_text = self.html(css_body)
+        self.check("viewer write actions are hidden by role CSS", 'body[data-role="viewer"] .write-action{display:none!important}' in css_text)
+        self.check("dark theme CSS exists", 'html[data-theme="dark"]' in css_text)
+        self.check("mobile breakpoint CSS exists", '@media(max-width:700px)' in css_text)
+
         self.expect("/logout", 303, method="POST")
         self.expect("/api/users", 401)
 
         self.login(state["writer"]["username"], writer_password)
-        for path in ("/", "/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
+        _, _, writer_home = self.expect("/")
+        writer_html = self.html(writer_home)
+        self.check("writer shell exposes user role", 'data-role="user"' in writer_html)
+        self.check("writer navigation hides settings", 'href="/settings"' not in writer_html)
+        self.check("writer navigation hides system users", 'href="/system-users"' not in writer_html)
+        self.check("writer has no read-only banner", "Nur-Lese-Zugang" not in writer_html)
+        _, _, writer_users_page = self.expect("/users")
+        self.check("writer does not see LocalList administration", "Offline-Autorisierung / LocalList" not in self.html(writer_users_page))
+        _, _, writer_cp_page = self.expect("/charge-points/QA-CP-001")
+        self.check("writer charge-point page hides remote-control tab", 'data-tab="remote"' not in self.html(writer_cp_page))
+        for path in ("/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
             self.expect(path)
         for path in ("/settings", "/security", "/tariffs", "/backups", "/updates", "/system-users"):
             self.expect(path, 403)
@@ -188,7 +217,19 @@ class Smoke:
         self.expect("/logout", 303, method="POST")
 
         self.login(state["viewer"]["username"], viewer_password)
-        for path in ("/", "/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
+        _, _, viewer_home = self.expect("/")
+        viewer_html = self.html(viewer_home)
+        self.check("viewer shell exposes viewer role", 'data-role="viewer"' in viewer_html)
+        self.check("viewer sees read-only banner", "Nur-Lese-Zugang" in viewer_html)
+        self.check("viewer navigation hides settings", 'href="/settings"' not in viewer_html)
+        self.check("viewer navigation hides system users", 'href="/system-users"' not in viewer_html)
+        _, _, viewer_users_page = self.expect("/users")
+        self.check("viewer does not see LocalList administration", "Offline-Autorisierung / LocalList" not in self.html(viewer_users_page))
+        _, _, viewer_cp_page = self.expect("/charge-points/QA-CP-001")
+        viewer_cp_html = self.html(viewer_cp_page)
+        self.check("viewer charge-point page hides remote-control tab", 'data-tab="remote"' not in viewer_cp_html)
+        self.check("viewer edit affordance is tagged as write action", 'id="editMasterData" class="secondary button write-action"' in viewer_cp_html)
+        for path in ("/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
             self.expect(path)
         for path in ("/settings", "/security", "/tariffs", "/backups", "/updates", "/system-users"):
             self.expect(path, 403)
