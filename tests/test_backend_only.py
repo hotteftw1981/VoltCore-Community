@@ -317,6 +317,28 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertNotIn("ghcr.io/hotteftw1981/voltcore:latest", releases)
 
 
+    def test_release_pipeline_is_gated_end_to_end(self):
+        workflows = ROOT / ".github" / "workflows"
+        ci = (workflows / "ci.yml").read_text(encoding="utf-8")
+        container = (workflows / "container.yml").read_text(encoding="utf-8")
+        release = (workflows / "release.yml").read_text(encoding="utf-8")
+        package_qa = (workflows / "community-qa.yml").read_text(encoding="utf-8")
+        runtime_qa = (workflows / "community-runtime-qa.yml").read_text(encoding="utf-8")
+
+        self.assertIn("scripts/smoke_community_http.py --phase initial", ci)
+        self.assertIn("scripts/smoke_community_http.py --phase restart", ci)
+        self.assertIn("python scripts/build_release.py --dist dist", ci)
+        self.assertIn("-p 127.0.0.1:18010:8000", ci)
+        self.assertIn('workflows: ["Community CI"]', container)
+        self.assertIn('workflows: ["Community Container"]', release)
+        self.assertNotIn("refactor/community-full-runtime-base", package_qa)
+
+        for workflow in (ci, container, release, package_qa, runtime_qa):
+            self.assertNotIn("actions/checkout@v4", workflow)
+        self.assertIn("actions/checkout@v7", ci)
+        self.assertIn("actions/upload-artifact@v7", runtime_qa)
+
+
     def test_runtime_dead_code_and_default_limit_wiring(self):
         main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
         db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
