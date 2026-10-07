@@ -30,7 +30,7 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen.
+> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.76.**
 
 ## 🚀 Installation
 
