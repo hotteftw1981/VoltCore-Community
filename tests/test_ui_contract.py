@@ -91,6 +91,12 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn('class="detail-actions write-action"', users)
         self.assertGreaterEqual(users.count('class="detail-actions write-action"'), 2)
         self.assertIn('class="detail-actions write-action"', vehicles)
+        transactions = (ROOT / "app" / "templates" / "transactions.html").read_text(encoding="utf-8")
+        self.assertIn("const canWrite={{ 'false' if auth_user and auth_user.role == 'viewer' else 'true' }};", users)
+        self.assertIn("async function openUserDelete(id){\n  if(!canWrite)return;", users)
+        self.assertIn("function openEditor(v){if(!canWrite)return;", vehicles)
+        self.assertIn("async function openAssignUserModal(vehicleId){\n  if(!canWrite)return;", vehicles)
+        self.assertIn("document.getElementById('saveSessionVehicle').onclick=async()=>{if(!canWrite)return;", transactions)
 
 
 if __name__ == "__main__":
