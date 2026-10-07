@@ -1,9 +1,6 @@
-name: Community QA
+name: Community Package QA
 
 on:
-  push:
-    branches:
-      - refactor/community-full-runtime-base
   workflow_dispatch:
 
 jobs:
