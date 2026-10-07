@@ -66,6 +66,21 @@ class Smoke:
         self.check(f"{kwargs.get('method', 'GET')} {path}: {actual} (expected {code})", actual == code)
         return actual, headers, body
 
+    def reset_session(self):
+        self.jar.clear()
+
+    def login(self, username, password, code=303):
+        self.reset_session()
+        actual, headers, body = self.expect("/login", code, method="POST", form={
+            "username": username, "password": password,
+        })
+        if code == 303:
+            self.check(f"{username} receives authenticated session", any(
+                cookie.name == "voltcore_community_session" for cookie in self.jar
+            ))
+        return actual, headers, body
+
+
     def health(self):
         for _ in range(30):
             try:
@@ -132,6 +147,76 @@ class Smoke:
         if state["user_id"]:
             self.expect("/api/rfid", method="POST", payload={"uid": "QA-RFID-001", "user_id": state["user_id"]})
 
+        # Block 3F: exercise real role boundaries through authenticated HTTP sessions.
+        writer_password = secrets.token_urlsafe(24) + "!uU7"
+        viewer_password = secrets.token_urlsafe(24) + "!vV8"
+        state["writer"] = {"username": "community-qa-user", "password": writer_password}
+        state["viewer"] = {"username": "community-qa-viewer", "password": viewer_password}
+        _, _, writer_created = self.expect("/api/system-users", method="POST", payload={
+            "username": state["writer"]["username"], "display_name": "Community QA User",
+            "role": "user", "active": True, "password": writer_password,
+        })
+        _, _, viewer_created = self.expect("/api/system-users", method="POST", payload={
+            "username": state["viewer"]["username"], "display_name": "Community QA Viewer",
+            "role": "viewer", "active": True, "password": viewer_password,
+        })
+        state["writer"]["id"] = (writer_created.get("user") or {}).get("id") if isinstance(writer_created, dict) else None
+        state["viewer"]["id"] = (viewer_created.get("user") or {}).get("id") if isinstance(viewer_created, dict) else None
+        self.check("admin created writer account", bool(state["writer"]["id"]))
+        self.check("admin created viewer account", bool(state["viewer"]["id"]))
+
+        self.expect("/logout", 303, method="POST")
+        self.expect("/api/users", 401)
+
+        self.login(state["writer"]["username"], writer_password)
+        for path in ("/", "/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
+            self.expect(path)
+        for path in ("/settings", "/security", "/tariffs", "/backups", "/updates", "/system-users"):
+            self.expect(path, 403)
+        for path in ("/api/system-users", "/api/settings/branding", "/api/tariffs", "/api/backups"):
+            self.expect(path, 403)
+        self.expect("/api/system-users", 403, method="POST", payload={
+            "username": "MUST-NOT-BE-CREATED", "display_name": "Forbidden",
+            "role": "admin", "active": True, "password": "ForbiddenPassword!123",
+        })
+        self.expect("/api/remote-control/QA-CP-001/reset", 403, method="POST", payload={})
+        _, _, writer_user = self.expect("/api/users", method="POST", payload={"name": "QA Writer Created"})
+        writer_user_id = (writer_user.get("user") or {}).get("id") if isinstance(writer_user, dict) else None
+        self.check("writer can create operational charging users", bool(writer_user_id))
+        self.expect("/api/vehicles", method="POST", payload={"name": "QA Writer Vehicle", "plate": "QA-WRITER"})
+        self.expect("/api/users")
+        self.expect("/logout", 303, method="POST")
+
+        self.login(state["viewer"]["username"], viewer_password)
+        for path in ("/", "/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
+            self.expect(path)
+        for path in ("/settings", "/security", "/tariffs", "/backups", "/updates", "/system-users"):
+            self.expect(path, 403)
+        for path in ("/api/system-users", "/api/settings/branding", "/api/tariffs", "/api/backups"):
+            self.expect(path, 403)
+        self.expect("/api/users")
+        self.expect("/api/vehicles")
+        self.expect("/api/charge-points")
+        self.expect("/api/reports")
+        self.expect("/api/users", 403, method="POST", payload={"name": "MUST NOT EXIST VIEWER"})
+        self.expect("/api/vehicles", 403, method="POST", payload={"name": "MUST NOT EXIST VIEWER", "plate": "NO-VIEW"})
+        if state["user_id"]:
+            self.expect(f"/api/users/{state['user_id']}", 403, method="PUT", payload={
+                "name": "VIEWER MUST NOT EDIT", "monthly_kwh_limit": 1,
+            })
+        self.expect("/api/notifications/read-all", method="POST")
+        self.expect("/api/account/password", method="POST", payload={
+            "current_password": viewer_password, "new_password": viewer_password + "-changed",
+        })
+        state["viewer"]["password"] = viewer_password + "-changed"
+        self.expect("/logout", 303, method="POST")
+        self.login(state["viewer"]["username"], viewer_password, code=200)
+        self.login(state["viewer"]["username"], state["viewer"]["password"])
+        self.expect("/api/users")
+        self.expect("/logout", 303, method="POST")
+
+        self.login(state["username"], password)
+        self.expect("/api/system-users")
         self.expect("/api/users", 403, method="POST", origin="https://foreign.example", payload={"name": "MUST NOT EXIST"})
         for path in ("/public/ladeguthaben", "/public/access-request", "/registration-onboarding",
                      "/registration-requests", "/engagement", "/cost-centers", "/imports",
@@ -143,7 +228,7 @@ class Smoke:
         self.expect("/logout", 303, method="POST")
         self.expect("/api/users", 401)
         self.expect("/login")
-        self.expect("/login", 303, method="POST", form={"username": state["username"], "password": password})
+        self.login(state["username"], password)
         self.expect("/api/users")
 
     def restart(self, state_path):
@@ -161,6 +246,21 @@ class Smoke:
         self.check("blocked cross-origin request did not create a user", not any(x.get("name") == "MUST NOT EXIST" for x in rows))
         self.expect("/api/rfid")
         self.expect("/api/reports")
+        _, _, system_data = self.expect("/api/system-users")
+        system_rows = system_data.get("users", []) if isinstance(system_data, dict) else []
+        self.check("writer role survives restart", any(
+            x.get("username") == state["writer"]["username"] and x.get("role") == "user" for x in system_rows
+        ))
+        self.check("viewer role survives restart", any(
+            x.get("username") == state["viewer"]["username"] and x.get("role") == "viewer" for x in system_rows
+        ))
+        self.expect("/logout", 303, method="POST")
+        self.login(state["writer"]["username"], state["writer"]["password"])
+        self.expect("/api/users", method="POST", payload={"name": "QA Writer After Restart"})
+        self.expect("/logout", 303, method="POST")
+        self.login(state["viewer"]["username"], state["viewer"]["password"])
+        self.expect("/api/users")
+        self.expect("/api/users", 403, method="POST", payload={"name": "VIEWER AFTER RESTART MUST NOT WRITE"})
         state_path.unlink(missing_ok=True)
 
 
