@@ -88,6 +88,7 @@ class CommunityUIContractTests(unittest.TestCase):
         vehicles = (ROOT / "app" / "templates" / "vehicles.html").read_text(encoding="utf-8")
         self.assertIn('class="user-photo-actions write-action"', users)
         self.assertIn('class="detail-actions write-action"', users)
+        self.assertGreaterEqual(users.count('class="detail-actions write-action"'), 2)
         self.assertIn('class="detail-actions write-action"', vehicles)
 
 
