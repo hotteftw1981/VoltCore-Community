@@ -162,6 +162,7 @@ html[data-theme="dark"] .form-grid label,html[data-theme="dark"] .field-label,ht
 @media(max-width:700px){.side-bottom{position:static;margin-top:10px}.side-tools{grid-template-columns:1fr 1fr}.header-actions{width:100%;align-items:stretch;margin-top:12px}.account-chip{width:max-content}.server{width:max-content}.auth-shell{padding:14px!important}.auth-card{padding:22px}.stats.three{grid-template-columns:1fr}.table-actions{justify-content:flex-start}.account-chip>span:last-child{display:none}}
 body[data-role="viewer"] .write-action{display:none!important}
 body[data-role="viewer"] .session-assignment{display:none!important}
+@media(max-width:860px){body[data-role="viewer"] .viewer-single-action,body[data-role="viewer"] .vehicle-card-actions{grid-template-columns:1fr!important}}
 html[data-theme="dark"] .user-card,html[data-theme="dark"] .device-card{background:var(--surface);border-color:var(--line);box-shadow:var(--shadow)}
 html[data-theme="dark"] .user-stats,html[data-theme="dark"] .device-metrics,html[data-theme="dark"] .detected-grid,html[data-theme="dark"] .device-kpis,html[data-theme="dark"] .device-info-grid{background:var(--line)!important;border-color:var(--line)!important}
 html[data-theme="dark"] .user-stats>div,html[data-theme="dark"] .device-metrics>div,html[data-theme="dark"] .detected-grid>div,html[data-theme="dark"] .device-kpis>div,html[data-theme="dark"] .device-info-grid>div{background:var(--surface)!important}
