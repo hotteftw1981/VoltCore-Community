@@ -131,6 +131,7 @@ $('remoteOperative').onclick=()=>remotePost('/api/remote-control/'+encodeURIComp
 $('remoteInoperative').onclick=()=>remotePost('/api/remote-control/'+encodeURIComponent(cpId)+'/availability',{connector_id:Number($('remoteConnector').value),availability_type:'Inoperative'},'Ausgewählten Bereich wirklich außer Betrieb setzen?');
 $('remoteReset').onclick=()=>{const type=$('remoteResetType').value;remotePost('/api/remote-control/'+encodeURIComponent(cpId)+'/reset',{reset_type:type},type==='Hard'?'Hard Reset kann Verbindung und laufende Sessions unterbrechen. Wirklich senden?':'Soft Reset senden?')};
 loadRemoteState();setInterval(loadRemoteState,5000);
-$('diagnosticFilter').addEventListener$('diagnosticFilter').addEventListener('click',e=>{const b=e.target.closest('[data-diag-filter]');if(!b)return;diagnosticFilter=b.dataset.diagFilter;document.querySelectorAll('#diagnosticFilter [data-diag-filter]').forEach(x=>x.classList.toggle('active',x===b));load()});
+{% endif %}
+$('diagnosticFilter').addEventListener('click',e=>{const b=e.target.closest('[data-diag-filter]');if(!b)return;diagnosticFilter=b.dataset.diagFilter;document.querySelectorAll('#diagnosticFilter [data-diag-filter]').forEach(x=>x.classList.toggle('active',x===b));load()});
 $('refreshBtn').onclick=load;load();setInterval(load,2000);
 </script>{% endblock %}
