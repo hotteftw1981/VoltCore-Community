@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -257,9 +256,9 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertIn("intentionally **backend-only**", scope)
         self.assertIn("0.9.7.76 — Backend-only Community scope", changelog)
         main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
-        match = re.search(r'^APP_VERSION\\s*=\\s*["\\x27]([^"\\x27]+)["\\x27]', main, re.M)
-        self.assertIsNotNone(match)
-        version = match.group(1)
+        version_line = next((line for line in main.splitlines() if line.startswith("APP_VERSION = ")), None)
+        self.assertIsNotNone(version_line)
+        version = version_line.split("=", 1)[1].strip().strip("\"'")
         self.assertIn(version, readme_de)
         self.assertIn(version, readme_en)
         self.assertIn(f"## {version}", changelog)
