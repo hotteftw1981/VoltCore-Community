@@ -19,6 +19,7 @@ jobs:
   release:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Resolve source commit
         id: source
@@ -36,18 +37,12 @@ jobs:
           ref: ${{ steps.source.outputs.sha }}
           fetch-depth: 0
 
-      - name: Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-
       - name: Resolve release tag
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           from pathlib import Path
           text=Path("app/main.py").read_text(encoding="utf-8")
@@ -65,10 +60,31 @@ jobs:
           print(f"tag={tag}")
           PY
 
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Python
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
       - name: Install dependencies
+        if: steps.existing.outputs.exists != 'true'
         run: pip install -r requirements.txt
 
       - name: Release smoke checks
+        if: steps.existing.outputs.exists != 'true'
         env:
           DATA_DIR: /tmp/voltcore-community-release-data
           ENABLE_API_DOCS: "0"
@@ -80,11 +96,13 @@ jobs:
           python -c "import app.main; print('Release import OK:', app.main.APP_VERSION)"
 
       - name: Build Community ZIP
+        if: steps.existing.outputs.exists != 'true'
         run: python scripts/build_release.py --dist dist
 
       - name: Verify release archive
+        if: steps.existing.outputs.exists != 'true'
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           import zipfile
           archives=list(Path("dist").glob("VoltCore_Community_V*.zip"))
@@ -112,18 +130,6 @@ jobs:
                   raise SystemExit("Release archive missing docs/")
           print("Release archive OK:", archives[0])
           PY
-
-      - name: Check existing release
-        id: existing
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Create GitHub Release
         if: steps.existing.outputs.exists != 'true'

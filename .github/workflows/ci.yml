@@ -3,12 +3,32 @@ name: Community CI
 on:
   push:
     branches: [main, develop]
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.env.example'
   pull_request:
     branches: [main, develop]
+    paths:
+      - 'app/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'docker-compose*.yml'
+      - '.env.example'
+  workflow_dispatch:
+
+concurrency:
+  group: voltcore-community-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
