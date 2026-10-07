@@ -39,7 +39,7 @@ All notable changes to VoltCore Community are documented here.
 - Positive runtime-contract tests now detect missing shared database APIs and stale first-run variable references, complementing the existing feature-removal checks.
 - Runtime QA uses disposable loopback-only instances and random temporary credentials. Only external update checks are disabled through the existing persisted setting; production update behavior is unchanged. Browser interaction, physical chargers, external mail/push delivery and upgrade/restore scenarios require separate validation.
 - Block 3F exercises real authenticated Admin/User/Viewer sessions. The writer can mutate operational charging data but is blocked from administration, while Viewer remains read-only except for its own account/notification state; role assignments and boundaries are rechecked after an actual container restart.
-- Block 3G aligns the visible UI with those permissions: Viewer write affordances and direct edit entry points are hidden/guarded, charge-point policy controls become truly read-only, role-specific navigation is checked in rendered HTML, and Dark Mode/mobile shell contracts remain protected. Community terminology now uses neutral monthly-limit wording instead of charging-budget language.
+- Block 3G is complete: Viewer write affordances and direct edit entry points are hidden and client-guarded, charge-point policy controls are truly read-only, admin navigation remains role-gated, mobile Viewer layouts no longer leave empty action rows, and Dark Mode/mobile shell contracts remain protected. Community terminology uses neutral monthly-limit wording instead of charging-budget language.
 
 ## 0.9.7.75 — Community scope correction
 
