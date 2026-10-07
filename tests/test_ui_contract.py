@@ -42,6 +42,9 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn("mobile-nav-backdrop", base)
         self.assertIn(".mobile-topbar", css)
         self.assertIn(".mobile-menu-button", css)
+        self.assertIn('viewer-single-action', (ROOT / "app" / "templates" / "charge_points.html").read_text(encoding="utf-8"))
+        self.assertIn('body[data-role="viewer"] .viewer-single-action', css)
+        self.assertIn('body[data-role="viewer"] .vehicle-card-actions', css)
 
     def test_visible_limit_wording_is_neutral(self):
         users = (ROOT / "app" / "templates" / "users.html").read_text(encoding="utf-8")
