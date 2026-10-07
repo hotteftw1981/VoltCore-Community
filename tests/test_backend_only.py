@@ -340,7 +340,9 @@ class CommunityBackendOnlyTests(unittest.TestCase):
 
         for workflow in (ci, container, release, package_qa, runtime_qa):
             self.assertNotIn("actions/checkout@v4", workflow)
+            self.assertNotIn("actions/setup-python@v5", workflow)
         self.assertIn("actions/checkout@v7", ci)
+        self.assertIn("actions/setup-python@v7", ci)
         self.assertIn("actions/upload-artifact@v7", runtime_qa)
 
 
