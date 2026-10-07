@@ -2,10 +2,19 @@
 from pathlib import Path
 import unittest
 
+from jinja2 import Environment, FileSystemLoader
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class CommunityUIContractTests(unittest.TestCase):
+    def test_all_html_templates_compile(self):
+        template_dir = ROOT / "app" / "templates"
+        env = Environment(loader=FileSystemLoader(str(template_dir)))
+        for name in env.list_templates(extensions=["html"]):
+            with self.subTest(template=name):
+                env.get_template(name)
+
     def test_role_aware_shell_and_viewer_write_hiding(self):
         base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
         css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
@@ -65,6 +74,8 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn("if(canWrite&&edit", listing)
         self.assertIn("function openOnboard(cp){if(!canWrite)return;", listing)
         self.assertIn("function openDeleteDevice(cp){if(!canWrite)return;", listing)
+        self.assertNotIn("addEventListener$(", detail)
+        self.assertNotIn("addEventListener$('", detail)
 
 
 if __name__ == "__main__":
