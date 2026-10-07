@@ -77,6 +77,7 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn("if(canWrite&&edit", listing)
         self.assertIn("function openOnboard(cp){if(!canWrite)return;", listing)
         self.assertIn("function openDeleteDevice(cp){if(!canWrite)return;", listing)
+        self.assertIn('class="vehicle-card-actions write-action"', listing)
         self.assertNotIn("addEventListener$(", detail)
         self.assertNotIn("addEventListener$('", detail)
 
