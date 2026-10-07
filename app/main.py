@@ -2377,14 +2377,14 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
     try: updated=db.update_user(user_id,**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
     if not updated: raise HTTPException(404,"Benutzer nicht gefunden")
-    _schedule_local_list_sync("Benutzerdaten / Ladebudget geändert")
+    _schedule_local_list_sync("Benutzerdaten / Monatslimit geändert")
     user=db.get_user(user_id) or {}
     old_budget=before.get("monthly_kwh_limit"); new_budget=user.get("monthly_kwh_limit")
     if old_budget!=new_budget:
         auth=getattr(request.state,"auth_user",None) or {}
         def n(v,suffix=""):
             return "—" if v is None else f"{float(v):g}{suffix}"
-        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladebudget geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Monatsbudget: {n(old_budget,' kWh')} → {n(new_budget,' kWh')}")
+        db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Monatslimit geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"Monatslimit: {n(old_budget,' kWh')} → {n(new_budget,' kWh')}")
     after_access=db.user_charge_access(user_id) or {"mode":"all","charge_point_ids":[]}
     if before_access!=after_access:
         auth=getattr(request.state,"auth_user",None) or {}

@@ -5,6 +5,7 @@ on:
     branches:
       - 'test/community-3e-*'
       - 'test/community-3f-*'
+      - 'test/community-3g-*'
       - 'cleanup/community-backend-only-0.9.7.76'
   pull_request:
     branches:
