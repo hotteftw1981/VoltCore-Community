@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Optionaler Release-Tag, z. B. v0.9.7.75. Leer = APP_VERSION."
+        description: "Optionaler Release-Tag, z. B. v0.9.7.76. Leer = APP_VERSION."
         required: false
         type: string
 
@@ -55,6 +55,13 @@ jobs:
           if not match:
               raise SystemExit("APP_VERSION not found")
           current=match.group(1)
+          for readme in ("README.md","README.en.md"):
+              body=Path(readme).read_text(encoding="utf-8")
+              if current not in body:
+                  raise SystemExit(f"{readme} does not advertise APP_VERSION {current}")
+          changelog=Path("CHANGELOG.md").read_text(encoding="utf-8")
+          if f"## {current} " not in changelog and f"## {current} —" not in changelog:
+              raise SystemExit(f"CHANGELOG.md has no release section for APP_VERSION {current}")
           requested=(os.environ.get("INPUT_VERSION") or "").strip()
           tag=requested or f"v{current}"
           if tag.removeprefix("v") != current:
