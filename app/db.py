@@ -3493,7 +3493,7 @@ def analytics():
         }
 
 
-# V0.8.7 - Web access accounts and public charging-budget view
+# V0.8.7 - Web access accounts and charging-limit helpers
 
 def system_user_count():
     with _connect() as conn:
@@ -4540,11 +4540,11 @@ def sync_notifications():
                 if state.get("blocked"):
                     sev,title="critical","Monatslimit erreicht – Laden gesperrt"
                 else:
-                    sev,title="critical","Monatsbudget vollständig verbraucht"
+                    sev,title="critical","Monatslimit vollständig erreicht"
             elif pct >= 90:
-                threshold=90; sev,title="warning","Monatsbudget bei mindestens 90 %"
+                threshold=90; sev,title="warning","Monatslimit bei mindestens 90 %"
             else:
-                threshold=70; sev,title="warning","Monatsbudget bei mindestens 70 %"
+                threshold=70; sev,title="warning","Monatslimit bei mindestens 70 %"
             remaining=state.get("remaining_kwh")
             msg=f"{user['name']} · {pct:.0f} % verbraucht"
             if remaining is not None:
