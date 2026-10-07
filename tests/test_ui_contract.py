@@ -34,6 +34,20 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn(".mobile-topbar", css)
         self.assertIn(".mobile-menu-button", css)
 
+    def test_visible_limit_wording_is_neutral(self):
+        users = (ROOT / "app" / "templates" / "users.html").read_text(encoding="utf-8")
+        dashboard = (ROOT / "app" / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        db = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+
+        self.assertIn("Monatliches Ladelimit", users)
+        self.assertIn("Limits auffällig", dashboard)
+        self.assertIn('action="Monatslimit geändert"', main)
+        self.assertIn("Monatslimit vollständig erreicht", db)
+        self.assertNotIn("Monatliches Ladebudget", users)
+        self.assertNotIn("Budgets auffällig", dashboard)
+        self.assertNotIn('action="Ladebudget geändert"', main)
+
     def test_charge_point_viewer_controls_are_read_only(self):
         detail = (ROOT / "app" / "templates" / "charge_point.html").read_text(encoding="utf-8")
         listing = (ROOT / "app" / "templates" / "charge_points.html").read_text(encoding="utf-8")
