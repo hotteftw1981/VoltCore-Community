@@ -272,6 +272,7 @@ class CommunityBackendOnlyTests(unittest.TestCase):
             self.assertNotIn(stale, scope)
             self.assertNotIn(stale, readme_de)
             self.assertNotIn(stale, readme_en)
+            self.assertNotIn(stale, changelog)
 
 
     def test_technical_surfaces_have_no_removed_feature_zombies(self):
