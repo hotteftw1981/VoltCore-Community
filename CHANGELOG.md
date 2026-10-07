@@ -52,19 +52,15 @@ All notable changes to VoltCore Community are documented here.
 - Added regression coverage so LiveView cannot accidentally return to the Community edition.
 - Community documentation and advertised feature scope now match the intended edition boundary.
 
-## 0.9.7.74 — Community release candidate
+## 0.9.7.74 — Withdrawn Community release candidate
 
-### Community edition
-- Neutral first-run wizard for organization, SMTP, tariff, optional charging credit and first-user invitation.
-- Removed employer-specific weekly-hours and automatic employee-budget rules.
-- Neutral fresh-install defaults without DRK-specific branding, load-management seeds or historical billing rewrites.
-- Public charging portal restored with PIN login/reset, RFID self-service, bonus, vouchers, achievements, rankings and session history.
-- Public registration restored with email verification, configurable registration settings, admin approval and portal onboarding.
-- Restored Smart Charging, Engagement, Cost Centers, Lade.cloud import and read-only Fleet Integration APIs.
-- Restored per-user charging portal administration.
-- Community-specific Docker Compose, Portainer stack, branding, PWA assets and update source.
-- Added Community CI and QA smoke tests including fresh-install, container health, first-run, route/template integrity and unit tests.
+### Historical note
+- This short-lived release candidate used a broader experimental scope that was withdrawn before the backend-only Community definition was finalized.
+- It is retained in the changelog only as a migration boundary and must not be used as the current Community feature list.
+- Neutral first-run defaults, Community-specific Docker/Portainer packaging, branding, PWA assets, update source and QA foundations originated in this candidate.
+- Employer-specific defaults were already being removed during this transition.
 
 ### Release readiness
-- Community release archive includes Docker/Portainer files, environment example, documentation and bilingual README files.
-- GitHub Releases use numeric tags compatible with the in-app update checker, for example `v0.9.7.74`.
+- Community release archive work began here with Docker/Portainer files, environment example, documentation and bilingual README files.
+- Numeric release tags compatible with the in-app update checker were established here, for example `v0.9.7.74`.
+- The authoritative Community scope is the current backend-only definition documented for 0.9.7.76 and later.
