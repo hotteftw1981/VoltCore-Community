@@ -30,7 +30,7 @@
   <div class="stat"><span>Aktueller Monat</span><b id="monthEnergy">0,00 kWh</b><small>Energie</small></div>
   <div class="stat"><span>Sessions gesamt</span><b id="sessionTotal">0</b><small>Historie</small></div>
   <div class="stat"><span>Live-Messwerte</span><b id="telemetryFresh">0</b><small id="telemetryFreshHint">frisch</small></div>
-  <div class="stat"><span>Budgets auffällig</span><b id="budgetAtRisk">0</b><small>Warnung / gesperrt</small></div>
+  <div class="stat"><span>Limits auffällig</span><b id="budgetAtRisk">0</b><small>Warnung / gesperrt</small></div>
 </section>
 
 <section class="dashboard-grid compact-grid dashboard-primary-grid">
@@ -44,7 +44,7 @@
 </section>
 
 <section class="dashboard-grid compact-grid">
-  <div class="panel budget-dashboard-panel"><div class="panelhead"><div><h2>Benutzerlimits <button type="button" class="context-help" aria-label="Info: Benutzerlimits" aria-haspopup="dialog" aria-expanded="false" data-help-title="Benutzerlimits" data-help="Monatliche Ladebudgets aller Ladebenutzer. Warnungen beginnen ab 70 Prozent Verbrauch; gesperrt bedeutet, dass das konfigurierte Limit erreicht wurde.">i</button></h2><span id="budgetMonth">aktueller Monat</span></div><a href="/users">Benutzer →</a></div><div class="budget-dashboard-grid"><div class="budget-ok"><b id="budgetOk">0</b><span>OK</span></div><div class="budget-warning"><b id="budgetWarn">0</b><span>Warnung</span></div><div class="budget-blocked"><b id="budgetBlocked">0</b><span>Gesperrt</span></div><div class="budget-unlimited"><b id="budgetUnlimited">0</b><span>Unbegrenzt</span></div></div></div>
+  <div class="panel budget-dashboard-panel"><div class="panelhead"><div><h2>Benutzerlimits <button type="button" class="context-help" aria-label="Info: Benutzerlimits" aria-haspopup="dialog" aria-expanded="false" data-help-title="Benutzerlimits" data-help="Monatliche Ladelimits aller Ladebenutzer. Warnungen beginnen ab 70 Prozent Verbrauch; gesperrt bedeutet, dass das konfigurierte Limit erreicht wurde.">i</button></h2><span id="budgetMonth">aktueller Monat</span></div><a href="/users">Benutzer →</a></div><div class="budget-dashboard-grid"><div class="budget-ok"><b id="budgetOk">0</b><span>OK</span></div><div class="budget-warning"><b id="budgetWarn">0</b><span>Warnung</span></div><div class="budget-blocked"><b id="budgetBlocked">0</b><span>Gesperrt</span></div><div class="budget-unlimited"><b id="budgetUnlimited">0</b><span>Unbegrenzt</span></div></div></div>
   <div class="panel"><div class="panelhead"><div><h2>Systemstatus <button type="button" class="context-help" aria-label="Info: Systemstatus" aria-haspopup="dialog" aria-expanded="false" data-help-title="Systemstatus" data-help="Kurzer Gesundheitscheck für OCPP, Web/API, Datenbank, Telemetrie und - für Administratoren - die Sicherheitskonfiguration.">i</button></h2><span id="statusText">Prüfe …</span></div>{% if auth_user and auth_user.role == 'admin' %}<a href="/security">Sicherheit →</a>{% endif %}</div><div class="health-grid compact-health dashboard-health-v2"><div><b>OCPP 1.6J</b><small>WebSocket :9000</small></div><div><b>Web/API</b><small>Port :8000</small></div><div><b>SQLite</b><small>Persistente Daten</small></div><div><b>Telemetrie</b><small id="telemetryState">Wird geprüft</small></div>{% if auth_user and auth_user.role == 'admin' %}<div class="dashboard-security-health"><b>Sicherheit</b><small id="securityState">Wird geprüft</small></div>{% endif %}</div></div>
 </section>
 
