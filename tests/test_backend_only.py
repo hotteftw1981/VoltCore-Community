@@ -368,7 +368,11 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         # Offline LocalList authorization must be re-evaluated on month change.
         self.assertIn("def refresh_local_list_for_month(", db)
         self.assertIn("if db.refresh_local_list_for_month():", ocpp)
-        self.assertIn('sync_pending_local_lists(reason="Monatswechsel Ladebudget")', ocpp)
+        self.assertIn('sync_pending_local_lists(reason="Monatswechsel Ladelimit")', ocpp)
+        dashboard = (ROOT / "app" / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertNotIn("Restbudget", dashboard)
+        self.assertNotIn("Unbegrenztes Monatsbudget", dashboard)
+        self.assertIn("Verbleibendes Limit", dashboard)
 
 if __name__ == "__main__":
     unittest.main()
