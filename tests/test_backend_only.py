@@ -331,6 +331,11 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertIn("-p 127.0.0.1:18010:8000", ci)
         self.assertIn('workflows: ["Community CI"]', container)
         self.assertIn('workflows: ["Community Container"]', release)
+        self.assertIn('gh release view "$RELEASE_TAG"', container)
+        self.assertIn("Bump APP_VERSION", container)
+        self.assertIn('gh release view "$RELEASE_TAG"', release)
+        self.assertIn("Bump APP_VERSION", release)
+        self.assertNotIn("steps.existing.outputs.exists", release)
         self.assertNotIn("refactor/community-full-runtime-base", package_qa)
 
         for workflow in (ci, container, release, package_qa, runtime_qa):
