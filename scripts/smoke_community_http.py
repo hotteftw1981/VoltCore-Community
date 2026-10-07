@@ -241,7 +241,7 @@ class Smoke:
         self.expect("/")
         _, _, data = self.expect("/api/users")
         rows = data.get("users", []) if isinstance(data, dict) else []
-        self.check("users survive restart", len(rows) == 2)
+        self.check("operational users survive restart", len(rows) == 3)
         self.check("edited monthly limit survives restart", any(x.get("id") == state.get("user_id") and x.get("monthly_kwh_limit") == 80 for x in rows))
         self.check("blocked cross-origin request did not create a user", not any(x.get("name") == "MUST NOT EXIST" for x in rows))
         self.expect("/api/rfid")
