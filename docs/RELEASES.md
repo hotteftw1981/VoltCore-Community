@@ -41,3 +41,5 @@ ghcr.io/hotteftw1981/voltcore-community:v<APP_VERSION>
 ```
 
 `docker-compose.portainer.yml` verwendet standardmäßig `latest` und `pull_policy: always`. Ein Rollback kann durch Setzen von `VOLTCORE_COMMUNITY_IMAGE` auf einen konkreten Versionstag erfolgen.
+
+Ein veröffentlichter Versionsstand ist unveränderlich: Existiert z. B. bereits `v0.9.7.76`, bricht der `main`-Container-Workflow vor dem Push ab und auch der Release-Workflow verweigert ein zweites Release mit derselben Version. Für jede weitere Veröffentlichung muss `APP_VERSION` erhöht werden. Dadurch können ZIP, GitHub Release und die versionierten Container-Tags nicht unbemerkt auseinanderlaufen.
