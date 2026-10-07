@@ -27,10 +27,10 @@ Community-Produktionspakete werden als `VoltCore_Community_V<APP_VERSION>.zip` g
 Die Veröffentlichung läuft bewusst in einer festen Kette:
 
 ```text
-CI (main) → Container → Release
+vollständige CI (main) → Container → Release
 ```
 
-Erst wenn die CI für den betreffenden `main`-Commit erfolgreich abgeschlossen ist, baut `.github/workflows/container.yml` das Produktionsimage und veröffentlicht es in GitHub Container Registry. Erst nach erfolgreichem Container-Build startet anschließend der Release-Workflow mit Regressionstest, Produktions-ZIP, Tag und GitHub Release.
+Die Community-CI ist das harte Release-Gate: Unit-Tests, kompletter First-Run, Admin/User/Viewer-Rechte, Negativtests, echter Container-Neustart mit Persistenzprüfung sowie Bau und Prüfung des Release-ZIPs müssen erfolgreich sein. Erst danach baut `.github/workflows/container.yml` das Produktionsimage und veröffentlicht es in GitHub Container Registry. Nur wenn auch dieser Container-Workflow erfolgreich war, startet `.github/workflows/release.yml` mit erneutem Regressionstest, Produktions-ZIP, Tag und GitHub Release.
 
 Veröffentlichte Tags:
 
