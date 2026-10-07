@@ -79,6 +79,7 @@ class CommunityUIContractTests(unittest.TestCase):
 
         users = (ROOT / "app" / "templates" / "users.html").read_text(encoding="utf-8")
         dashboard = (ROOT / "app" / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn('class="toolbar-actions write-action"', users)
         self.assertIn('class="assign-row write-action"', users)
         self.assertIn("{% if auth_user and auth_user.role == 'admin' %}if(Number(h.security.score)<90)", dashboard)
         vehicles = (ROOT / "app" / "templates" / "vehicles.html").read_text(encoding="utf-8")
