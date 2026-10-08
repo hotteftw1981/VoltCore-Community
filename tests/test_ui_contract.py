@@ -25,10 +25,10 @@ class CommunityUIContractTests(unittest.TestCase):
         self.assertIn('body[data-role="viewer"] .write-action{display:none!important}', css)
         self.assertIn('body[data-role="viewer"] .session-assignment{display:none!important}', css)
 
-        for href in ("/tariffs", "/system-users", "/security", "/backups", "/updates", "/settings"):
+        for href in ("/tariffs", "/imports", "/system-users", "/security", "/backups", "/updates", "/settings"):
             self.assertIn(f'href="{href}"', base)
             self.assertIn("{% if auth_user and auth_user.role == 'admin' %}<a href=\"" + href + "\"", base)
-        self.assertGreaterEqual(base.count("auth_user.role == 'admin'"), 6)
+        self.assertGreaterEqual(base.count("auth_user.role == 'admin'"), 7)
         self.assertIn('class="readonly-banner"', base)
 
     def test_dark_mode_and_mobile_shell_stay_available(self):
