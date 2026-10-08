@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.79.**
+> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.80.**
 
 ## 🚀 Installation
 
