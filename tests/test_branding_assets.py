@@ -25,6 +25,15 @@ class BrandingAssetTests(unittest.TestCase):
             root = ET.parse(path).getroot()
             self.assertTrue(root.tag.endswith("svg"), f"Not an SVG root: {path}")
 
+    def test_default_branding_uses_bundled_assets(self):
+        db = (ROOT / 'app' / 'db.py').read_text(encoding='utf-8')
+        main = (ROOT / 'app' / 'main.py').read_text(encoding='utf-8')
+        self.assertIn('"logo_light_url":"/static/branding/voltcore-community-horizontal.svg"', db)
+        self.assertIn('"logo_dark_url":"/static/branding/voltcore-community-horizontal-dark.svg"', db)
+        self.assertIn('"favicon_url":"/static/branding/voltcore-community-app-icon.svg"', db)
+        self.assertIn('if name in {"logo_light_url","logo_dark_url","favicon_url"}', db)
+        self.assertIn('branding.get("favicon_url") or "/static/branding/voltcore-community-app-icon.svg"', main)
+
     def test_primary_logo_contains_community_edition_label(self):
         content = (BRANDING / "voltcore-community-horizontal.svg").read_text(encoding="utf-8")
         self.assertIn("COMMUNITY EDITION", content)
