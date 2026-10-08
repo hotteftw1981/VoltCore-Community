@@ -2,6 +2,26 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.77 — One-click updates for Docker and Portainer
+
+### Added
+- Added real 1-click updates for Docker Compose through a bundled, authenticated updater sidecar. The application container itself never receives Docker socket access.
+- Added 1-click Portainer updates for Community Edition and Business Edition through the authenticated Portainer REST API.
+- Kept optional Portainer Business stack-webhook support as a convenience provider.
+- Portainer API updates automatically discover the configured stack name, support an optional Environment ID when names are ambiguous, preserve stack environment variables and force an image re-pull/redeploy.
+- Update providers install the exact released image tag `ghcr.io/hotteftw1981/voltcore-community:v<version>` whenever the deployment path supports explicit image selection.
+
+### Safety
+- Every 1-click update requires a successful local pre-update backup before deployment is triggered.
+- Docker Compose updates isolate Docker socket access inside the updater sidecar and use a shared random bearer token that is never exposed through a host port.
+- Portainer API keys and optional Business webhooks are stored as secrets under the persistent data directory.
+- The update confirmation modal no longer closes when the backdrop is clicked.
+
+### Release readiness
+- The production ZIP now includes the updater service.
+- CI validates both Compose definitions, builds the updater image, and rejects release archives missing the updater.
+- Regression tests lock all three supported update providers: Docker Compose, Portainer API and optional Portainer webhook.
+
 ## 0.9.7.76 — Backend-only Community scope
 
 ### Removed
