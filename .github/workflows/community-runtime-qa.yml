@@ -7,9 +7,11 @@ on:
       - 'test/community-3f-*'
       - 'test/community-3g-*'
       - 'cleanup/community-backend-only-0.9.7.76'
+      - 'feature/community-*'
   pull_request:
     branches:
       - 'cleanup/community-backend-only-0.9.7.76'
+      - 'feature/community-*'
   workflow_dispatch:
 
 permissions:
@@ -34,7 +36,7 @@ jobs:
         run: |
           mkdir -p qa-evidence
           git rev-parse HEAD > qa-evidence/source-commit.txt
-          python -m compileall -q app tests scripts
+          python -m compileall -q app tests scripts updater
       - name: Build application image
         run: docker build -t community-runtime-qa:${{ github.sha }} .
       - name: Full existing unit suite and runtime contract checks
