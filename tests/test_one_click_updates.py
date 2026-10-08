@@ -72,6 +72,15 @@ class CommunityOneClickUpdateTests(unittest.TestCase):
         self.assertIn("portainerApiKey", html)
         self.assertNotIn("updateConfirmModal').onclick", html)
 
+    def test_update_provider_secrets_are_excluded_from_backups(self):
+        backup = (ROOT / "app" / "backup.py").read_text(encoding="utf-8")
+        self.assertIn('(db.DATA_DIR/".update_github_token").resolve()', backup)
+        self.assertIn('(db.DATA_DIR/".update_portainer_webhook").resolve()', backup)
+        self.assertIn('(db.DATA_DIR/".update_portainer_api_key").resolve()', backup)
+        self.assertIn('".update_github_token"', backup)
+        self.assertIn('".update_portainer_webhook"', backup)
+        self.assertIn('".update_portainer_api_key"', backup)
+
     def test_release_archive_includes_updater(self):
         builder = (ROOT / "scripts" / "build_release.py").read_text(encoding="utf-8")
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
