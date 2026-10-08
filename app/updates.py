@@ -469,6 +469,9 @@ def _upsert_portainer_env(env_items, name, value):
 def trigger_portainer_api(target_version):
     stack = _portainer_stack()
     stack_id = int(stack.get("Id"))
+    detail = _portainer_api_request("GET", f"/api/stacks/{stack_id}")
+    if isinstance(detail, dict):
+        stack = {**stack, **detail}
     endpoint_id = int(stack.get("EndpointId"))
     exact_image = f"{IMAGE_REPOSITORY}:v{target_version}"
     env_items = _upsert_portainer_env(stack.get("Env") or [], "VOLTCORE_COMMUNITY_IMAGE", exact_image)
