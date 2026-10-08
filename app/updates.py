@@ -43,6 +43,7 @@ IMAGE_REPOSITORY = os.getenv(
 ).strip()
 GITHUB_TOKEN_FILE = db.DATA_DIR / ".update_github_token"
 PORTAINER_WEBHOOK_FILE = db.DATA_DIR / ".update_portainer_webhook"
+PORTAINER_API_KEY_FILE = db.DATA_DIR / ".update_portainer_api_key"
 UPDATE_AGENT_URL = os.getenv("UPDATE_AGENT_URL", "").strip().rstrip("/")
 UPDATE_AGENT_TOKEN_FILE = Path(
     os.getenv("UPDATE_AGENT_TOKEN_FILE", "/run/voltcore-updater/token")
@@ -52,6 +53,9 @@ CHECK_CACHE_SECONDS = int(os.getenv("UPDATE_CHECK_CACHE_SECONDS", "21600") or 21
 DEFAULTS = {
     "update_check_enabled": "1",
     "update_portainer_tls_verify": "1",
+    "update_portainer_url": "",
+    "update_portainer_stack_name": "voltcore-community",
+    "update_portainer_endpoint_id": "",
     "update_last_check_at": "",
     "update_last_seen_version": "",
     "update_last_release_name": "",
@@ -85,9 +89,18 @@ def _docker_agent_configured():
     return bool(UPDATE_AGENT_URL and _agent_token())
 
 
+def _portainer_api_configured():
+    return bool(
+        (db.get_setting("update_portainer_url", "") or "").strip()
+        and secret_is_configured(PORTAINER_API_KEY_FILE)
+    )
+
+
 def _install_provider():
     if secret_is_configured(PORTAINER_WEBHOOK_FILE):
-        return "portainer"
+        return "portainer-webhook"
+    if _portainer_api_configured():
+        return "portainer-api"
     if _docker_agent_configured():
         return "docker-compose"
     return ""
@@ -104,6 +117,9 @@ def settings(include_secret_state=True):
         "image_repository": IMAGE_REPOSITORY,
         "check_enabled": bool_value(db.get_setting("update_check_enabled", "1")),
         "portainer_tls_verify": bool_value(db.get_setting("update_portainer_tls_verify", "1")),
+        "portainer_url": db.get_setting("update_portainer_url", "") or "",
+        "portainer_stack_name": db.get_setting("update_portainer_stack_name", "voltcore-community") or "voltcore-community",
+        "portainer_endpoint_id": db.get_setting("update_portainer_endpoint_id", "") or "",
         "install_provider": provider,
         "install_ready": bool(provider),
         "last_check_at": db.get_setting("update_last_check_at", "") or "",
@@ -123,6 +139,8 @@ def settings(include_secret_state=True):
     if include_secret_state:
         result["github_token_configured"] = secret_is_configured(GITHUB_TOKEN_FILE)
         result["portainer_webhook_configured"] = secret_is_configured(PORTAINER_WEBHOOK_FILE)
+        result["portainer_api_key_configured"] = secret_is_configured(PORTAINER_API_KEY_FILE)
+        result["portainer_api_configured"] = _portainer_api_configured()
         result["docker_agent_configured"] = _docker_agent_configured()
     return result
 
@@ -146,6 +164,26 @@ def save_settings(payload):
         "update_portainer_tls_verify",
         "1" if payload.get("portainer_tls_verify", True) else "0",
     )
+    if "portainer_url" in payload:
+        raw_url = str(payload.get("portainer_url") or "").strip()
+        if raw_url:
+            parsed = urllib.parse.urlparse(raw_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError("Portainer-URL muss eine gültige HTTP-/HTTPS-URL ohne Zugangsdaten sein.")
+            raw_url = raw_url.rstrip("/")
+            if raw_url.endswith("/api"):
+                raw_url = raw_url[:-4]
+        db.set_setting("update_portainer_url", raw_url)
+    if "portainer_stack_name" in payload:
+        stack_name = str(payload.get("portainer_stack_name") or "voltcore-community").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", stack_name):
+            raise ValueError("Portainer-Stackname ist ungültig.")
+        db.set_setting("update_portainer_stack_name", stack_name)
+    if "portainer_endpoint_id" in payload:
+        endpoint = str(payload.get("portainer_endpoint_id") or "").strip()
+        if endpoint and (not endpoint.isdigit() or int(endpoint) < 1):
+            raise ValueError("Portainer-Environment-ID muss leer oder eine positive Zahl sein.")
+        db.set_setting("update_portainer_endpoint_id", endpoint)
     token = payload.get("github_token")
     if token is not None and str(token).strip():
         write_secret(GITHUB_TOKEN_FILE, str(token).strip())
@@ -156,6 +194,11 @@ def save_settings(payload):
         write_secret(PORTAINER_WEBHOOK_FILE, _validate_webhook(webhook))
     if payload.get("clear_portainer_webhook"):
         clear_secret(PORTAINER_WEBHOOK_FILE)
+    api_key = payload.get("portainer_api_key")
+    if api_key is not None and str(api_key).strip():
+        write_secret(PORTAINER_API_KEY_FILE, str(api_key).strip())
+    if payload.get("clear_portainer_api_key"):
+        clear_secret(PORTAINER_API_KEY_FILE)
     with _cache_lock:
         _cache["at"] = 0.0
         _cache["payload"] = None
@@ -358,6 +401,104 @@ def trigger_portainer(target_version):
         return {"ok": True, "status": status, "provider": "portainer"}
 
 
+def _portainer_api_request(method, path, payload=None):
+    cfg = settings()
+    base = str(cfg.get("portainer_url") or "").strip().rstrip("/")
+    key = read_secret(PORTAINER_API_KEY_FILE).strip()
+    if not base or not key:
+        raise RuntimeError("Portainer API ist noch nicht vollständig konfiguriert.")
+    url = base + path
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "X-API-Key": key,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "voltcore-community-update-center",
+        },
+    )
+    ctx = _portainer_context(url, cfg.get("portainer_tls_verify", True))
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:600]
+        raise RuntimeError(f"Portainer API HTTP {exc.code}: {detail or exc.reason}") from exc
+
+
+def _portainer_stack():
+    cfg = settings()
+    stack_name = str(cfg.get("portainer_stack_name") or "voltcore-community").strip().lower()
+    endpoint_filter = str(cfg.get("portainer_endpoint_id") or "").strip()
+    stacks = _portainer_api_request("GET", "/api/stacks")
+    if not isinstance(stacks, list):
+        raise RuntimeError("Portainer API lieferte keine Stackliste.")
+    matches = [
+        item for item in stacks
+        if str(item.get("Name") or "").strip().lower() == stack_name
+        and (not endpoint_filter or str(item.get("EndpointId") or "") == endpoint_filter)
+    ]
+    if not matches:
+        suffix = f" im Environment {endpoint_filter}" if endpoint_filter else ""
+        raise RuntimeError(f"Portainer-Stack '{stack_name}'{suffix} wurde nicht gefunden.")
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"Mehrere Portainer-Stacks heißen '{stack_name}'. Bitte die Environment-ID im Update-Center eintragen."
+        )
+    return matches[0]
+
+
+def _upsert_portainer_env(env_items, name, value):
+    result = []
+    found = False
+    for item in env_items or []:
+        if str(item.get("name") or "") == name:
+            result.append({"name": name, "value": value})
+            found = True
+        else:
+            result.append({"name": str(item.get("name") or ""), "value": str(item.get("value") or "")})
+    if not found:
+        result.append({"name": name, "value": value})
+    return result
+
+
+def trigger_portainer_api(target_version):
+    stack = _portainer_stack()
+    stack_id = int(stack.get("Id"))
+    endpoint_id = int(stack.get("EndpointId"))
+    exact_image = f"{IMAGE_REPOSITORY}:v{target_version}"
+    env_items = _upsert_portainer_env(stack.get("Env") or [], "VOLTCORE_COMMUNITY_IMAGE", exact_image)
+    is_git = bool(stack.get("GitConfig") or stack.get("SourceID") or stack.get("RepositoryURL"))
+    if is_git:
+        path = f"/api/stacks/{stack_id}/git/redeploy?endpointId={endpoint_id}"
+        payload = {
+            "Env": env_items,
+            "Prune": False,
+            "PullImage": True,
+            "RepullImageAndRedeploy": True,
+        }
+        _portainer_api_request("PUT", path, payload)
+    else:
+        file_payload = _portainer_api_request("GET", f"/api/stacks/{stack_id}/file")
+        stack_file = str(file_payload.get("StackFileContent") or "")
+        if not stack_file:
+            raise RuntimeError("Portainer lieferte keinen Stack-Inhalt.")
+        path = f"/api/stacks/{stack_id}?endpointId={endpoint_id}"
+        payload = {
+            "Env": env_items,
+            "Prune": False,
+            "PullImage": True,
+            "RepullImageAndRedeploy": True,
+            "StackFileContent": stack_file,
+        }
+        _portainer_api_request("PUT", path, payload)
+    return {"ok": True, "provider": "portainer-api", "stack_id": stack_id, "endpoint_id": endpoint_id}
+
+
 def trigger_docker_agent(target_version):
     token = _agent_token()
     if not UPDATE_AGENT_URL or not token:
@@ -391,8 +532,10 @@ def mark_pending(target_version, backup_filename):
 def trigger_and_record(target_version):
     provider = _install_provider()
     try:
-        if provider == "portainer":
+        if provider == "portainer-webhook":
             trigger_portainer(target_version)
+        elif provider == "portainer-api":
+            trigger_portainer_api(target_version)
         elif provider == "docker-compose":
             trigger_docker_agent(target_version)
         else:
