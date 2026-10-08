@@ -1,8 +1,9 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from app import csv_import, db
+from app import backup, csv_import, db
 
 
 class NeutralCSVImportDatabaseTests(unittest.TestCase):
@@ -86,6 +87,22 @@ class NeutralCSVImportDatabaseTests(unittest.TestCase):
             self.assertIsNotNone(tx["user_id"])
             self.assertAlmostEqual(11.5, tx["energy_kwh"], places=3)
             self.assertEqual("Completed", tx["status"])
+
+    def test_temporary_csv_uploads_expire(self):
+        token = csv_import.save_upload(b"name;email\nTest;test@example.org\n")
+        path = csv_import._upload_path(token)
+        self.assertTrue(path.exists())
+        os.utime(path, (1, 1))
+        csv_import._cleanup_uploads(max_age_seconds=60)
+        self.assertFalse(path.exists())
+
+    def test_temporary_imports_are_excluded_from_backups(self):
+        folder = db.DATA_DIR / "imports"
+        folder.mkdir(parents=True, exist_ok=True)
+        sensitive = folder / "neutral-sensitive.csv"
+        sensitive.write_text("name;rfid\nMax;SECRET\n", encoding="utf-8")
+        persistent = {path.resolve() for path in backup._persistent_files()}
+        self.assertNotIn(sensitive.resolve(), persistent)
 
     def test_session_can_create_missing_stammdaten_when_enabled(self):
         rows = [{
