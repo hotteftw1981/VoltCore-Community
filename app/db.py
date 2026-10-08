@@ -25,8 +25,23 @@ OCPP_AUTH_MAX_FAILURES = max(3, int(os.getenv("OCPP_AUTH_MAX_FAILURES", "8")))
 OCPP_AUTH_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("OCPP_AUTH_FAILURE_WINDOW_MINUTES", "10")))
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """SQLite connection that closes after its context-manager transaction."""
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def _connect():
-    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=30,
+        check_same_thread=False,
+        factory=_ClosingConnection,
+    )
     conn.row_factory = sqlite3.Row
     return conn
 
