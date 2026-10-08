@@ -602,7 +602,8 @@ def init_db():
         conn.execute("DROP TABLE IF EXISTS cost_centers")
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'smart_charging_%' OR key LIKE 'load_management_%'")
         for table_name, columns in (
-            ("transactions",("cost_center","import_source","import_key","imported_at","import_source_name","import_evse_id")),
+            # Neutral CSV migration metadata is part of Community; only enterprise cost-center data is removed.
+            ("transactions",("cost_center",)),
             ("tariffs",("cost_center",)),
             ("billing_groups",("cost_center",)),
         ):
