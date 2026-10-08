@@ -881,6 +881,11 @@ class UpdateSettingsPayload(BaseModel):
     clear_github_token: bool = False
     portainer_webhook: str | None = None
     clear_portainer_webhook: bool = False
+    portainer_url: str | None = None
+    portainer_stack_name: str | None = None
+    portainer_endpoint_id: str | None = None
+    portainer_api_key: str | None = None
+    clear_portainer_api_key: bool = False
     portainer_tls_verify: bool = True
 
 
