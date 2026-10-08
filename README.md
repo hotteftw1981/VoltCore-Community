@@ -30,7 +30,7 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.77.**
+> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.78.**
 
 ## 🚀 Installation
 
@@ -61,6 +61,7 @@ Die Community Edition enthält unter anderem:
 - 📊 Dashboard
 - 📈 einfache Reports
 - 📄 CSV-Export
+- 📥 providerneutraler CSV-Migrationsimport für Benutzer, RFID, Fahrzeuge, Ladepunkte und historische Sessions
 - 💾 Backup / Restore
 - 🔄 Update-Menü direkt in VoltCore
 - 🌙 Dark Mode
@@ -72,7 +73,7 @@ Die Community Edition enthält unter anderem:
 - 🔔 einfache Benachrichtigungen
 - 📱 PWA-Basis
 
-> **Backend-only:** Ladebenutzer erhalten in VoltCore Community **keinen persönlichen Login, keine PIN und keinen Self-Service-Bereich**. Ebenfalls nicht enthalten sind Gamification/Events/Ranglisten/Bonus/Gutscheine, Smart Charging/Lastmanagement, Kostenstellen, Lade.cloud-Import, Fleet-API und öffentliche Registrierung. Diese Funktionen werden nicht nur ausgeblendet, sondern aus dem Community-Quellcode entfernt.
+> **Backend-only:** Ladebenutzer erhalten in VoltCore Community **keinen persönlichen Login, keine PIN und keinen Self-Service-Bereich**. Ebenfalls nicht enthalten sind Gamification/Events/Ranglisten/Bonus/Gutscheine, Smart Charging/Lastmanagement, Kostenstellen, **anbietergebundener Lade.cloud-XLSX-Spezialimport**, Fleet-API und öffentliche Registrierung. Der neutrale CSV-Migrationsimport bleibt enthalten; die genannten Spezialmodule werden nicht nur ausgeblendet, sondern aus dem Community-Quellcode entfernt.
 
 Der festgelegte erste Funktionsumfang ist zusätzlich in `docs/COMMUNITY_SCOPE.md` dokumentiert. 📋✅
 
