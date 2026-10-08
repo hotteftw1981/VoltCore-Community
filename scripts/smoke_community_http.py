@@ -174,6 +174,9 @@ class Smoke:
         admin_html = self.html(admin_home)
         self.check("admin shell exposes admin role", 'data-role="admin"' in admin_html)
         self.check("admin navigation exposes settings", 'href="/settings"' in admin_html)
+        self.check("admin navigation exposes neutral data import", 'href="/imports"' in admin_html)
+        _, _, admin_imports_page = self.expect("/imports")
+        self.check("admin sees neutral CSV import", "Neutraler CSV-Migrationsimport" in self.html(admin_imports_page))
         _, _, admin_users_page = self.expect("/users")
         self.check("admin sees LocalList administration", "Offline-Autorisierung / LocalList" in self.html(admin_users_page))
         _, _, admin_cp_page = self.expect("/charge-points/QA-CP-001")
@@ -200,7 +203,7 @@ class Smoke:
         self.check("writer charge-point page hides remote-control tab", 'data-tab="remote"' not in self.html(writer_cp_page))
         for path in ("/users", "/vehicles", "/charge-points", "/transactions", "/reports", "/activity"):
             self.expect(path)
-        for path in ("/settings", "/security", "/tariffs", "/backups", "/updates", "/system-users"):
+        for path in ("/settings", "/security", "/tariffs", "/imports", "/backups", "/updates", "/system-users"):
             self.expect(path, 403)
         for path in ("/api/system-users", "/api/settings/branding", "/api/tariffs", "/api/backups"):
             self.expect(path, 403)
@@ -260,8 +263,8 @@ class Smoke:
         self.expect("/api/system-users")
         self.expect("/api/users", 403, method="POST", origin="https://foreign.example", payload={"name": "MUST NOT EXIST"})
         for path in ("/public/ladeguthaben", "/public/access-request", "/registration-onboarding",
-                     "/registration-requests", "/engagement", "/cost-centers", "/imports",
-                     "/load-management", "/liveview", "/api/settings/bonus-policy"):
+                     "/registration-requests", "/engagement", "/cost-centers",
+                     "/load-management", "/liveview", "/api/settings/bonus-policy", "/api/import/ladecloud/preview"):
             self.expect(path, 404)
         self.expect("/api/users/999999", 404)
         self.expect("/api/users", 400, method="POST", payload={"name": " "})
