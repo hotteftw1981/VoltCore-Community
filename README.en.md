@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.78.**
+> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.79.**
 
 ## 🚀 Installation
 
@@ -62,6 +62,7 @@ The Community edition includes, among other things:
 - 📈 basic reports
 - 📄 CSV export
 - 📥 provider-neutral CSV migration for users, RFID cards, vehicles, charge points and historical sessions
+- 📦 versioned VoltCore migration package (ZIP + CSV + manifest) for fresh installations and Community → Pro/Business, with optional anonymization
 - 💾 backup / restore
 - 🔄 in-app update menu
 - 🌙 dark mode
