@@ -44,6 +44,63 @@ jobs:
       - name: Build Community updater
         run: docker build --pull -t voltcore-community-updater-ci:${{ github.sha }} updater
 
+      - name: Exercise Docker one-click updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          token_dir="$RUNNER_TEMP/community-updater-token"
+          qa_dir="$RUNNER_TEMP/community-updater-qa"
+          fake_dir="$RUNNER_TEMP/community-updater-fake"
+          mkdir -p "$token_dir" "$qa_dir" "$fake_dir"
+          cat >"$fake_dir/docker" <<'SH'
+          #!/bin/sh
+          printf '%s\n' "$*" >> /qa/docker.log
+          exit 0
+          SH
+          chmod +x "$fake_dir/docker"
+          trap 'docker rm -f voltcore-community-updater-test >/dev/null 2>&1 || true' EXIT
+
+          docker run -d --name voltcore-community-updater-test \
+            -p 127.0.0.1:19011:9011 \
+            -e PATH=/fake:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$token_dir:/run/voltcore-updater" \
+            -v "$qa_dir:/qa" \
+            -v "$fake_dir/docker:/fake/docker:ro" \
+            voltcore-community-updater-ci:${{ github.sha }}
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19011/health >/tmp/updater-health.json \
+              && test -s "$token_dir/token"; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:19011/health | grep -q '"status": "ok"'
+
+          unauthorized="$(curl --silent --output /tmp/updater-unauthorized.json --write-out '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
+          test "$unauthorized" = "401"
+
+          token="$(cat "$token_dir/token")"
+          accepted="$(curl --silent --output /tmp/updater-accepted.json --write-out '%{http_code}' \
+            -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
+          test "$accepted" = "202"
+
+          for attempt in $(seq 1 30); do
+            if test -f "$qa_dir/docker.log" \
+              && grep -q 'compose -p voltcore-community -f /workspace/docker-compose.yml up -d --no-deps --force-recreate voltcore-community' "$qa_dir/docker.log"; then
+              break
+            fi
+            sleep 1
+          done
+          cat "$qa_dir/docker.log"
+          grep -qx 'pull ghcr.io/hotteftw1981/voltcore-community:v9.9.9' "$qa_dir/docker.log"
+          grep -qx 'tag ghcr.io/hotteftw1981/voltcore-community:v9.9.9 ghcr.io/hotteftw1981/voltcore-community:latest' "$qa_dir/docker.log"
+          grep -qx 'compose -p voltcore-community -f /workspace/docker-compose.yml up -d --no-deps --force-recreate voltcore-community' "$qa_dir/docker.log"
+
       - name: Build Community container
         run: docker build --pull -t voltcore-community-ci:${{ github.sha }} .
 
