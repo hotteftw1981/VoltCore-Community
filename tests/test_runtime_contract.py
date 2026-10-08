@@ -1,5 +1,6 @@
 """Keep required shared runtime APIs present when edition-specific code is removed."""
 import ast
+import sqlite3
 from pathlib import Path
 import unittest
 
@@ -23,6 +24,16 @@ class RuntimeContractTests(unittest.TestCase):
                         and node.value.id == "db" and node.attr not in symbols):
                     missing.append(f"{path.name}:{node.lineno}: db.{node.attr}")
         self.assertEqual([], missing, "Shared DB API removed: " + ", ".join(missing))
+
+    def test_db_context_manager_closes_connection(self):
+        from app import db
+
+        conn = db._connect()
+        with conn:
+            conn.execute("SELECT 1").fetchone()
+
+        with self.assertRaises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")
 
     def test_first_run_audit_uses_current_limit_variable(self):
         tree = ast.parse((ROOT / "app/main.py").read_text(encoding="utf-8"))
