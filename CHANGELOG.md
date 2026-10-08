@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7.80 — Default Community branding
+
+- Enable the shipped blue Community SVG set as the default for light and dark layouts, login and sidebar.
+- Show the bundled app icon by default as favicon and PWA icon; honor uploaded custom branding.
+- Preserve prior custom branding settings; empty legacy logo slots fall back to bundled SVG assets.
+- Add automated branding checks.
+
 All notable changes to VoltCore Community are documented here.
 
 ## 0.9.7.79 — VoltCore migration packages
