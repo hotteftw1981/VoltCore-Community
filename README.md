@@ -30,7 +30,7 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.78.**
+> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.79.**
 
 ## 🚀 Installation
 
@@ -62,6 +62,7 @@ Die Community Edition enthält unter anderem:
 - 📈 einfache Reports
 - 📄 CSV-Export
 - 📥 providerneutraler CSV-Migrationsimport für Benutzer, RFID, Fahrzeuge, Ladepunkte und historische Sessions
+- 📦 versioniertes VoltCore-Migrationspaket (ZIP + CSV + Manifest) für Neuinstallationen und Community → Pro/Business, optional anonymisiert
 - 💾 Backup / Restore
 - 🔄 Update-Menü direkt in VoltCore
 - 🌙 Dark Mode
