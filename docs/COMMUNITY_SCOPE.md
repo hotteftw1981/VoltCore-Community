@@ -66,8 +66,8 @@ The application should:
 
 LiveView / Kiosk is explicitly **not part of VoltCore Community**. This applies to all former variants, including Standard, Pro and People.
 
-The following modules are explicitly **not part of VoltCore Community**: personal charging portal / PIN access, RFID self-service, achievements / gamification / events / rankings, bonus and voucher logic, Smart Charging / load management, cost centers, Lade.cloud import, Fleet Integration APIs and public registration / access requests.
+The following modules are explicitly **not part of VoltCore Community**: personal charging portal / PIN access, RFID self-service, achievements / gamification / events / rankings, bonus and voucher logic, Smart Charging / load management, cost centers, the provider-specific Lade.cloud XLSX importer, Fleet Integration APIs and public registration / access requests.
 
-Normal backend RFID management, charging-user management, vehicles, tariffs, billing groups, reports and optional manually configured monthly kWh limits remain part of Community.
+Normal backend RFID management, charging-user management, vehicles, tariffs, billing groups, reports, the provider-neutral CSV migration workspace and optional manually configured monthly kWh limits remain part of Community.
 
 This repository remains private while the first Community build is being prepared and verified.
