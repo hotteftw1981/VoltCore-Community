@@ -2,6 +2,23 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.79 — VoltCore migration packages
+
+### Added
+- Added a versioned VoltCore migration package for moving operational data to a fresh VoltCore installation.
+- The ZIP contains separate CSV files plus a signed-by-checksum `manifest.json` with source version, source edition, schema version, row counts and SHA-256 hashes.
+- Migrates charge points/connectors, charging users, vehicles, RFID cards, assignments, billing groups, tariffs, sessions, meter samples and supported operational history.
+- Community → Pro/Business is supported by importing all compatible tables/columns while intentionally skipping target-incompatible Community/enterprise differences.
+- Added optional personal-data anonymization while keeping relational IDs and RFID/session relationships internally consistent.
+- Direct package import is intentionally limited to a fresh operational target; existing users, vehicles, RFID cards, charge points or sessions block the import.
+- The neutral CSV merge importer remains available for migrations into an already populated installation.
+
+### Safety
+- Package checksums, row counts, declared columns, schema version and ZIP paths are validated before import.
+- System users/sessions, credentials, TOTP/recovery data, push subscriptions, security/login logs, backups and temporary import files are explicitly excluded.
+- Uploaded migration ZIPs use restrictive permissions, expire after 24 hours and remain outside normal backups.
+- Added full export → fresh database → import roundtrip tests, anonymization tests, tamper detection and non-empty-target refusal tests.
+
 ## 0.9.7.78 — Provider-neutral CSV migration
 
 ### Added
