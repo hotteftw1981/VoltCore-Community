@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.77.**
+> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.78.**
 
 ## 🚀 Installation
 
@@ -61,6 +61,7 @@ The Community edition includes, among other things:
 - 📊 dashboard
 - 📈 basic reports
 - 📄 CSV export
+- 📥 provider-neutral CSV migration for users, RFID cards, vehicles, charge points and historical sessions
 - 💾 backup / restore
 - 🔄 in-app update menu
 - 🌙 dark mode
@@ -72,7 +73,7 @@ The Community edition includes, among other things:
 - 🔔 basic notifications
 - 📱 PWA baseline
 
-> **Backend-only:** Charging users in VoltCore Community get **no personal login, PIN or self-service area**. Gamification/events/rankings/bonus/vouchers, Smart Charging/load management, cost centers, Lade.cloud import, Fleet APIs and public registration are also not included. These features are removed from the Community source rather than merely hidden.
+> **Backend-only:** Charging users in VoltCore Community get **no personal login, PIN or self-service area**. Gamification/events/rankings/bonus/vouchers, Smart Charging/load management, cost centers, the **provider-specific Lade.cloud XLSX importer**, Fleet APIs and public registration are also not included. The neutral CSV migration remains included; the listed specialist modules are removed from the Community source rather than merely hidden.
 
 The fixed initial scope is documented in `docs/COMMUNITY_SCOPE.md`. 📋✅
 
