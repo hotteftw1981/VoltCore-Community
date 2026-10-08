@@ -3978,9 +3978,9 @@ BRANDING_DEFAULTS = {
     "display_name":"VoltCore Community",
     "product_subtitle":"Community Edition · OCPP Charging Management",
     "primary_color":"#2563eb",
-    "logo_light_url":"",
-    "logo_dark_url":"",
-    "favicon_url":"",
+    "logo_light_url":"/static/branding/voltcore-community-horizontal.svg",
+    "logo_dark_url":"/static/branding/voltcore-community-horizontal-dark.svg",
+    "favicon_url":"/static/branding/voltcore-community-app-icon.svg",
     "login_background_url":"",
     "app_background_url":"",
     "header_background_url":"",
@@ -3994,6 +3994,9 @@ def branding_settings():
     asset_names={"logo_light_url","logo_dark_url","favicon_url","login_background_url","app_background_url","header_background_url"}
     for name,default in BRANDING_DEFAULTS.items():
         value=stored.get(name,default)
+        # Empty legacy slots fall back to bundled Community assets; custom uploads win.
+        if name in {"logo_light_url","logo_dark_url","favicon_url"} and not str(value or "").strip():
+            value=default
         result[name]=(str(value or "") if name in asset_names else (str(value or "").strip() or default))
     color=str(result.get("primary_color") or "#2563eb").strip()
     if len(color)!=7 or not color.startswith("#") or any(c not in "0123456789abcdefABCDEF" for c in color[1:]):
