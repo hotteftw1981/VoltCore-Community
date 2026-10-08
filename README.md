@@ -30,7 +30,7 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.79.**
+> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen. **Aktueller Stand: 0.9.7.80.**
 
 ## 🚀 Installation
 
@@ -116,7 +116,7 @@ Die Übersetzungen liegen in `app/locales/`. Neue UI-Texte sollen nach Möglichk
 
 ## 🎨 Branding & Logo-Set
 
-Das offizielle Community-Branding ist direkt im Projekt enthalten. 💙⚡
+Das offizielle Community-Branding ist direkt im Projekt enthalten. 💙⚡ Die blauen Logos und App-Icons werden jetzt bei neuen und bisher ungestalteten Installationen automatisch als Standard angezeigt. Benutzerdefinierte Logos und Favicons bleiben erhalten.
 
 <p align="center">
   <img src="app/static/branding/voltcore-community-icon.svg" alt="VoltCore Community Icon" width="150">
