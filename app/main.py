@@ -37,6 +37,7 @@ from . import totp
 from . import updates
 from . import web_push
 from . import csv_import
+from . import migration_package
 from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
 try:
     from .ocpp_server import sync_local_list, sync_pending_local_lists
@@ -771,6 +772,44 @@ async def imports_page(request: Request):
 @app.get("/backups", response_class=HTMLResponse)
 async def backups_page(request: Request):
     return render(request, "backups.html", page="backups")
+
+
+@app.post("/api/import/migration/export")
+async def migration_export(payload: dict):
+    anonymize=bool(payload.get("anonymize"))
+    data,filename,manifest=migration_package.build_package(APP_VERSION,"community",anonymize=anonymize)
+    headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-VoltCore-Migration-Schema": str(manifest.get("schema_version") or ""),
+    }
+    return Response(content=data,media_type="application/zip",headers=headers)
+
+
+@app.post("/api/import/migration/preview")
+async def migration_import_preview(file: UploadFile = File(...)):
+    if not str(file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(400,"Bitte ein VoltCore-Migrationspaket als ZIP auswählen.")
+    data=await file.read(migration_package.MAX_PACKAGE_BYTES+1)
+    if len(data)>migration_package.MAX_PACKAGE_BYTES:
+        raise HTTPException(413,"Das Migrationspaket darf maximal 100 MB groß sein.")
+    try:
+        preview=migration_package.preview_package(data,"community")
+        token=migration_package.save_package_upload(data)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    return {"token":token,"filename":str(file.filename or "migration.zip"),**preview}
+
+
+@app.post("/api/import/migration/execute")
+async def migration_import_execute(payload: dict):
+    token=payload.get("token")
+    try:
+        data=migration_package.load_package_upload(token)
+        result=migration_package.import_package(data,"community")
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+    migration_package.delete_package_upload(token)
+    return result
 
 
 @app.post("/api/import/csv/preview")
