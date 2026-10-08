@@ -82,7 +82,7 @@ jobs:
           VOLTCORE_UPDATE_CHECK_ENABLED: "0"
         run: |
           mkdir -p "$DATA_DIR"
-          python -m compileall -q app tests
+          python -m compileall -q app tests updater
           python -m unittest discover -s tests -p 'test_*.py'
           python -c "import app.main; print('Release import OK:', app.main.APP_VERSION)"
 
@@ -117,6 +117,8 @@ jobs:
                   raise SystemExit("Release archive missing app/")
               if not any(x.startswith(f"{top}/docs/") for x in names):
                   raise SystemExit("Release archive missing docs/")
+              if not any(x.startswith(f"{top}/updater/") for x in names):
+                  raise SystemExit("Release archive missing updater/")
           print("Release archive OK:", archives[0])
           PY
 
