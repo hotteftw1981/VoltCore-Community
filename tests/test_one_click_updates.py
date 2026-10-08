@@ -17,7 +17,7 @@ class CommunityOneClickUpdateTests(unittest.TestCase):
         self.assertIn('query["VOLTCORE_COMMUNITY_IMAGE"]', updates)
         self.assertIn('PORTAINER_API_KEY_FILE', updates)
         self.assertIn('"/api/stacks"', updates)
-        self.assertIn('"/git/redeploy?endpointId=', updates)
+        self.assertIn('/git/redeploy?endpointId=', updates)
         self.assertIn('"RepullImageAndRedeploy": True', updates)
         self.assertIn('UPDATE_AGENT_URL + "/update"', updates)
         self.assertIn('"Authorization": f"Bearer {token}"', updates)
