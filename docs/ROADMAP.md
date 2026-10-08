@@ -1,6 +1,6 @@
 # VoltCore Community Roadmap
 
-This roadmap collects post-release ideas that are intentionally **not** part of the 0.9.7.78 release candidate. The current release remains focused on a stable backend-only Community edition.
+This roadmap collects post-release ideas that are intentionally **not** part of the 0.9.7.79 release candidate. The current release remains focused on a stable backend-only Community edition.
 
 ## UI / information architecture
 
