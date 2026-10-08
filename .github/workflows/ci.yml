@@ -31,7 +31,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile
-        run: python -m compileall -q app tests scripts
+        run: python -m compileall -q app tests scripts updater
 
       - name: Community tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
