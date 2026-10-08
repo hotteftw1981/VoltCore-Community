@@ -146,7 +146,6 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         for needle in (
             "/load-management",
             "/cost-centers",
-            "/imports",
             "/api/import/ladecloud",
             "/api/integrations/fleet/",
             "/api/smart-charging/",
@@ -173,16 +172,28 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         self.assertNotIn("Kostenstelle", reports)
         self.assertNotIn('href="/load-management"', base)
         self.assertNotIn('href="/cost-centers"', base)
-        self.assertNotIn('href="/imports"', base)
+        self.assertIn('href="/imports"', base)
         self.assertNotIn("openpyxl", requirements)
 
         for relative in (
             "app/templates/load_management.html",
             "app/templates/cost_centers.html",
-            "app/templates/imports.html",
             "app/ladecloud_import.py",
         ):
             self.assertFalse((ROOT / relative).exists())
+
+
+    def test_neutral_csv_import_is_available_without_provider_specific_code(self):
+        main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        base = (ROOT / "app" / "templates" / "base.html").read_text(encoding="utf-8")
+        neutral = (ROOT / "app" / "csv_import.py").read_text(encoding="utf-8")
+        self.assertIn("/api/import/csv/preview", main)
+        self.assertIn("/api/import/csv/analyze", main)
+        self.assertIn("/api/import/csv/execute", main)
+        self.assertIn('href="/imports"', base)
+        self.assertTrue((ROOT / "app" / "templates" / "imports.html").exists())
+        self.assertNotIn("lade.cloud", neutral)
+        self.assertNotIn("/api/import/ladecloud", main)
 
 
     def test_backend_only_registration_and_employment_fields_are_removed(self):
