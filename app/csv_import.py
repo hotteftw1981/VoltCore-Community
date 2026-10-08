@@ -3,6 +3,7 @@ import hashlib
 import io
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -205,11 +206,30 @@ def parse_csv_bytes(data):
     }
 
 
+def _cleanup_uploads(max_age_seconds=86400):
+    folder = Path(db.DATA_DIR) / "imports"
+    if not folder.exists():
+        return
+    cutoff = time.time() - max(60, int(max_age_seconds))
+    for path in folder.glob("neutral-*.csv"):
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
+
+
 def save_upload(data):
+    _cleanup_uploads()
     token = secrets.token_hex(16)
     folder = Path(db.DATA_DIR) / "imports"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"neutral-{token}.csv").write_bytes(data)
+    path = folder / f"neutral-{token}.csv"
+    path.write_bytes(data)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     return token
 
 
@@ -221,6 +241,7 @@ def _upload_path(token):
 
 
 def load_upload(token):
+    _cleanup_uploads()
     path = _upload_path(token)
     if not path.exists():
         raise ValueError("Die Importdatei ist nicht mehr verfügbar. Bitte erneut hochladen.")
