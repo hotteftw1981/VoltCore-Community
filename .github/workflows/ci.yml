@@ -93,7 +93,7 @@ jobs:
             -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
           test "$unauthorized" = "401"
 
-          token="$(cat "$token_dir/token")"
+          token="$(docker exec voltcore-community-updater-test cat /run/voltcore-updater/token)"
           accepted="$(curl --silent --output /tmp/updater-accepted.json --write-out '%{http_code}' \
             -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
             -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
