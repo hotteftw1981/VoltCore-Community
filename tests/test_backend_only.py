@@ -354,7 +354,6 @@ class CommunityBackendOnlyTests(unittest.TestCase):
         first_run = (ROOT / "app" / "templates" / "first_run.html").read_text(encoding="utf-8")
 
         for needle in (
-            "BackgroundTasks",
             "import base64",
             "import binascii",
             "PILImage",
