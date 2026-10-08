@@ -14,8 +14,10 @@ class CommunityIdentityTests(unittest.TestCase):
         self.assertIn("hotteftw1981/VoltCore-Community", updates)
         self.assertIn('UPDATE_SOURCE = "github"', updates)
         self.assertIn('EDITION = "community"', updates)
-        self.assertNotIn("update_portainer_webhook", updates)
-        self.assertNotIn("trigger_portainer", updates)
+        self.assertIn(".update_portainer_webhook", updates)
+        self.assertIn(".update_portainer_api_key", updates)
+        self.assertIn("trigger_portainer", updates)
+        self.assertIn("trigger_docker_agent", updates)
         self.assertNotIn("ocpp-backend-update-center", updates)
 
     def test_docker_identity_is_community(self):
@@ -44,7 +46,10 @@ class CommunityIdentityTests(unittest.TestCase):
         backup = self._read("app/backup.py")
         self.assertIn('BACKUP_PREFIX = "voltcore-community-backup-"', backup)
         self.assertNotIn("ocpp-backup-", backup)
-        self.assertNotIn(".update_portainer_webhook", backup)
+        self.assertIn('(db.DATA_DIR/".update_portainer_webhook").resolve()', backup)
+        self.assertIn('(db.DATA_DIR/".update_portainer_api_key").resolve()', backup)
+        self.assertIn('".update_portainer_webhook"', backup)
+        self.assertIn('".update_portainer_api_key"', backup)
 
 
 if __name__ == "__main__":
