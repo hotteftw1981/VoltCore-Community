@@ -11,13 +11,20 @@ class CommunityOneClickUpdateTests(unittest.TestCase):
 
         self.assertIn('PORTAINER_WEBHOOK_FILE = db.DATA_DIR / ".update_portainer_webhook"', updates)
         self.assertIn('UPDATE_AGENT_URL = os.getenv("UPDATE_AGENT_URL"', updates)
-        self.assertIn('return "portainer"', updates)
+        self.assertIn('return "portainer-webhook"', updates)
+        self.assertIn('return "portainer-api"', updates)
         self.assertIn('return "docker-compose"', updates)
         self.assertIn('query["VOLTCORE_COMMUNITY_IMAGE"]', updates)
+        self.assertIn('PORTAINER_API_KEY_FILE', updates)
+        self.assertIn('"/api/stacks"', updates)
+        self.assertIn('"/git/redeploy?endpointId=', updates)
+        self.assertIn('"RepullImageAndRedeploy": True', updates)
         self.assertIn('UPDATE_AGENT_URL + "/update"', updates)
         self.assertIn('"Authorization": f"Bearer {token}"', updates)
 
         self.assertIn("portainer_webhook: str | None = None", main)
+        self.assertIn("portainer_url: str | None = None", main)
+        self.assertIn("portainer_api_key: str | None = None", main)
         self.assertIn("portainer_tls_verify: bool = True", main)
         self.assertIn('@app.post("/api/updates/install",status_code=202)', main)
         self.assertIn("backup.create_backup", main)
@@ -61,6 +68,8 @@ class CommunityOneClickUpdateTests(unittest.TestCase):
         self.assertIn("Aktiver 1-Klick-Provider", html)
         self.assertIn("Docker Compose", html)
         self.assertIn("Portainer", html)
+        self.assertIn("Portainer CE / BE über API", html)
+        self.assertIn("portainerApiKey", html)
         self.assertNotIn("updateConfirmModal').onclick", html)
 
     def test_release_archive_includes_updater(self):
