@@ -69,14 +69,24 @@ jobs:
             -v "$fake_dir/docker:/fake/docker:ro" \
             voltcore-community-updater-ci:${{ github.sha }}
 
+          ready=0
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:19011/health >/tmp/updater-health.json \
               && test -s "$token_dir/token"; then
+              ready=1
               break
             fi
             sleep 1
           done
-          curl --fail --silent http://127.0.0.1:19011/health | grep -q '"status": "ok"'
+          if [ "$ready" != 1 ]; then
+            echo "Updater did not become ready."
+            docker ps -a --filter name=voltcore-community-updater-test
+            docker logs voltcore-community-updater-test || true
+            ls -la "$token_dir" || true
+            exit 1
+          fi
+          cat /tmp/updater-health.json
+          grep -q '"status": "ok"' /tmp/updater-health.json
 
           unauthorized="$(curl --silent --output /tmp/updater-unauthorized.json --write-out '%{http_code}' \
             -X POST -H 'Content-Type: application/json' \
