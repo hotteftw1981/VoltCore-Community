@@ -65,7 +65,7 @@ The defaults are normally sufficient for an initial local test.
 ## 🚀 Start
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Check status:
@@ -199,7 +199,7 @@ Portainer remains only the deployment method. The canonical update source inside
 
 ---
 
-# 🔄 Updates
+# 🔄 One-click updates
 
 VoltCore Community checks stable releases from:
 
@@ -207,15 +207,46 @@ VoltCore Community checks stable releases from:
 hotteftw1981/VoltCore-Community
 ```
 
-Planned flow:
+The update flow is fully integrated:
 
 1. 🔍 Community detects a new GitHub Release
 2. 📝 Update Center shows version and release notes
-3. 💾 backup can be created before installation
-4. 🧩 the matching deployment provider performs the install
-5. ✅ after restart VoltCore recognizes the new version
+3. 💾 a local pre-update backup is **mandatory**
+4. 🔐 VoltCore starts the matching update provider
+5. 📦 the provider pulls the released Community image
+6. ♻️ the application container is recreated
+7. ✅ after restart VoltCore confirms the new version
 
-Docker Compose and Portainer may use different installer implementations while sharing the **same update source**.
+## 🐳 Docker Compose
+
+The default stack includes a small `voltcore-community-updater` service. Only this sidecar receives access to `/var/run/docker.sock`; the VoltCore application container itself has **no** Docker socket access.
+
+The updater:
+- is not exposed on a host port
+- generates a random shared bearer token on first start
+- accepts only syntactically valid version targets
+- pulls the exact image `ghcr.io/hotteftw1981/voltcore-community:v<version>`
+- recreates only the `voltcore-community` service
+
+No additional update configuration is required after a normal Docker Compose installation.
+
+## 🟦 Portainer CE / BE
+
+Portainer installations can perform one-click updates through the **Portainer REST API**. Configure once in Update Center:
+
+- Portainer URL, for example `https://portainer:9443`
+- stack name, default `voltcore-community`
+- optional Environment ID when the same stack name exists in multiple environments
+- a Portainer API key
+- TLS verification according to your certificate setup
+
+VoltCore locates the stack through the API, preserves its existing environment variables and sets `VOLTCORE_COMMUNITY_IMAGE` to the released version image. Git-backed stacks use Portainer's Git redeploy endpoint; file/web-editor stacks reuse the deployed stack content and force an image re-pull.
+
+## 🟦 Portainer Business – optional webhook
+
+Portainer Business users may alternatively store a stack webhook. The webhook takes precedence over the API provider and receives the exact Community image through an environment variable.
+
+The **update source is identical in all cases: GitHub Releases**.
 
 ---
 

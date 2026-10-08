@@ -2,19 +2,27 @@ name: Community CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, 'cleanup/community-*', 'feature/community-*']
   pull_request:
     branches: [main, develop]
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VOLTCORE_QA_ALLOW_EMPTY_SETUP: '1'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
@@ -23,87 +31,154 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Compile
-        run: python -m compileall -q app
+        run: python -m compileall -q app tests scripts updater
 
       - name: Community tests
-        run: python -m unittest discover -s tests -p 'test_*.py'
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Validate Docker Compose definitions
+        run: |
+          docker compose -f docker-compose.yml config >/tmp/community-compose.yml
+          docker compose -f docker-compose.portainer.yml config >/tmp/community-portainer-compose.yml
+
+      - name: Build Community updater
+        run: docker build --pull -t voltcore-community-updater-ci:${{ github.sha }} updater
+
+      - name: Exercise Docker one-click updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          token_dir="$RUNNER_TEMP/community-updater-token"
+          qa_dir="$RUNNER_TEMP/community-updater-qa"
+          fake_dir="$RUNNER_TEMP/community-updater-fake"
+          mkdir -p "$token_dir" "$qa_dir" "$fake_dir"
+          cat >"$fake_dir/docker" <<'SH'
+          #!/bin/sh
+          printf '%s\n' "$*" >> /qa/docker.log
+          exit 0
+          SH
+          chmod +x "$fake_dir/docker"
+          trap 'docker rm -f voltcore-community-updater-test >/dev/null 2>&1 || true' EXIT
+
+          docker run -d --name voltcore-community-updater-test \
+            -p 127.0.0.1:19011:9011 \
+            -e PATH=/fake:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            -v "$GITHUB_WORKSPACE:/workspace:ro" \
+            -v "$token_dir:/run/voltcore-updater" \
+            -v "$qa_dir:/qa" \
+            -v "$fake_dir/docker:/fake/docker:ro" \
+            voltcore-community-updater-ci:${{ github.sha }}
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19011/health >/tmp/updater-health.json \
+              && test -s "$token_dir/token"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != 1 ]; then
+            echo "Updater did not become ready."
+            docker ps -a --filter name=voltcore-community-updater-test
+            docker logs voltcore-community-updater-test || true
+            ls -la "$token_dir" || true
+            exit 1
+          fi
+          cat /tmp/updater-health.json
+          grep -q '"status": "ok"' /tmp/updater-health.json
+
+          unauthorized="$(curl --silent --output /tmp/updater-unauthorized.json --write-out '%{http_code}' \
+            -X POST -H 'Content-Type: application/json' \
+            -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
+          test "$unauthorized" = "401"
+
+          token="$(docker exec voltcore-community-updater-test cat /run/voltcore-updater/token)"
+          accepted="$(curl --silent --output /tmp/updater-accepted.json --write-out '%{http_code}' \
+            -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+            -d '{"target_version":"9.9.9"}' http://127.0.0.1:19011/update)"
+          test "$accepted" = "202"
+
+          for attempt in $(seq 1 30); do
+            if test -f "$qa_dir/docker.log" \
+              && grep -q 'compose -p voltcore-community -f /workspace/docker-compose.yml up -d --no-deps --force-recreate voltcore-community' "$qa_dir/docker.log"; then
+              break
+            fi
+            sleep 1
+          done
+          cat "$qa_dir/docker.log"
+          grep -qx 'pull ghcr.io/hotteftw1981/voltcore-community:v9.9.9' "$qa_dir/docker.log"
+          grep -qx 'tag ghcr.io/hotteftw1981/voltcore-community:v9.9.9 ghcr.io/hotteftw1981/voltcore-community:latest' "$qa_dir/docker.log"
+          grep -qx 'compose -p voltcore-community -f /workspace/docker-compose.yml up -d --no-deps --force-recreate voltcore-community' "$qa_dir/docker.log"
 
       - name: Build Community container
         run: docker build --pull -t voltcore-community-ci:${{ github.sha }} .
 
-      - name: Start Community container
-        run: |
-          docker run -d             --name voltcore-community-ci             -p 18010:8000             -p 19010:9000             -v voltcore-community-ci-data:/data             voltcore-community-ci:${{ github.sha }}
+      - name: Prepare isolated runtime state
+        run: python scripts/prepare_community_qa.py
 
-      - name: Wait for health endpoint
-        shell: bash
+      - name: Start disposable Community container
         run: |
-          set -euo pipefail
-          for attempt in $(seq 1 45); do
-            if curl --fail --silent --show-error http://127.0.0.1:18010/health > /tmp/voltcore-health.json; then
-              cat /tmp/voltcore-health.json
-              python - <<'PY'
-          import json
+          docker run -d --name voltcore-community-ci \
+            -p 127.0.0.1:18010:8000 -p 127.0.0.1:19010:9000 \
+            -v "$RUNNER_TEMP/community-runtime-data:/data" \
+            -e COOKIE_SECURE=0 \
+            voltcore-community-ci:${{ github.sha }}
+
+      - name: Full first-run, role and negative HTTP smoke
+        run: python scripts/smoke_community_http.py --phase initial
+
+      - name: Restart container and verify persistence
+        run: |
+          docker restart voltcore-community-ci
+          python scripts/smoke_community_http.py --phase restart
+
+      - name: Build Community release archive
+        run: python scripts/build_release.py --dist dist
+
+      - name: Verify Community release archive
+        run: |
+          python - <<'PY'
           from pathlib import Path
-          payload=json.loads(Path("/tmp/voltcore-health.json").read_text())
-          assert payload.get("status")=="ok", payload
-          assert payload.get("version"), payload
-          print("VoltCore Community container is healthy:", payload)
+          import zipfile
+
+          archives = list(Path("dist").glob("VoltCore_Community_V*.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected one Community ZIP, found {len(archives)}")
+          required = {
+              ".env.example",
+              "CHANGELOG.md",
+              "Dockerfile",
+              "README.md",
+              "README.en.md",
+              "docker-compose.yml",
+              "docker-compose.portainer.yml",
+              "requirements.txt",
+          }
+          with zipfile.ZipFile(archives[0]) as zf:
+              names = zf.namelist()
+              top = names[0].split("/", 1)[0]
+              missing = sorted(x for x in required if f"{top}/{x}" not in names)
+              if missing:
+                  raise SystemExit("Release archive missing: " + ", ".join(missing))
+              if not any(x.startswith(f"{top}/app/") for x in names):
+                  raise SystemExit("Release archive missing app/")
+              if not any(x.startswith(f"{top}/docs/") for x in names):
+                  raise SystemExit("Release archive missing docs/")
+              if not any(x.startswith(f"{top}/updater/") for x in names):
+                  raise SystemExit("Release archive missing updater/")
+              if any("/tests/" in x or "/dev/" in x or "/.github/" in x for x in names):
+                  raise SystemExit("Release archive contains development-only files")
+          print("Community release archive OK:", archives[0])
           PY
-              exit 0
-            fi
-            if ! docker ps --format '{{.Names}}' | grep -qx voltcore-community-ci; then
-              echo "Container stopped before becoming healthy."
-              docker logs voltcore-community-ci || true
-              exit 1
-            fi
-            sleep 2
-          done
-          echo "Timed out waiting for /health."
-          docker logs voltcore-community-ci || true
-          exit 1
-
-      - name: Verify fresh first-run state
-        shell: bash
-        run: |
-          set -euo pipefail
-          code="$(curl --silent --output /tmp/root.html --write-out '%{http_code}' http://127.0.0.1:18010/)"
-          test "$code" = "303" || test "$code" = "307"
-          location="$(curl --silent --head http://127.0.0.1:18010/ | tr -d '\r' | awk 'tolower($1)=="location:" {print $2}')"
-          test "$location" = "/setup"
-          echo "Fresh installation correctly redirects to /setup."
-
-      - name: Verify complete first-run wizard
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f /tmp/voltcore-cookies.txt /tmp/setup.headers /tmp/first-run.headers
-
-          setup_code="$(curl --silent --output /tmp/setup.body --dump-header /tmp/setup.headers --cookie-jar /tmp/voltcore-cookies.txt --write-out '%{http_code}'             --data-urlencode 'username=community-admin'             --data-urlencode 'display_name=Community Admin'             --data-urlencode 'password=CommunityTest!2026'             --data-urlencode 'password_repeat=CommunityTest!2026'             http://127.0.0.1:18010/setup)"
-          test "$setup_code" = "303"
-          setup_location="$(tr -d '\r' < /tmp/setup.headers | awk 'tolower($1)=="location:" {print $2}')"
-          test "$setup_location" = "/first-run"
-
-          wizard_code="$(curl --silent --output /tmp/first-run.html --cookie /tmp/voltcore-cookies.txt --write-out '%{http_code}' http://127.0.0.1:18010/first-run)"
-          test "$wizard_code" = "200"
-          grep -q "VoltCore Community einrichten" /tmp/first-run.html
-
-          finish_code="$(curl --silent --output /tmp/finish.body --dump-header /tmp/first-run.headers --cookie /tmp/voltcore-cookies.txt --cookie-jar /tmp/voltcore-cookies.txt --write-out '%{http_code}'             --data-urlencode 'organization_name=Community Test'             --data-urlencode 'display_name=VoltCore Community Test'             --data-urlencode 'tariff_name=Standardtarif'             --data-urlencode 'default_monthly_kwh=0'             http://127.0.0.1:18010/first-run)"
-          test "$finish_code" = "303"
-          finish_location="$(tr -d '\r' < /tmp/first-run.headers | awk 'tolower($1)=="location:" {print $2}')"
-          test "$finish_location" = "/"
-
-          dashboard_code="$(curl --silent --output /tmp/dashboard.html --cookie /tmp/voltcore-cookies.txt --write-out '%{http_code}' http://127.0.0.1:18010/)"
-          test "$dashboard_code" = "200"
-          grep -q "VoltCore Community Test" /tmp/dashboard.html
-          echo "Complete Community first-run flow passed."
 
       - name: Container logs on failure
         if: failure()
         run: docker logs voltcore-community-ci || true
 
-      - name: Cleanup container
+      - name: Cleanup disposable runtime
         if: always()
         run: |
           docker rm -f voltcore-community-ci >/dev/null 2>&1 || true
-          docker volume rm voltcore-community-ci-data >/dev/null 2>&1 || true
+          rm -f /tmp/community-http-qa-state.json
+          rm -rf "$RUNNER_TEMP/community-runtime-data"

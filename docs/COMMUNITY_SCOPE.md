@@ -2,6 +2,8 @@
 
 This document records the agreed initial feature scope for VoltCore Community.
 
+VoltCore Community is intentionally **backend-only**. Charging users do not receive a personal login, PIN portal or self-service area. Administration happens in the authenticated VoltCore backend.
+
 ## Included
 
 - OCPP 1.6J
@@ -35,20 +37,18 @@ VoltCore Community guides a new installation through a neutral first-run setup i
 
 Current first-login wizard:
 
-1. organization / installation name and basic branding;
-2. administrator basics and preferred language;
-3. optional SMTP / email setup;
-4. invite first users by email;
-5. basic tariff / price configuration;
-6. basic charging defaults;
-7. explicit choice whether free charging credit / charging budgets should be enabled.
+1. organization / installation name;
+2. optional SMTP / email setup;
+3. optional invitation of the first additional system user;
+4. optional basic tariff / price configuration;
+5. explicit choice whether a neutral default monthly charging limit should be enabled.
 
 Community defaults:
 
-- weekly working hours are **not** part of the Community user profile;
-- free charging credit / monthly charging budgets are **disabled by default**;
-- no DRK- or employer-specific assumptions;
-- optional features must be deliberately enabled during first-run setup or later in settings.
+- charging users have no employer-specific role, department or weekly working hours;
+- monthly charging limits are **disabled by default** and remain optional;
+- there is no DRK-, employer- or workforce-specific budget logic;
+- system-user roles remain Admin / User / Read-only and are separate from charging users.
 
 ## Update model
 
@@ -66,6 +66,8 @@ The application should:
 
 LiveView / Kiosk is explicitly **not part of VoltCore Community**. This applies to all former variants, including Standard, Pro and People.
 
-The Community edition now includes additional neutral modules restored from the VoltCore 0.9.7.74 baseline, including Smart Charging, Engagement, Cost Centers, imports and read-only Fleet Integration. Community-specific defaults and privacy/security constraints still take precedence.
+The following modules are explicitly **not part of VoltCore Community**: personal charging portal / PIN access, RFID self-service, achievements / gamification / events / rankings, bonus and voucher logic, Smart Charging / load management, cost centers, the provider-specific Lade.cloud XLSX importer, Fleet Integration APIs and public registration / access requests.
+
+Normal backend RFID management, charging-user management, vehicles, tariffs, billing groups, reports, the provider-neutral CSV migration workspace, versioned VoltCore migration export/import packages and optional manually configured monthly kWh limits remain part of Community.
 
 This repository remains private while the first Community build is being prepared and verified.

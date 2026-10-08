@@ -1,9 +1,6 @@
-name: Community QA
+name: Community Package QA
 
 on:
-  push:
-    branches:
-      - refactor/community-full-runtime-base
   workflow_dispatch:
 
 jobs:
@@ -16,10 +13,10 @@ jobs:
       VOLTCORE_UPDATE_CHECK_ENABLED: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -30,7 +27,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall -q app tests
+        run: python -m compileall -q app tests updater
 
       - name: Import application with fresh data directory
         run: |
@@ -92,5 +89,7 @@ jobs:
                   raise SystemExit("Release archive missing app/")
               if not any(x.startswith(f"{top}/docs/") for x in names):
                   raise SystemExit("Release archive missing docs/")
+              if not any(x.startswith(f"{top}/updater/") for x in names):
+                  raise SystemExit("Release archive missing updater/")
           print("Community release archive OK:", archives[0])
           PY

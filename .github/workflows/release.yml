@@ -2,13 +2,13 @@ name: Community Release
 
 on:
   workflow_run:
-    workflows: ["Community CI"]
+    workflows: ["Community Container"]
     types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: "Optionaler Release-Tag, z. B. v0.9.7.75. Leer = APP_VERSION."
+        description: "Optionaler Release-Tag, z. B. vX.Y.Z. Leer = APP_VERSION."
         required: false
         type: string
 
@@ -31,13 +31,13 @@ jobs:
           fi
 
       - name: Checkout tested commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.source.outputs.sha }}
           fetch-depth: 0
 
       - name: Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -55,6 +55,13 @@ jobs:
           if not match:
               raise SystemExit("APP_VERSION not found")
           current=match.group(1)
+          for readme in ("README.md","README.en.md"):
+              body=Path(readme).read_text(encoding="utf-8")
+              if current not in body:
+                  raise SystemExit(f"{readme} does not advertise APP_VERSION {current}")
+          changelog=Path("CHANGELOG.md").read_text(encoding="utf-8")
+          if f"## {current} " not in changelog and f"## {current} —" not in changelog:
+              raise SystemExit(f"CHANGELOG.md has no release section for APP_VERSION {current}")
           requested=(os.environ.get("INPUT_VERSION") or "").strip()
           tag=requested or f"v{current}"
           if tag.removeprefix("v") != current:
@@ -75,7 +82,7 @@ jobs:
           VOLTCORE_UPDATE_CHECK_ENABLED: "0"
         run: |
           mkdir -p "$DATA_DIR"
-          python -m compileall -q app tests
+          python -m compileall -q app tests updater
           python -m unittest discover -s tests -p 'test_*.py'
           python -c "import app.main; print('Release import OK:', app.main.APP_VERSION)"
 
@@ -110,23 +117,22 @@ jobs:
                   raise SystemExit("Release archive missing app/")
               if not any(x.startswith(f"{top}/docs/") for x in names):
                   raise SystemExit("Release archive missing docs/")
+              if not any(x.startswith(f"{top}/updater/") for x in names):
+                  raise SystemExit("Release archive missing updater/")
           print("Release archive OK:", archives[0])
           PY
 
-      - name: Check existing release
-        id: existing
+      - name: Reject duplicate release version
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Release $RELEASE_TAG already exists. Bump APP_VERSION before creating another release."
+            exit 1
           fi
 
       - name: Create GitHub Release
-        if: steps.existing.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}

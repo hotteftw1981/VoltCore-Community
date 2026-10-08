@@ -40,6 +40,7 @@ def copy_tree(target: Path) -> None:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
     )
     shutil.copytree(ROOT / "docs", target / "docs")
+    shutil.copytree(ROOT / "updater", target / "updater", ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
 
 
 def main() -> None:

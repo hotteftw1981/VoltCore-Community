@@ -67,7 +67,7 @@ Für einen ersten lokalen Test reichen die Standardwerte normalerweise aus.
 ## 🚀 Starten
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Status prüfen:
@@ -213,7 +213,7 @@ Die Updatequelle innerhalb von VoltCore Community bleibt immer:
 
 ---
 
-# 🔄 Updates
+# 🔄 1-Klick-Updates
 
 VoltCore Community prüft stabile Releases im Repository:
 
@@ -221,15 +221,46 @@ VoltCore Community prüft stabile Releases im Repository:
 hotteftw1981/VoltCore-Community
 ```
 
-Geplant ist:
+Der Ablauf ist vollständig integriert:
 
 1. 🔍 Community erkennt einen neuen GitHub Release
-2. 📝 das Update-Menü zeigt Version und Release Notes
-3. 💾 vor der Installation kann ein Backup erstellt werden
-4. 🧩 der zur Installation passende Deployment-Provider übernimmt
-5. ✅ nach Neustart erkennt VoltCore die neue Version
+2. 📝 das Update-Center zeigt Version und Release Notes
+3. 💾 vor jeder Installation wird **zwingend** ein lokales Pre-Update-Backup erstellt
+4. 🔐 VoltCore startet den passenden Update-Provider
+5. 📦 der Provider zieht das freigegebene Community-Image
+6. ♻️ der Anwendungscontainer wird neu erstellt
+7. ✅ nach dem Neustart bestätigt VoltCore die neue Version
 
-Docker Compose und Portainer dürfen dabei unterschiedliche Installationsmechanismen verwenden. Die **Updatequelle bleibt identisch**.
+## 🐳 Docker Compose
+
+Der Standard-Stack enthält einen kleinen Dienst `voltcore-community-updater`. Nur dieser Sidecar erhält Zugriff auf `/var/run/docker.sock`; der VoltCore-Anwendungscontainer selbst hat **keinen** Docker-Socket-Zugriff.
+
+Der Updater:
+- ist nicht über einen Host-Port erreichbar
+- erzeugt beim ersten Start automatisch ein zufälliges gemeinsames Bearer-Token
+- akzeptiert nur syntaktisch gültige Versionsziele
+- zieht das exakte Image `ghcr.io/hotteftw1981/voltcore-community:v<version>`
+- recreatet ausschließlich den Dienst `voltcore-community`
+
+Für Docker Compose ist nach der normalen Installation keine zusätzliche Update-Konfiguration nötig.
+
+## 🟦 Portainer CE / BE
+
+Portainer-Installationen können 1-Klick-Updates über die **Portainer REST API** ausführen. Dafür einmalig im Update-Center eintragen:
+
+- Portainer URL, z. B. `https://portainer:9443`
+- Stackname, standardmäßig `voltcore-community`
+- optional die Environment-ID, falls derselbe Stackname in mehreren Environments vorkommt
+- einen Portainer API-Key
+- TLS-Prüfung je nach Zertifikat
+
+VoltCore sucht den Stack über die API, übernimmt dessen vorhandene Environment-Variablen und setzt `VOLTCORE_COMMUNITY_IMAGE` auf das freigegebene Versionsimage. Bei Git-basierten Stacks wird der Git-Redeploy-Endpunkt verwendet; bei Datei-/Web-Editor-Stacks wird der bestehende Stack-Inhalt wiederverwendet und mit Image-Re-Pull neu deployed.
+
+## 🟦 Portainer Business – optionaler Webhook
+
+Wer Portainer Business mit Stack-Webhooks verwendet, kann stattdessen einen Stack-Webhook hinterlegen. Der Webhook hat Vorrang vor dem API-Weg und bekommt das exakte Community-Image als Environment-Variable übergeben.
+
+Die **Updatequelle bleibt in allen Fällen identisch: GitHub Releases**.
 
 ---
 

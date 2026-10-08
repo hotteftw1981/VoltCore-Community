@@ -1,6 +1,6 @@
 # Release-Prozess
 
-`main` ist der stabile Release-Stand. Ein Release erhält einen Tag wie `v0.9.7.36`. Die README ist Teil jedes Release-Abschlusses und wird nicht mehr separat „irgendwann später“ nachgezogen.
+`main` ist der stabile Release-Stand. Ein Release erhält einen Tag wie `v0.9.7.79`. Die README ist Teil jedes Release-Abschlusses und wird nicht mehr separat „irgendwann später“ nachgezogen.
 
 ## Vor einem Release
 
@@ -18,29 +18,28 @@
 python scripts/build_release.py
 ```
 
-Das Skript verwendet eine feste Allowlist. Tests, GitHub-Dateien und `dev/simulator/` landen nicht im Portainer-ZIP.
+Das Skript verwendet eine feste Allowlist. Tests, GitHub-Dateien und `dev/simulator/` landen nicht im Produktions-ZIP. Der für Docker-Compose-1-Klick-Updates benötigte `updater/`-Dienst ist Bestandteil des Pakets.
 
-Produktionspakete werden ab V0.9.7.51 neutral als `VoltCore_V<APP_VERSION>_Portainer_FINAL.zip` benannt. Ab V0.9.7.67 ist `ghcr.io/hotteftw1981/voltcore` der primäre Containerpfad; der frühere Pfad bleibt während der Migration parallel als Legacy-Kompatibilität erhalten.
+Community-Produktionspakete werden als `VoltCore_Community_V<APP_VERSION>.zip` gebaut. Der offizielle Community-Containerpfad ist `ghcr.io/hotteftw1981/voltcore-community`.
 
 ## Container-Release / Portainer
 
 Die Veröffentlichung läuft bewusst in einer festen Kette:
 
 ```text
-CI (main) → Container → Release
+vollständige CI (main) → Container → Release
 ```
 
-Erst wenn die CI für den betreffenden `main`-Commit erfolgreich abgeschlossen ist, baut `.github/workflows/container.yml` das Produktionsimage und veröffentlicht es in GitHub Container Registry. Erst nach erfolgreichem Container-Build startet anschließend der Release-Workflow mit Regressionstest, Produktions-ZIP, Tag und GitHub Release.
+Die Community-CI ist das harte Release-Gate: Unit-Tests, kompletter First-Run, Admin/User/Viewer-Rechte, Negativtests, echter Container-Neustart mit Persistenzprüfung sowie Bau und Prüfung des Release-ZIPs müssen erfolgreich sein. Erst danach baut `.github/workflows/container.yml` das Produktionsimage und veröffentlicht es in GitHub Container Registry. Nur wenn auch dieser Container-Workflow erfolgreich war, startet `.github/workflows/release.yml` mit erneutem Regressionstest, Produktions-ZIP, Tag und GitHub Release.
 
 Veröffentlichte Tags:
 
 ```text
-ghcr.io/hotteftw1981/voltcore:latest
-ghcr.io/hotteftw1981/voltcore:<APP_VERSION>
-ghcr.io/hotteftw1981/voltcore:v<APP_VERSION>
-
-Legacy-Übergang:
-ghcr.io/hotteftw1981/drk-ocpp-backend:latest
+ghcr.io/hotteftw1981/voltcore-community:latest
+ghcr.io/hotteftw1981/voltcore-community:<APP_VERSION>
+ghcr.io/hotteftw1981/voltcore-community:v<APP_VERSION>
 ```
 
-`docker-compose.portainer.yml` verwendet standardmäßig `latest` und `pull_policy: always`. Ein Rollback kann durch Setzen von `OCPP_IMAGE` auf einen konkreten Versionstag erfolgen.
+`docker-compose.portainer.yml` verwendet standardmäßig `latest` und `pull_policy: always`. Ein Rollback kann durch Setzen von `VOLTCORE_COMMUNITY_IMAGE` auf einen konkreten Versionstag erfolgen.
+
+Ein veröffentlichter Versionsstand ist unveränderlich: Existiert z. B. bereits `v0.9.7.79`, bricht der `main`-Container-Workflow vor dem Push ab und auch der Release-Workflow verweigert ein zweites Release mit derselben Version. Für jede weitere Veröffentlichung muss `APP_VERSION` erhöht werden. Dadurch können ZIP, GitHub Release und die versionierten Container-Tags nicht unbemerkt auseinanderlaufen.

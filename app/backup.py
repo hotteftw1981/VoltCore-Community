@@ -189,8 +189,15 @@ def _sqlite_snapshot(target: Path):
 
 
 def _persistent_files():
-    excluded_roots = {BACKUP_DIR.resolve()}
-    excluded_files = {db.DB_PATH.resolve(), CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}
+    excluded_roots = {BACKUP_DIR.resolve(), (db.DATA_DIR/"imports").resolve()}
+    excluded_files = {
+        db.DB_PATH.resolve(),
+        CREDENTIAL_FILE.resolve(),
+        SMTP_CREDENTIAL_FILE.resolve(),
+        (db.DATA_DIR/".update_github_token").resolve(),
+        (db.DATA_DIR/".update_portainer_webhook").resolve(),
+        (db.DATA_DIR/".update_portainer_api_key").resolve(),
+    }
     for path in db.DATA_DIR.rglob("*"):
         if not path.is_file():
             continue
@@ -216,7 +223,15 @@ def create_backup(label=None, keep_local=True):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "database": "database/ocpp.sqlite3",
             "data_root": "data/",
-            "excluded": ["backups/", ".backup_external_password", ".smtp_password", ".update_github_token"],
+            "excluded": [
+                "backups/",
+                "imports/",
+                ".backup_external_password",
+                ".smtp_password",
+                ".update_github_token",
+                ".update_portainer_webhook",
+                ".update_portainer_api_key",
+            ],
         }
         with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             zf.write(snapshot, "database/ocpp.sqlite3")
@@ -592,7 +607,15 @@ def restore_backup(path: Path):
                 if not item.is_file(): continue
                 rel=item.relative_to(data_stage)
                 target=db.DATA_DIR/rel
-                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}:
+                if (BACKUP_DIR.resolve() in target.resolve().parents
+                        or (db.DATA_DIR/"imports").resolve() in target.resolve().parents
+                        or target.resolve() in {
+                            CREDENTIAL_FILE.resolve(),
+                            SMTP_CREDENTIAL_FILE.resolve(),
+                            (db.DATA_DIR/".update_github_token").resolve(),
+                            (db.DATA_DIR/".update_portainer_webhook").resolve(),
+                            (db.DATA_DIR/".update_portainer_api_key").resolve(),
+                        }):
                     continue
                 target.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(item,target)

@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use.
+> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.79.**
 
 ## 🚀 Installation
 
@@ -61,6 +61,8 @@ The Community edition includes, among other things:
 - 📊 dashboard
 - 📈 basic reports
 - 📄 CSV export
+- 📥 provider-neutral CSV migration for users, RFID cards, vehicles, charge points and historical sessions
+- 📦 versioned VoltCore migration package (ZIP + CSV + manifest) for fresh installations and Community → Pro/Business, with optional anonymization
 - 💾 backup / restore
 - 🔄 in-app update menu
 - 🌙 dark mode
@@ -72,6 +74,8 @@ The Community edition includes, among other things:
 - 🔔 basic notifications
 - 📱 PWA baseline
 
+> **Backend-only:** Charging users in VoltCore Community get **no personal login, PIN or self-service area**. Gamification/events/rankings/bonus/vouchers, Smart Charging/load management, cost centers, the **provider-specific Lade.cloud XLSX importer**, Fleet APIs and public registration are also not included. The neutral CSV migration remains included; the listed specialist modules are removed from the Community source rather than merely hidden.
+
 The fixed initial scope is documented in `docs/COMMUNITY_SCOPE.md`. 📋✅
 
 ## 🔄 Updates via GitHub
@@ -80,7 +84,7 @@ VoltCore Community keeps the familiar **Update** menu inside the application. �
 
 Stable Community releases will be published as **GitHub Releases** in this repository. Running installations can check GitHub for newer stable versions and notify administrators directly inside VoltCore. 🚀
 
-Planned behaviour:
+Implemented behaviour:
 
 - 🚦 automatic update check after backend startup
 - 🕒 periodic checks in the background
@@ -88,11 +92,14 @@ Planned behaviour:
 - 📝 release notes before installation
 - 🧪 validation that the release belongs to VoltCore Community
 - 🗃️ database migration awareness
-- 🛟 backup and rollback safety
+- 🛟 mandatory pre-update backup before every one-click install
+- 🐳 **Docker Compose:** bundled updater sidecar
+- 🟦 **Portainer CE/BE:** update through the Portainer REST API
+- 🟦 **Portainer Business:** optional stack webhook provider
 
 Public Community releases are designed to be discoverable **without requiring every installation to store its own GitHub access token**. 🔓🐙
 
-> 🧩 **Important:** GitHub Releases are the fixed update source for the Community Edition. The actual installation method intentionally stays deployment-neutral. Docker, Portainer or other deployment variants may provide their own installer later — **VoltCore Community itself is not tied to Portainer.**
+> 🧩 **Important:** GitHub Releases remain the canonical update source. Installation is performed automatically by either the Docker updater sidecar or the Portainer API; a Portainer Business stack webhook can be used optionally. **VoltCore Community is not tied to Portainer.**
 
 ## 🌍 Languages
 

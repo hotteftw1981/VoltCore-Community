@@ -1,19 +1,376 @@
-{% extends "base.html" %}{% block title %}Datenimport - {{ branding.product_name }}{% endblock %}{% block heading %}Datenimport{% endblock %}{% block subtitle %}Historische Ladevorgänge sicher aus Fremdsystemen übernehmen{% endblock %}
+{% extends "base.html" %}
+{% block title %}Datenimport - {{ branding.product_name }}{% endblock %}
+{% block heading %}Datenimport{% endblock %}
+{% block subtitle %}Providerneutral migrieren · Vorschau, Zuordnung und Duplikatprüfung vor dem Import{% endblock %}
 {% block content %}
-<section class="panel import-hero"><div class="panelhead"><div><h2>lade.cloud Historienimport</h2><span>XLSX · RFID-Ladevorgänge</span></div><span class="state blue">Vorschau vor Import</span></div><p>Importiert historische Sessions, RFID-Zuordnungen und vorhandene Kosteninformationen. Fehlende Lade-/Standzeit-Telemetrie wird bewusst nicht erfunden.</p><div class="import-upload-row"><label class="import-file"><input id="importFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"><span>📄 lade.cloud XLSX auswählen</span><small id="fileName">Noch keine Datei gewählt</small></label><button id="previewBtn" class="primary" type="button">Datei prüfen</button></div><div id="importMessage" class="form-message"></div></section>
-<section id="previewSection" hidden>
-<div class="stats four import-stats"><div class="stat"><span>Ladevorgänge</span><b id="statSessions">—</b><small>RFID-Sessions</small></div><div class="stat"><span>Energie</span><b id="statEnergy">—</b><small>kWh historisch</small></div><div class="stat"><span>Benutzer</span><b id="statUsers">—</b><small>RFID-Zuordnungen</small></div><div class="stat"><span>Zeitraum</span><b id="statPeriod">—</b><small>lade.cloud</small></div></div>
-<div class="panel"><div class="panelhead"><div><h2>1. Benutzer & RFID zuordnen</h2><span>automatisch vorgeschlagen · bitte kontrollieren</span></div></div><div class="table-panel"><table><thead><tr><th>lade.cloud</th><th>RFID</th><th>Sessions</th><th>Energie</th><th>Zielbenutzer</th></tr></thead><tbody id="userMappings"></tbody></table></div></div>
-<div class="panel import-panel-gap"><div class="panelhead"><div><h2>2. Ladepunkte zuordnen</h2><span>Connectoren bleiben erhalten</span></div></div><div class="table-panel"><table><thead><tr><th>lade.cloud</th><th>EVSE / Connector</th><th>Sessions</th><th>Energie</th><th>OCPP-Ladepunkt</th></tr></thead><tbody id="cpMappings"></tbody></table></div></div>
-<div class="panel import-panel-gap"><div class="panelhead"><div><h2>3. Import starten</h2><span>idempotent · Duplikate werden übersprungen</span></div></div><div class="import-confirm"><div><b id="importSummary">—</b><small>RFIDs werden nur angelegt, wenn sie noch nicht existieren. Konflikte stoppen den Import.</small></div><button id="executeBtn" class="primary" type="button">Historie importieren</button></div><div id="executeMessage" class="form-message"></div></div>
+
+<section class="panel">
+  <div class="panelhead">
+    <div><h2>VoltCore-Migration</h2><span>Komplettes Datenpaket für Serverwechsel, Community → Pro/Business und Neuinstallationen</span></div>
+    <span class="state blue">ZIP · Schema V1</span>
+  </div>
+  <div class="form-grid">
+    <label class="checkline"><input id="migrationAnonymize" type="checkbox"> Personenbezogene Daten anonymisieren</label>
+    <label>VoltCore-Paket importieren
+      <input id="migrationFile" type="file" accept=".zip,application/zip">
+    </label>
+  </div>
+  <div class="toolbar-actions write-action">
+    <button id="migrationExportBtn" class="secondary" type="button">Migrationspaket exportieren</button>
+    <button id="migrationPreviewBtn" class="primary" type="button">Paket prüfen</button>
+  </div>
+  <p class="muted">Der Direktimport ist absichtlich nur für eine frische operative Installation freigegeben. Bestehende Benutzer, Ladepunkte oder Sessions werden nicht überschrieben.</p>
+  <div id="migrationMessage" class="form-message"></div>
+</section>
+
+<section id="migrationPreviewSection" class="panel" hidden>
+  <div class="panelhead">
+    <div><h2>Paketvorschau</h2><span>Quelle, Umfang und Kompatibilität vor dem Import prüfen</span></div>
+    <span id="migrationState" class="state">Prüfung</span>
+  </div>
+  <div class="stats four">
+    <div class="stat"><span>Quellversion</span><b id="migrationSourceVersion">—</b><small id="migrationSourceEdition">—</small></div>
+    <div class="stat"><span>Datenzeilen</span><b id="migrationRows">0</b><small>über alle Paketdateien</small></div>
+    <div class="stat"><span>Tabellen</span><b id="migrationTables">0</b><small>in dieser Ziel-Edition verwendbar</small></div>
+    <div class="stat"><span>Anonymisiert</span><b id="migrationAnonymized">Nein</b><small>laut Manifest</small></div>
+  </div>
+  <div id="migrationWarnings" class="form-message"></div>
+  <div class="table-panel">
+    <table>
+      <thead><tr><th>Tabelle</th><th>Zeilen</th></tr></thead>
+      <tbody id="migrationTableRows"></tbody>
+    </table>
+  </div>
+  <div class="toolbar-actions write-action">
+    <button id="migrationExecuteBtn" class="primary" type="button" disabled>VoltCore-Paket importieren</button>
+  </div>
+  <div id="migrationExecuteMessage" class="form-message"></div>
+</section>
+<section class="panel">
+  <div class="panelhead">
+    <div><h2>Neutraler CSV-Migrationsimport</h2><span>Benutzer · RFID · Fahrzeuge · Ladepunkte · historische Sessions</span></div>
+    <span class="state blue">CSV · max. 20 MB</span>
+  </div>
+  <p>Der Import ist nicht an einen Anbieter gebunden. Wähle das Quellsystem nur für die Herkunftskennzeichnung; die CSV-Spalten ordnest du frei zu.</p>
+  <div class="form-grid">
+    <label>Datentyp
+      <select id="csvEntity">
+        <option value="sessions">Historische Ladevorgänge</option>
+        <option value="users">Ladebenutzer</option>
+        <option value="rfids">RFID-Karten</option>
+        <option value="vehicles">Fahrzeuge</option>
+        <option value="charge_points">Ladepunkte</option>
+      </select>
+    </label>
+    <label>Quellsystem
+      <select id="csvProvider">
+        {% for provider in import_providers %}<option value="{{ provider.id }}">{{ provider.label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>CSV-Datei
+      <input id="csvFile" type="file" accept=".csv,text/csv">
+    </label>
+  </div>
+  <div class="toolbar-actions write-action">
+    <button id="csvPreviewBtn" class="primary" type="button">CSV prüfen</button>
+    <span id="csvFileName" class="muted">Noch keine Datei gewählt</span>
+  </div>
+  <div id="csvMessage" class="form-message"></div>
+</section>
+
+<section id="csvPreviewSection" hidden>
+  <div class="stats four">
+    <div class="stat"><span>Datenzeilen</span><b id="csvRows">—</b><small>ohne Kopfzeile</small></div>
+    <div class="stat"><span>Encoding</span><b id="csvEncoding">—</b><small>automatisch erkannt</small></div>
+    <div class="stat"><span>Trennzeichen</span><b id="csvDelimiter">—</b><small>automatisch erkannt</small></div>
+    <div class="stat"><span>Spalten</span><b id="csvHeaderCount">—</b><small>frei zuordenbar</small></div>
+  </div>
+
+  <section class="panel">
+    <div class="panelhead"><div><h2>1. Spalten zuordnen</h2><span>Vorschläge werden automatisch gesetzt und können geändert werden</span></div></div>
+    <div class="table-panel">
+      <table>
+        <thead><tr><th>VoltCore-Feld</th><th>Pflicht</th><th>CSV-Spalte</th></tr></thead>
+        <tbody id="csvMappings"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panelhead"><div><h2>2. Importoptionen</h2><span>Vor dem Schreiben folgt noch eine Analyse</span></div></div>
+    <div class="form-grid">
+      <label id="csvTimezoneWrap">Zeitbasis bei Zeitwerten
+        <select id="csvTimezone"><option value="Europe/Berlin">Europe/Berlin</option><option value="UTC">UTC</option></select>
+      </label>
+      <label class="checkline" id="csvCreateMissingWrap"><input id="csvCreateMissing" type="checkbox"> Fehlende Stammdaten beim Session-/RFID-Import anlegen</label>
+    </div>
+    <div class="toolbar-actions write-action"><button id="csvAnalyzeBtn" class="secondary" type="button">Zuordnung analysieren</button></div>
+    <div id="csvAnalyzeMessage" class="form-message"></div>
+  </section>
+
+  <section id="csvAnalysis" class="panel" hidden>
+    <div class="panelhead"><div><h2>3. Ergebnis prüfen & importieren</h2><span>Nichts wird geschrieben, bevor du diesen Schritt startest</span></div><span id="csvAnalysisState" class="state">Analyse</span></div>
+    <div class="stats four">
+      <div class="stat"><span>Bereit</span><b id="csvReady">0</b><small>kann importiert werden</small></div>
+      <div class="stat"><span>Duplikate</span><b id="csvDuplicates">0</b><small>werden übersprungen</small></div>
+      <div class="stat"><span>Konflikte</span><b id="csvConflicts">0</b><small>werden nicht importiert</small></div>
+      <div class="stat"><span>Fehlende Referenzen</span><b id="csvMissing">0</b><small>abhängig von Option</small></div>
+    </div>
+    <div class="toolbar-actions write-action"><button id="csvExecuteBtn" class="primary" type="button">Import jetzt durchführen</button></div>
+    <div id="csvExecuteMessage" class="form-message"></div>
+  </section>
 </section>
 {% endblock %}
-{% block scripts %}<script>
-const $=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let preview=null;
-$('importFile').onchange=()=>{$('fileName').textContent=$('importFile').files[0]?.name||'Noch keine Datei gewählt'};
-function fmtDate(v){const d=new Date(v);return Number.isNaN(d.getTime())?'—':new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',dateStyle:'short'}).format(d)}
-function userOptions(selected){return '<option value="">Bitte zuordnen …</option>'+preview.backend_users.map(u=>`<option value="${u.id}" ${Number(selected)===Number(u.id)?'selected':''}>${esc(u.name)}${u.status!=='Aktiv'?' · '+esc(u.status):''}</option>`).join('')}
-function cpOptions(){return '<option value="">Bitte Ladepunkt wählen …</option>'+preview.backend_charge_points.map(c=>`<option value="${esc(c.id)}">${esc(c.id)}${c.vendor?' · '+esc(c.vendor):''}${c.model?' '+esc(c.model):''}</option>`).join('')}
-$('previewBtn').onclick=async()=>{const f=$('importFile').files[0];if(!f){$('importMessage').textContent='Bitte zuerst eine XLSX-Datei auswählen.';$('importMessage').className='form-message error';return}const fd=new FormData();fd.append('file',f);$('previewBtn').disabled=true;$('importMessage').textContent='Prüfe Export …';$('importMessage').className='form-message';try{const r=await fetch('/api/import/ladecloud/preview',{method:'POST',body:fd}),d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Datei konnte nicht geprüft werden.');preview=d;$('statSessions').textContent=d.sessions;$('statEnergy').textContent=Number(d.energy_kwh||0).toLocaleString('de-DE',{minimumFractionDigits:3,maximumFractionDigits:3});$('statUsers').textContent=d.users.length;$('statPeriod').textContent=fmtDate(d.first_at)+' – '+fmtDate(d.last_at);$('userMappings').innerHTML=d.users.map(u=>`<tr><td><b>${esc(u.source_user_name)}</b><small class="table-sub">${esc(u.suggestion_reason||'')}</small></td><td><code>${esc(u.rfid_tag)}</code></td><td>${u.sessions}</td><td>${Number(u.energy_kwh).toFixed(3)} kWh</td><td><select class="import-map-select" data-rfid="${esc(u.rfid_tag)}">${userOptions(u.suggested_user_id)}</select></td></tr>`).join('');$('cpMappings').innerHTML=d.charge_points.map(c=>`<tr><td><b>${esc(c.source_charge_point)}</b></td><td>${c.evse_ids.map(esc).join('<br>')}<small class="table-sub">Connector ${c.connectors.join(', ')}</small></td><td>${c.sessions}</td><td>${Number(c.energy_kwh).toFixed(3)} kWh</td><td><select class="import-map-select" data-source-cp="${esc(c.source_charge_point)}">${cpOptions()}</select></td></tr>`).join('');$('importSummary').textContent=`${d.sessions} Sessions · ${Number(d.energy_kwh).toFixed(3)} kWh · ${d.users.length} RFID-Nutzer`;$('previewSection').hidden=false;$('importMessage').textContent=d.warnings?.length?`Vorschau erstellt · ${d.warnings.length} Hinweis(e)`:'Vorschau erfolgreich erstellt.';$('importMessage').className='form-message success'}catch(e){$('importMessage').textContent=e.message;$('importMessage').className='form-message error'}finally{$('previewBtn').disabled=false}};
-$('executeBtn').onclick=async()=>{if(!preview)return;const user_mapping={},charge_point_mapping={};document.querySelectorAll('[data-rfid]').forEach(x=>{if(x.value)user_mapping[x.dataset.rfid]=Number(x.value)});document.querySelectorAll('[data-source-cp]').forEach(x=>{if(x.value)charge_point_mapping[x.dataset.sourceCp]=x.value});if(Object.keys(user_mapping).length!==preview.users.length)return alert('Bitte alle RFID-Benutzer zuordnen.');if(Object.keys(charge_point_mapping).length!==preview.charge_points.length)return alert('Bitte alle lade.cloud-Ladepunkte zuordnen.');if(!confirm(`Jetzt ${preview.sessions} historische Ladevorgänge importieren?\n\nBestehende Duplikate werden übersprungen.`))return;$('executeBtn').disabled=true;$('executeMessage').textContent='Import läuft …';$('executeMessage').className='form-message';try{const r=await fetch('/api/import/ladecloud/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:preview.token,user_mapping,charge_point_mapping})}),d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Import fehlgeschlagen.');$('executeMessage').innerHTML=`Import abgeschlossen: <strong>${d.imported}</strong> Sessions · <strong>${Number(d.energy_kwh||0).toFixed(3)} kWh</strong> · ${d.duplicates} Duplikate übersprungen · ${d.rfid_created.length} RFID neu angelegt.`;$('executeMessage').className='form-message success';$('executeBtn').textContent='Import abgeschlossen';}catch(e){$('executeMessage').textContent=e.message;$('executeMessage').className='form-message error';$('executeBtn').disabled=false}};
-</script>{% endblock %}
+
+{% block scripts %}
+<script>
+const csv$=id=>document.getElementById(id);
+const csvEsc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let csvPreview=null;
+let csvAnalyzed=false;
+
+function csvDetail(data,fallback){
+  if(!data)return fallback;
+  if(typeof data.detail==='string')return data.detail;
+  if(data.detail&&typeof data.detail.message==='string')return data.detail.message;
+  return fallback;
+}
+function csvResetAnalysis(){
+  csvAnalyzed=false;
+  csv$('csvAnalysis').hidden=true;
+  csv$('csvAnalyzeMessage').textContent='';
+  csv$('csvExecuteMessage').textContent='';
+}
+function csvMapping(){
+  const out={};
+  document.querySelectorAll('#csvMappings select[data-field]').forEach(el=>{if(el.value)out[el.dataset.field]=el.value});
+  return out;
+}
+function csvOptions(headers,selected){
+  let html='<option value="">— nicht zuordnen —</option>';
+  headers.forEach(function(h){
+    html+='<option value="'+csvEsc(h)+'"'+(h===selected?' selected':'')+'>'+csvEsc(h)+'</option>';
+  });
+  return html;
+}
+function csvRenderMapping(data){
+  let html='';
+  data.fields.forEach(function(field){
+    const selected=data.suggested_mapping[field.key]||'';
+    html+='<tr><td><b>'+csvEsc(field.label)+'</b><small class="table-sub">'+csvEsc(field.key)+'</small></td><td>'+(field.required?'<span class="state warn">Pflicht</span>':'optional')+'</td><td><select data-field="'+csvEsc(field.key)+'">'+csvOptions(data.headers,selected)+'</select></td></tr>';
+  });
+  csv$('csvMappings').innerHTML=html;
+  document.querySelectorAll('#csvMappings select').forEach(el=>el.addEventListener('change',csvResetAnalysis));
+}
+function csvUpdateOptionVisibility(){
+  const entity=csv$('csvEntity').value;
+  csv$('csvTimezoneWrap').hidden=entity!=='sessions'&&entity!=='rfids';
+  csv$('csvCreateMissingWrap').hidden=!['sessions','rfids'].includes(entity);
+}
+csv$('csvEntity').addEventListener('change',function(){csvUpdateOptionVisibility();csvPreview=null;csv$('csvPreviewSection').hidden=true;csvResetAnalysis()});
+csv$('csvProvider').addEventListener('change',csvResetAnalysis);
+csv$('csvTimezone').addEventListener('change',csvResetAnalysis);
+csv$('csvCreateMissing').addEventListener('change',csvResetAnalysis);
+csv$('csvFile').addEventListener('change',function(){csv$('csvFileName').textContent=csv$('csvFile').files[0]?.name||'Noch keine Datei gewählt';csvPreview=null;csv$('csvPreviewSection').hidden=true;csvResetAnalysis()});
+csvUpdateOptionVisibility();
+
+csv$('csvPreviewBtn').onclick=async function(){
+  const file=csv$('csvFile').files[0];
+  if(!file){csv$('csvMessage').textContent='Bitte zuerst eine CSV-Datei auswählen.';csv$('csvMessage').className='form-message error';return}
+  const fd=new FormData();
+  fd.append('file',file);
+  fd.append('entity_type',csv$('csvEntity').value);
+  fd.append('provider',csv$('csvProvider').value);
+  csv$('csvPreviewBtn').disabled=true;
+  csv$('csvMessage').textContent='CSV wird geprüft …';
+  csv$('csvMessage').className='form-message';
+  try{
+    const response=await fetch('/api/import/csv/preview',{method:'POST',body:fd});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(csvDetail(data,'CSV konnte nicht geprüft werden.'));
+    csvPreview=data;
+    csvAnalyzed=false;
+    csv$('csvRows').textContent=data.rows;
+    csv$('csvEncoding').textContent=data.encoding;
+    csv$('csvDelimiter').textContent=data.delimiter==='\\t'?'Tab':data.delimiter;
+    csv$('csvHeaderCount').textContent=data.headers.length;
+    csvRenderMapping(data);
+    csv$('csvPreviewSection').hidden=false;
+    csv$('csvAnalysis').hidden=true;
+    csv$('csvMessage').textContent='CSV erkannt. Bitte Spaltenzuordnung kontrollieren.';
+    csv$('csvMessage').className='form-message success';
+  }catch(error){
+    csv$('csvMessage').textContent=error.message;
+    csv$('csvMessage').className='form-message error';
+  }finally{
+    csv$('csvPreviewBtn').disabled=false;
+  }
+};
+
+csv$('csvAnalyzeBtn').onclick=async function(){
+  if(!csvPreview)return;
+  csv$('csvAnalyzeBtn').disabled=true;
+  csv$('csvAnalyzeMessage').textContent='Prüfe Zuordnung und vorhandene Daten …';
+  csv$('csvAnalyzeMessage').className='form-message';
+  try{
+    const payload={token:csvPreview.token,filename:csvPreview.filename,entity_type:csvPreview.entity_type,provider:csv$('csvProvider').value,mapping:csvMapping(),timezone:csv$('csvTimezone').value,create_missing:csv$('csvCreateMissing').checked};
+    const response=await fetch('/api/import/csv/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok){
+      const rows=(data.errors||[]).slice(0,5).map(function(x){return 'Zeile '+x.row_no+': '+x.message}).join(' · ');
+      throw new Error(csvDetail(data,'Analyse fehlgeschlagen.')+(rows?' — '+rows:''));
+    }
+    csvAnalyzed=true;
+    csv$('csvReady').textContent=data.ready;
+    csv$('csvDuplicates').textContent=data.duplicates;
+    csv$('csvConflicts').textContent=data.conflicts;
+    csv$('csvMissing').textContent=data.missing_references;
+    csv$('csvAnalysisState').textContent=data.conflicts?'Konflikte prüfen':'Bereit';
+    csv$('csvAnalysisState').className='state '+(data.conflicts?'warn':'ok');
+    csv$('csvAnalysis').hidden=false;
+    csv$('csvAnalyzeMessage').textContent='Analyse abgeschlossen. Es wurde noch nichts geschrieben.';
+    csv$('csvAnalyzeMessage').className='form-message success';
+  }catch(error){
+    csvAnalyzed=false;
+    csv$('csvAnalysis').hidden=true;
+    csv$('csvAnalyzeMessage').textContent=error.message;
+    csv$('csvAnalyzeMessage').className='form-message error';
+  }finally{
+    csv$('csvAnalyzeBtn').disabled=false;
+  }
+};
+
+csv$('csvExecuteBtn').onclick=async function(){
+  if(!csvPreview||!csvAnalyzed)return;
+  csv$('csvExecuteBtn').disabled=true;
+  csv$('csvExecuteMessage').textContent='Import läuft …';
+  csv$('csvExecuteMessage').className='form-message';
+  try{
+    const payload={token:csvPreview.token,filename:csvPreview.filename,entity_type:csvPreview.entity_type,provider:csv$('csvProvider').value,mapping:csvMapping(),timezone:csv$('csvTimezone').value,create_missing:csv$('csvCreateMissing').checked};
+    const response=await fetch('/api/import/csv/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(csvDetail(data,'Import fehlgeschlagen.'));
+    const created=data.created||{};
+    csv$('csvExecuteMessage').textContent='Import abgeschlossen: '+data.imported+' neu · '+data.duplicates+' Duplikate · '+data.conflicts+' Konflikte · '+(created.users||0)+' Benutzer · '+(created.rfids||0)+' RFID · '+(created.vehicles||0)+' Fahrzeuge · '+(created.charge_points||0)+' Ladepunkte angelegt.';
+    csv$('csvExecuteMessage').className='form-message success';
+    csv$('csvExecuteBtn').textContent='Import abgeschlossen';
+    csvAnalyzed=false;
+  }catch(error){
+    csv$('csvExecuteMessage').textContent=error.message;
+    csv$('csvExecuteMessage').className='form-message error';
+    csv$('csvExecuteBtn').disabled=false;
+  }
+};
+
+let migrationPreview=null;
+
+function migrationFilename(disposition){
+  const match=String(disposition||'').match(/filename="?([^";]+)"?/i);
+  return match?match[1]:'VoltCore_Migration.zip';
+}
+document.getElementById('migrationExportBtn').onclick=async function(){
+  const button=this;
+  button.disabled=true;
+  document.getElementById('migrationMessage').textContent='Migrationspaket wird erstellt …';
+  document.getElementById('migrationMessage').className='form-message';
+  try{
+    const response=await fetch('/api/import/migration/export',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({anonymize:document.getElementById('migrationAnonymize').checked})
+    });
+    if(!response.ok){
+      const data=await response.json().catch(()=>({}));
+      throw new Error((data&&data.detail)||'Migrationspaket konnte nicht erstellt werden.');
+    }
+    const blob=await response.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=migrationFilename(response.headers.get('Content-Disposition'));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    document.getElementById('migrationMessage').textContent='Migrationspaket wurde erstellt.';
+    document.getElementById('migrationMessage').className='form-message success';
+  }catch(error){
+    document.getElementById('migrationMessage').textContent=error.message;
+    document.getElementById('migrationMessage').className='form-message error';
+  }finally{
+    button.disabled=false;
+  }
+};
+
+document.getElementById('migrationPreviewBtn').onclick=async function(){
+  const file=document.getElementById('migrationFile').files[0];
+  if(!file){
+    document.getElementById('migrationMessage').textContent='Bitte zuerst ein VoltCore-Migrationspaket auswählen.';
+    document.getElementById('migrationMessage').className='form-message error';
+    return;
+  }
+  const button=this;
+  button.disabled=true;
+  const fd=new FormData();
+  fd.append('file',file);
+  try{
+    const response=await fetch('/api/import/migration/preview',{method:'POST',body:fd});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error((data&&data.detail)||'Migrationspaket konnte nicht geprüft werden.');
+    migrationPreview=data;
+    document.getElementById('migrationSourceVersion').textContent=data.manifest.source_version||'—';
+    document.getElementById('migrationSourceEdition').textContent=data.manifest.source_edition||'—';
+    document.getElementById('migrationRows').textContent=data.total_rows||0;
+    document.getElementById('migrationTables').textContent=Object.keys(data.tables||{}).length;
+    document.getElementById('migrationAnonymized').textContent=data.manifest.anonymized?'Ja':'Nein';
+    document.getElementById('migrationTableRows').innerHTML=Object.entries(data.tables||{}).map(function(entry){
+      return '<tr><td><code>'+csvEsc(entry[0])+'</code></td><td>'+entry[1]+'</td></tr>';
+    }).join('')||'<tr><td colspan="2">Keine importierbaren Tabellen.</td></tr>';
+    const warnings=[].concat(data.warnings||[]);
+    if(data.blockers&&Object.keys(data.blockers).length){
+      warnings.push('Zielinstallation enthält bereits operative Daten: '+Object.entries(data.blockers).map(function(entry){return entry[0]+'='+entry[1]}).join(', '));
+    }
+    document.getElementById('migrationWarnings').textContent=warnings.join(' · ')||'Paket ist mit dieser Installation kompatibel.';
+    document.getElementById('migrationWarnings').className='form-message '+(data.can_import?'success':'error');
+    document.getElementById('migrationState').textContent=data.can_import?'Bereit':'Nicht importierbar';
+    document.getElementById('migrationState').className='state '+(data.can_import?'ok':'bad');
+    document.getElementById('migrationExecuteBtn').disabled=!data.can_import;
+    document.getElementById('migrationPreviewSection').hidden=false;
+    document.getElementById('migrationMessage').textContent='Migrationspaket erfolgreich geprüft.';
+    document.getElementById('migrationMessage').className='form-message success';
+  }catch(error){
+    migrationPreview=null;
+    document.getElementById('migrationPreviewSection').hidden=true;
+    document.getElementById('migrationMessage').textContent=error.message;
+    document.getElementById('migrationMessage').className='form-message error';
+  }finally{
+    button.disabled=false;
+  }
+};
+
+document.getElementById('migrationExecuteBtn').onclick=async function(){
+  if(!migrationPreview||!migrationPreview.can_import)return;
+  const button=this;
+  button.disabled=true;
+  document.getElementById('migrationExecuteMessage').textContent='VoltCore-Daten werden importiert …';
+  document.getElementById('migrationExecuteMessage').className='form-message';
+  try{
+    const response=await fetch('/api/import/migration/execute',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:migrationPreview.token})
+    });
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error((data&&data.detail)||'Migration fehlgeschlagen.');
+    const total=Object.values(data.imported||{}).reduce(function(sum,value){return sum+Number(value||0)},0);
+    document.getElementById('migrationExecuteMessage').textContent='Migration abgeschlossen: '+total+' Datensätze importiert. Die Installation kann jetzt normal weiterverwendet werden.';
+    document.getElementById('migrationExecuteMessage').className='form-message success';
+    button.textContent='Migration abgeschlossen';
+  }catch(error){
+    document.getElementById('migrationExecuteMessage').textContent=error.message;
+    document.getElementById('migrationExecuteMessage').className='form-message error';
+    button.disabled=false;
+  }
+};
+</script>
+{% endblock %}

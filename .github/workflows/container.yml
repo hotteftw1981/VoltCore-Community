@@ -33,7 +33,7 @@ jobs:
           fi
 
       - name: Checkout tested commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.source.outputs.sha }}
 
@@ -52,6 +52,18 @@ jobs:
           PY
           )"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Protect released main version
+        if: steps.source.outputs.branch == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release $RELEASE_TAG already exists. Bump APP_VERSION before publishing another main image."
+            exit 1
+          fi
 
       - name: Resolve image tags
         id: tags
