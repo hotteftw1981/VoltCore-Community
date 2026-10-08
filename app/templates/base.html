@@ -27,6 +27,7 @@
     <a href="/users" class="{% if page=='users' %}active{% endif %}">♙ <span>Ladebenutzer / RFID</span></a>
     <a href="/reports" class="{% if page=='reports' %}active{% endif %}">▤ <span>Berichte</span></a>
     {% if auth_user and auth_user.role == 'admin' %}<a href="/tariffs" class="{% if page=='tariffs' %}active{% endif %}">€ <span>Tarife</span></a>{% endif %}
+    {% if auth_user and auth_user.role == 'admin' %}<a href="/imports" class="{% if page=='imports' %}active{% endif %}">⇩ <span>Datenimport</span></a>{% endif %}
                 
     <a href="/activity" class="{% if page=='activity' %}active{% endif %}">◷ <span>Aktivitätsprotokoll</span></a>
     {% if auth_user and auth_user.role == 'admin' %}<a href="/system-users" class="{% if page=='system-users' %}active{% endif %}">♟ <span>Systembenutzer</span></a>{% endif %}
