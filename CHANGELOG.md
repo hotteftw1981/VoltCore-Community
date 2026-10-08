@@ -2,6 +2,21 @@
 
 All notable changes to VoltCore Community are documented here.
 
+## 0.9.7.78 — Provider-neutral CSV migration
+
+### Added
+- Added an administrator-only, provider-neutral CSV migration workspace with automatic delimiter/encoding detection and free column mapping.
+- Supports charging users, RFID cards, vehicles, charge points and historical charging sessions.
+- Added source labels for generic CSV, reev, chargecloud, be.ENERGISED / ChargePoint, Monta, EVBox Everon and other systems without coupling the parser to proprietary export layouts.
+- Historical sessions use deterministic duplicate detection and may optionally create missing users, RFID cards, vehicles and charge points after an explicit preview/analyse step.
+- The Community edition remains provider-neutral: the dedicated Lade.cloud XLSX importer is still intentionally excluded.
+
+### Safety
+- Import validation must succeed before data is written; invalid rows abort the import instead of being silently accepted.
+- Temporary CSV uploads are stored with restrictive permissions, expire after 24 hours and are excluded from backup archives/restores.
+- Import routes are administrator-only and import actions are included in the activity log.
+- Added database end-to-end tests for master data, historical sessions, duplicate detection, optional missing-data creation and temporary-file handling.
+
 ## 0.9.7.77 — One-click updates for Docker and Portainer
 
 ### Added
