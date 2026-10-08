@@ -16,7 +16,7 @@ import html
 from urllib.parse import unquote, urlparse
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -879,6 +879,9 @@ class UpdateSettingsPayload(BaseModel):
     check_enabled: bool = True
     github_token: str | None = None
     clear_github_token: bool = False
+    portainer_webhook: str | None = None
+    clear_portainer_webhook: bool = False
+    portainer_tls_verify: bool = True
 
 
 class UpdateInstallPayload(BaseModel):
@@ -909,8 +912,8 @@ async def api_update_status(force: bool=False):
         raise HTTPException(502,f"Update-Prüfung fehlgeschlagen: {type(exc).__name__}")
 
 
-@app.post("/api/updates/install")
-async def api_install_update(payload: UpdateInstallPayload):
+@app.post("/api/updates/install",status_code=202)
+async def api_install_update(payload: UpdateInstallPayload, request: Request, background_tasks: BackgroundTasks):
     try:
         status=await asyncio.to_thread(updates.check_latest,APP_VERSION,True)
     except Exception as exc:
@@ -920,11 +923,42 @@ async def api_install_update(payload: UpdateInstallPayload):
         raise HTTPException(409,"Es ist kein neueres freigegebenes Update verfügbar.")
     if target != str(status.get("latest_version") or ""):
         raise HTTPException(409,"Die angeforderte Version entspricht nicht dem neuesten freigegebenen Release.")
-    raise HTTPException(
-        409,
-        "Automatische Installation ist in der Community Edition deployment-abhängig und noch nicht aktiviert. "
-        "Die Updatequelle ist GitHub Releases. Docker-Compose- und Portainer-Installationen werden über ihren jeweiligen Deployment-Weg aktualisiert."
-    )
+    cfg=updates.settings()
+    if not cfg.get("install_ready"):
+        raise HTTPException(
+            409,
+            "Für diese Installation ist noch kein 1-Klick-Update-Provider verfügbar. "
+            "Docker-Compose-Installationen benötigen den mitgelieferten Updater-Sidecar; "
+            "bei Portainer muss ein Stack-Webhook hinterlegt werden."
+        )
+    try:
+        pre=await asyncio.to_thread(backup.create_backup,f"pre-update-v{target}",True)
+    except Exception as exc:
+        logging.exception("Pre-Update-Backup fehlgeschlagen")
+        raise HTTPException(500,f"Update abgebrochen: Pre-Update-Backup fehlgeschlagen ({type(exc).__name__}).")
+    updates.mark_pending(target,pre.get("filename"))
+    auth=request.state.auth_user or {}
+    try:
+        db.add_security_event(
+            "System update requested",
+            severity="info",
+            category="admin",
+            system_user_id=auth.get("id"),
+            username=auth.get("username"),
+            remote=_client_text(request),
+            success=True,
+            detail=f"target={target}; provider={cfg.get('install_provider')}; backup={pre.get('filename')}",
+        )
+    except Exception:
+        logging.exception("Update-Audit konnte nicht geschrieben werden")
+    background_tasks.add_task(updates.trigger_and_record,target)
+    return {
+        "ok":True,
+        "target_version":target,
+        "provider":cfg.get("install_provider"),
+        "backup":pre,
+        "message":"Pre-Update-Backup erstellt; 1-Klick-Update wird gestartet.",
+    }
 
 
 @app.get("/settings", response_class=HTMLResponse)
