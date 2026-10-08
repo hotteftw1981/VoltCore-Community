@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Optionaler Release-Tag, z. B. v0.9.7.76. Leer = APP_VERSION."
+        description: "Optionaler Release-Tag, z. B. vX.Y.Z. Leer = APP_VERSION."
         required: false
         type: string
 
