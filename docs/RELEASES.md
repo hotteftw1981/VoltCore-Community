@@ -1,6 +1,6 @@
 # Release-Prozess
 
-`main` ist der stabile Release-Stand. Ein Release erhält einen Tag wie `v0.9.7.77`. Die README ist Teil jedes Release-Abschlusses und wird nicht mehr separat „irgendwann später“ nachgezogen.
+`main` ist der stabile Release-Stand. Ein Release erhält einen Tag wie `v0.9.7.78`. Die README ist Teil jedes Release-Abschlusses und wird nicht mehr separat „irgendwann später“ nachgezogen.
 
 ## Vor einem Release
 
@@ -42,4 +42,4 @@ ghcr.io/hotteftw1981/voltcore-community:v<APP_VERSION>
 
 `docker-compose.portainer.yml` verwendet standardmäßig `latest` und `pull_policy: always`. Ein Rollback kann durch Setzen von `VOLTCORE_COMMUNITY_IMAGE` auf einen konkreten Versionstag erfolgen.
 
-Ein veröffentlichter Versionsstand ist unveränderlich: Existiert z. B. bereits `v0.9.7.77`, bricht der `main`-Container-Workflow vor dem Push ab und auch der Release-Workflow verweigert ein zweites Release mit derselben Version. Für jede weitere Veröffentlichung muss `APP_VERSION` erhöht werden. Dadurch können ZIP, GitHub Release und die versionierten Container-Tags nicht unbemerkt auseinanderlaufen.
+Ein veröffentlichter Versionsstand ist unveränderlich: Existiert z. B. bereits `v0.9.7.78`, bricht der `main`-Container-Workflow vor dem Push ab und auch der Release-Workflow verweigert ein zweites Release mit derselben Version. Für jede weitere Veröffentlichung muss `APP_VERSION` erhöht werden. Dadurch können ZIP, GitHub Release und die versionierten Container-Tags nicht unbemerkt auseinanderlaufen.
