@@ -49,7 +49,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.9.7.79"
+APP_VERSION = "0.9.7.80"
 APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
@@ -1129,7 +1129,13 @@ async def pwa_manifest():
         "background_color":"#111827",
         "theme_color":branding.get('primary_color') or '#2563eb',
         "icons":[
-            {"src":"/static/branding/voltcore-community-app-icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"},
+            {"src":branding.get("favicon_url") or "/static/branding/voltcore-community-app-icon.svg",
+             "sizes":"any",
+             "type":("image/svg+xml" if str(branding.get("favicon_url") or "").lower().endswith(".svg") else
+                     "image/webp" if str(branding.get("favicon_url") or "").lower().endswith(".webp") else
+                     "image/jpeg" if str(branding.get("favicon_url") or "").lower().endswith((".jpg",".jpeg")) else
+                     "image/png" if branding.get("favicon_url") else "image/svg+xml"),
+             "purpose":"any"},
         ],
     }
     return Response(json.dumps(payload,ensure_ascii=False),media_type="application/manifest+json",headers={"Cache-Control":"no-cache"})
