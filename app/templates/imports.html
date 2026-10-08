@@ -3,6 +3,49 @@
 {% block heading %}Datenimport{% endblock %}
 {% block subtitle %}Providerneutral migrieren · Vorschau, Zuordnung und Duplikatprüfung vor dem Import{% endblock %}
 {% block content %}
+
+<section class="panel">
+  <div class="panelhead">
+    <div><h2>VoltCore-Migration</h2><span>Komplettes Datenpaket für Serverwechsel, Community → Pro/Business und Neuinstallationen</span></div>
+    <span class="state blue">ZIP · Schema V1</span>
+  </div>
+  <div class="form-grid">
+    <label class="checkline"><input id="migrationAnonymize" type="checkbox"> Personenbezogene Daten anonymisieren</label>
+    <label>VoltCore-Paket importieren
+      <input id="migrationFile" type="file" accept=".zip,application/zip">
+    </label>
+  </div>
+  <div class="toolbar-actions write-action">
+    <button id="migrationExportBtn" class="secondary" type="button">Migrationspaket exportieren</button>
+    <button id="migrationPreviewBtn" class="primary" type="button">Paket prüfen</button>
+  </div>
+  <p class="muted">Der Direktimport ist absichtlich nur für eine frische operative Installation freigegeben. Bestehende Benutzer, Ladepunkte oder Sessions werden nicht überschrieben.</p>
+  <div id="migrationMessage" class="form-message"></div>
+</section>
+
+<section id="migrationPreviewSection" class="panel" hidden>
+  <div class="panelhead">
+    <div><h2>Paketvorschau</h2><span>Quelle, Umfang und Kompatibilität vor dem Import prüfen</span></div>
+    <span id="migrationState" class="state">Prüfung</span>
+  </div>
+  <div class="stats four">
+    <div class="stat"><span>Quellversion</span><b id="migrationSourceVersion">—</b><small id="migrationSourceEdition">—</small></div>
+    <div class="stat"><span>Datenzeilen</span><b id="migrationRows">0</b><small>über alle Paketdateien</small></div>
+    <div class="stat"><span>Tabellen</span><b id="migrationTables">0</b><small>in dieser Ziel-Edition verwendbar</small></div>
+    <div class="stat"><span>Anonymisiert</span><b id="migrationAnonymized">Nein</b><small>laut Manifest</small></div>
+  </div>
+  <div id="migrationWarnings" class="form-message"></div>
+  <div class="table-panel">
+    <table>
+      <thead><tr><th>Tabelle</th><th>Zeilen</th></tr></thead>
+      <tbody id="migrationTableRows"></tbody>
+    </table>
+  </div>
+  <div class="toolbar-actions write-action">
+    <button id="migrationExecuteBtn" class="primary" type="button" disabled>VoltCore-Paket importieren</button>
+  </div>
+  <div id="migrationExecuteMessage" class="form-message"></div>
+</section>
 <section class="panel">
   <div class="panelhead">
     <div><h2>Neutraler CSV-Migrationsimport</h2><span>Benutzer · RFID · Fahrzeuge · Ladepunkte · historische Sessions</span></div>
@@ -216,6 +259,117 @@ csv$('csvExecuteBtn').onclick=async function(){
     csv$('csvExecuteMessage').textContent=error.message;
     csv$('csvExecuteMessage').className='form-message error';
     csv$('csvExecuteBtn').disabled=false;
+  }
+};
+
+let migrationPreview=null;
+
+function migrationFilename(disposition){
+  const match=String(disposition||'').match(/filename="?([^";]+)"?/i);
+  return match?match[1]:'VoltCore_Migration.zip';
+}
+document.getElementById('migrationExportBtn').onclick=async function(){
+  const button=this;
+  button.disabled=true;
+  document.getElementById('migrationMessage').textContent='Migrationspaket wird erstellt …';
+  document.getElementById('migrationMessage').className='form-message';
+  try{
+    const response=await fetch('/api/import/migration/export',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({anonymize:document.getElementById('migrationAnonymize').checked})
+    });
+    if(!response.ok){
+      const data=await response.json().catch(()=>({}));
+      throw new Error((data&&data.detail)||'Migrationspaket konnte nicht erstellt werden.');
+    }
+    const blob=await response.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=migrationFilename(response.headers.get('Content-Disposition'));
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    document.getElementById('migrationMessage').textContent='Migrationspaket wurde erstellt.';
+    document.getElementById('migrationMessage').className='form-message success';
+  }catch(error){
+    document.getElementById('migrationMessage').textContent=error.message;
+    document.getElementById('migrationMessage').className='form-message error';
+  }finally{
+    button.disabled=false;
+  }
+};
+
+document.getElementById('migrationPreviewBtn').onclick=async function(){
+  const file=document.getElementById('migrationFile').files[0];
+  if(!file){
+    document.getElementById('migrationMessage').textContent='Bitte zuerst ein VoltCore-Migrationspaket auswählen.';
+    document.getElementById('migrationMessage').className='form-message error';
+    return;
+  }
+  const button=this;
+  button.disabled=true;
+  const fd=new FormData();
+  fd.append('file',file);
+  try{
+    const response=await fetch('/api/import/migration/preview',{method:'POST',body:fd});
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error((data&&data.detail)||'Migrationspaket konnte nicht geprüft werden.');
+    migrationPreview=data;
+    document.getElementById('migrationSourceVersion').textContent=data.manifest.source_version||'—';
+    document.getElementById('migrationSourceEdition').textContent=data.manifest.source_edition||'—';
+    document.getElementById('migrationRows').textContent=data.total_rows||0;
+    document.getElementById('migrationTables').textContent=Object.keys(data.tables||{}).length;
+    document.getElementById('migrationAnonymized').textContent=data.manifest.anonymized?'Ja':'Nein';
+    document.getElementById('migrationTableRows').innerHTML=Object.entries(data.tables||{}).map(function(entry){
+      return '<tr><td><code>'+csvEsc(entry[0])+'</code></td><td>'+entry[1]+'</td></tr>';
+    }).join('')||'<tr><td colspan="2">Keine importierbaren Tabellen.</td></tr>';
+    const warnings=[].concat(data.warnings||[]);
+    if(data.blockers&&Object.keys(data.blockers).length){
+      warnings.push('Zielinstallation enthält bereits operative Daten: '+Object.entries(data.blockers).map(function(entry){return entry[0]+'='+entry[1]}).join(', '));
+    }
+    document.getElementById('migrationWarnings').textContent=warnings.join(' · ')||'Paket ist mit dieser Installation kompatibel.';
+    document.getElementById('migrationWarnings').className='form-message '+(data.can_import?'success':'error');
+    document.getElementById('migrationState').textContent=data.can_import?'Bereit':'Nicht importierbar';
+    document.getElementById('migrationState').className='state '+(data.can_import?'ok':'bad');
+    document.getElementById('migrationExecuteBtn').disabled=!data.can_import;
+    document.getElementById('migrationPreviewSection').hidden=false;
+    document.getElementById('migrationMessage').textContent='Migrationspaket erfolgreich geprüft.';
+    document.getElementById('migrationMessage').className='form-message success';
+  }catch(error){
+    migrationPreview=null;
+    document.getElementById('migrationPreviewSection').hidden=true;
+    document.getElementById('migrationMessage').textContent=error.message;
+    document.getElementById('migrationMessage').className='form-message error';
+  }finally{
+    button.disabled=false;
+  }
+};
+
+document.getElementById('migrationExecuteBtn').onclick=async function(){
+  if(!migrationPreview||!migrationPreview.can_import)return;
+  const button=this;
+  button.disabled=true;
+  document.getElementById('migrationExecuteMessage').textContent='VoltCore-Daten werden importiert …';
+  document.getElementById('migrationExecuteMessage').className='form-message';
+  try{
+    const response=await fetch('/api/import/migration/execute',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({token:migrationPreview.token})
+    });
+    const data=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error((data&&data.detail)||'Migration fehlgeschlagen.');
+    const total=Object.values(data.imported||{}).reduce(function(sum,value){return sum+Number(value||0)},0);
+    document.getElementById('migrationExecuteMessage').textContent='Migration abgeschlossen: '+total+' Datensätze importiert. Die Installation kann jetzt normal weiterverwendet werden.';
+    document.getElementById('migrationExecuteMessage').className='form-message success';
+    button.textContent='Migration abgeschlossen';
+  }catch(error){
+    document.getElementById('migrationExecuteMessage').textContent=error.message;
+    document.getElementById('migrationExecuteMessage').className='form-message error';
+    button.disabled=false;
   }
 };
 </script>
