@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.76.**
+> 🚧 **Status:** work in progress. Not yet intended for public production use. **Current build: 0.9.7.77.**
 
 ## 🚀 Installation
 
@@ -82,7 +82,7 @@ VoltCore Community keeps the familiar **Update** menu inside the application. �
 
 Stable Community releases will be published as **GitHub Releases** in this repository. Running installations can check GitHub for newer stable versions and notify administrators directly inside VoltCore. 🚀
 
-Planned behaviour:
+Implemented behaviour:
 
 - 🚦 automatic update check after backend startup
 - 🕒 periodic checks in the background
@@ -90,11 +90,14 @@ Planned behaviour:
 - 📝 release notes before installation
 - 🧪 validation that the release belongs to VoltCore Community
 - 🗃️ database migration awareness
-- 🛟 backup and rollback safety
+- 🛟 mandatory pre-update backup before every one-click install
+- 🐳 **Docker Compose:** bundled updater sidecar
+- 🟦 **Portainer CE/BE:** update through the Portainer REST API
+- 🟦 **Portainer Business:** optional stack webhook provider
 
 Public Community releases are designed to be discoverable **without requiring every installation to store its own GitHub access token**. 🔓🐙
 
-> 🧩 **Important:** GitHub Releases are the fixed update source for the Community Edition. The actual installation method intentionally stays deployment-neutral. Docker, Portainer or other deployment variants may provide their own installer later — **VoltCore Community itself is not tied to Portainer.**
+> 🧩 **Important:** GitHub Releases remain the canonical update source. Installation is performed automatically by either the Docker updater sidecar or the Portainer API; a Portainer Business stack webhook can be used optionally. **VoltCore Community is not tied to Portainer.**
 
 ## 🌍 Languages
 
