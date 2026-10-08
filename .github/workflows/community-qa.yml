@@ -27,7 +27,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Compile Python
-        run: python -m compileall -q app tests
+        run: python -m compileall -q app tests updater
 
       - name: Import application with fresh data directory
         run: |
@@ -89,5 +89,7 @@ jobs:
                   raise SystemExit("Release archive missing app/")
               if not any(x.startswith(f"{top}/docs/") for x in names):
                   raise SystemExit("Release archive missing docs/")
+              if not any(x.startswith(f"{top}/updater/") for x in names):
+                  raise SystemExit("Release archive missing updater/")
           print("Community release archive OK:", archives[0])
           PY
