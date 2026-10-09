@@ -149,7 +149,7 @@ VoltCore Community is intended to be the **free VoltCore edition**. 🆓💙
 That distinction is intentional:
 
 - 🆓 **Community edition: free**
-- 📜 **final public license: still to be selected**
+- 📜 **proposed public license: AGPLv3; rights review pending**
 - 🔐 **repository visibility: private until Community is release-ready**
 
 ## 📚 Documentation
