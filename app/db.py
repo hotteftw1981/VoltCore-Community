@@ -271,7 +271,7 @@ def init_db():
                 vehicle TEXT,
                 monthly_kwh_limit REAL,
                 monthly_limit_mode TEXT NOT NULL DEFAULT 'warn',
-                gamification_enabled INTEGER NOT NULL DEFAULT 1,
+                gamification_enabled INTEGER NOT NULL DEFAULT 0,
                 gamification_seen_award_id INTEGER,
                 gamification_seen_level INTEGER,
                 weekly_hours REAL,
@@ -789,7 +789,7 @@ def init_db():
         if "monthly_limit_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN monthly_limit_mode TEXT NOT NULL DEFAULT 'warn'")
         if "gamification_enabled" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 1")
+            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 0")
         if "weekly_hours" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN weekly_hours REAL")
         if "budget_source" not in user_columns:
