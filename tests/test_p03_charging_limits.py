@@ -60,7 +60,7 @@ class ChargingLimits(unittest.TestCase):
 
     def test_rejected_start_does_not_supersede_existing_connector_session(self):
         first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
-        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
             db.start_transaction("P03", id_tag="P03-A", connector_id=1)
         current = db.get_transaction(first)
         self.assertEqual(current["status"], "Active")
@@ -115,6 +115,31 @@ class ChargingLimits(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
             db.start_transaction("P03-B", id_tag="P03-A", connector_id=1)
         self.assertEqual(db.get_transaction(first)["status"], "Active")
+
+    def test_available_releases_stale_session_after_reconnect(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        db.set_status_notification("P03", 1, "Charging")
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        closed = db.reconcile_active_transactions_for_connector(
+            "P03", 1, reason="ConnectorAvailable"
+        )
+        db.set_status_notification("P03", 1, "Available")
+        self.assertIn(first, closed)
+        self.assertNotEqual(db.get_transaction(first)["status"], "Active")
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertNotEqual(first, second)
+
+    def test_other_connector_survives_available_notification(self):
+        with db._connect() as conn:
+            conn.execute("UPDATE users SET max_concurrent_sessions=2 WHERE id=?", (self.user,))
+            conn.commit()
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        second = db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+        db.reconcile_active_transactions_for_connector("P03", 1, reason="ConnectorAvailable")
+        self.assertNotEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.get_transaction(second)["status"], "Active")
 
     def test_simultaneous_two_threads_one_slot(self):
         gate = threading.Barrier(2, timeout=5)
