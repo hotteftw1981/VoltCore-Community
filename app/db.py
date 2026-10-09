@@ -5432,18 +5432,6 @@ def _leaderboard_metric_key(metric):
 
 
 
-def list_achievements(include_inactive=True):
-    """Administrative catalogue. Secret achievements stay hidden from players, not admins."""
-    with _lock, _connect() as conn:
-        where="" if include_inactive else "WHERE a.active=1"
-        return [dict(r) for r in conn.execute(f"""SELECT a.*,
-            (SELECT COUNT(*) FROM achievement_awards x JOIN users ux ON ux.id=x.user_id WHERE x.achievement_id=a.id AND COALESCE(ux.gamification_enabled,1)=1) AS awarded_count,
-            EXISTS(SELECT 1 FROM gamification_events ge WHERE ge.winner_achievement_id=a.id) AS event_badge
-            FROM achievements a {where}
-            ORDER BY a.active DESC,COALESCE(a.category,'Allgemein') COLLATE NOCASE,
-                     COALESCE(a.tier_group,''),COALESCE(a.tier_rank,0),a.name COLLATE NOCASE""").fetchall()]
-
-
 def _achievement_fields(name, description=None, icon=None, metric="manual", threshold=None, hidden=False,
                         system_secret=False, active=True, category="Allgemein", rarity="common", xp=50,
                         tier_group=None, tier_name=None, tier_rank=0, leaderboard_enabled=False):
@@ -5478,43 +5466,6 @@ def _achievement_fields(name, description=None, icon=None, metric="manual", thre
         "tier_rank":tier_rank,
         "leaderboard_enabled":1 if (leaderboard_enabled and not system_secret and _leaderboard_metric_key(metric)) else 0,
     }
-
-
-def create_achievement(name, description=None, icon=None, metric="manual", threshold=None, hidden=False,
-                       system_secret=False, active=True, category="Allgemein", rarity="common", xp=50,
-                       tier_group=None, tier_name=None, tier_rank=0, leaderboard_enabled=False):
-    fields=_achievement_fields(name,description,icon,metric,threshold,hidden,system_secret,active,category,rarity,xp,tier_group,tier_name,tier_rank,leaderboard_enabled)
-    keys=list(fields)
-    with _lock,_connect() as conn:
-        cur=conn.execute(
-            "INSERT INTO achievements("+",".join(keys)+",created_at) VALUES("+",".join("?" for _ in keys)+",?)",
-            [fields[k] for k in keys]+[utc_now()],
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def update_achievement(achievement_id, **fields):
-    current=get_achievement(achievement_id)
-    if not current:
-        return False
-    merged={k:current.get(k) for k in (
-        "name","description","icon","metric","threshold","hidden","system_secret","active",
-        "category","rarity","xp","tier_group","tier_name","tier_rank","leaderboard_enabled"
-    )}
-    merged.update({k:v for k,v in fields.items() if k in merged})
-    cleaned=_achievement_fields(**merged)
-    with _lock,_connect() as conn:
-        keys=list(cleaned)
-        cur=conn.execute(
-            "UPDATE achievements SET "+", ".join(f"{k}=?" for k in keys)+" WHERE id=?",
-            [cleaned[k] for k in keys]+[int(achievement_id)],
-        )
-        conn.commit()
-        changed=cur.rowcount>0
-    if changed and any(k in fields for k in {"metric","threshold","active"}):
-        reconcile_automatic_achievements()
-    return changed
 
 
 def get_achievement(achievement_id):
@@ -5689,56 +5640,6 @@ def reconcile_automatic_achievements():
     return len(user_ids)
 
 
-def award_achievement(user_id, achievement_id, source="manual"):
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT id,gamification_enabled FROM users WHERE id=?",(user_id,)).fetchone()
-        if not user:
-            raise ValueError("Benutzer nicht gefunden")
-        if not bool(user["gamification_enabled"]):
-            raise ValueError("Benutzer nimmt nicht an Achievements, Events oder Ranglisten teil")
-        if not conn.execute("SELECT id FROM achievements WHERE id=? AND active=1",(achievement_id,)).fetchone():
-            raise ValueError("Achievement nicht gefunden")
-        conn.execute("INSERT OR IGNORE INTO achievement_awards(user_id,achievement_id,awarded_at,source) VALUES(?,?,?,?)",(user_id,achievement_id,utc_now(),source))
-        conn.commit()
-
-
-def revoke_achievement(user_id, achievement_id):
-    with _lock,_connect() as conn:
-        cur=conn.execute("DELETE FROM achievement_awards WHERE user_id=? AND achievement_id=?",(user_id,achievement_id))
-        conn.commit()
-        return cur.rowcount>0
-
-
-def earned_achievement_count(user_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT COUNT(*) FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(int(user_id),)).fetchone()
-        return int(row[0] or 0) if row else 0
-
-
-def earned_achievements_for_user(user_id, limit=8):
-    try:
-        limit=max(1,min(20,int(limit or 8)))
-    except (TypeError,ValueError):
-        limit=8
-    with _lock,_connect() as conn:
-        rows=conn.execute("""SELECT a.*,x.awarded_at,x.source FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1
-            ORDER BY x.awarded_at DESC,a.name COLLATE NOCASE LIMIT ?""",(int(user_id),limit)).fetchall()
-        result=[]
-        for r in rows:
-            d=dict(r)
-            d["earned"]=True
-            d["event_badge"]=str(d.get("source") or "").startswith("event:")
-            d["display_name"]=d.get("name")
-            d["display_description"]=d.get("description") or ""
-            d["display_icon"]=d.get("icon") or "🏅"
-            result.append(d)
-        return result
-
-
 def _xp_floor(level):
     level=max(1,int(level))
     return 125*(level-1)*level//2
@@ -5868,33 +5769,6 @@ def portal_gamification_reveals(user_id, limit=6):
         }
 
 
-def acknowledge_portal_gamification_reveals(user_id, award_id=None, level=None):
-    uid=int(user_id)
-    profile=user_gamification_profile(uid)
-    current_level=int(profile.get("level") or 1)
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT gamification_seen_award_id,gamification_seen_level
-            FROM users WHERE id=?""",(uid,)).fetchone()
-        if not row:
-            return False
-        max_row=conn.execute("""SELECT COALESCE(MAX(x.id),0) FROM achievement_awards x
-            JOIN achievements a ON a.id=x.achievement_id
-            WHERE x.user_id=? AND a.active=1""",(uid,)).fetchone()
-        max_award_id=int(max_row[0] or 0)
-        old_award=int(row["gamification_seen_award_id"] or 0)
-        old_level=int(row["gamification_seen_level"] or 1)
-        try: requested_award=int(award_id if award_id is not None else max_award_id)
-        except (TypeError,ValueError): requested_award=max_award_id
-        try: requested_level=int(level if level is not None else current_level)
-        except (TypeError,ValueError): requested_level=current_level
-        new_award=max(old_award,min(max_award_id,max(0,requested_award)))
-        new_level=max(old_level,min(current_level,max(1,requested_level)))
-        conn.execute("""UPDATE users SET gamification_seen_award_id=?,gamification_seen_level=?
-            WHERE id=?""",(new_award,new_level,uid))
-        conn.commit()
-        return True
-
-
 def gamification_overview():
     reconcile_automatic_achievements()
     with _lock,_connect() as conn:
@@ -5959,29 +5833,6 @@ def _event_state(event, now=None):
     return "running"
 
 
-def list_gamification_events(include_inactive=True):
-    # Finalize ended events before reading so the archive always reflects the
-    # immutable result snapshot and any configured prizes.
-    finalize_ended_gamification_events()
-    with _lock,_connect() as conn:
-        where="" if include_inactive else "WHERE e.active=1"
-        rows=conn.execute(f"""SELECT e.*,
-            (SELECT COUNT(*) FROM gamification_event_rewards r WHERE r.event_id=e.id) AS reward_count,
-            (SELECT COALESCE(SUM(r.amount_kwh),0) FROM gamification_event_rewards r WHERE r.event_id=e.id) AS reward_total_kwh,
-            (SELECT COUNT(*) FROM achievement_awards aa WHERE aa.source=('event:' || e.id)) AS badge_award_count,
-            (SELECT COUNT(*) FROM gamification_event_results rr WHERE rr.event_id=e.id AND rr.qualified=1) AS qualified_count,
-            (SELECT COUNT(*) FROM gamification_event_results rr WHERE rr.event_id=e.id AND (rr.sessions>0 OR rr.energy_kwh>0)) AS participant_count
-            FROM gamification_events e {where} ORDER BY e.starts_at DESC,e.id DESC""").fetchall()
-        now=datetime.now(timezone.utc)
-        result=[]
-        for row in rows:
-            d=dict(row)
-            d["event_state"]=_event_state(d,now)
-            d["finalized"]=bool(d.get("finalized_at"))
-            result.append(d)
-        return result
-
-
 EVENT_METRICS={
     "energy_kwh",
     "sessions",
@@ -6017,53 +5868,6 @@ def _validate_event_fields(metric, starts_at, ends_at, min_sessions=0, min_sessi
     if reward_enabled and reward <= 0:
         raise ValueError("Für die automatische Bonusauszahlung muss eine Bonusmenge größer 0 festgelegt werden")
     return minimum_sessions,minimum_kwh,reward,valid_days,reward_enabled,badge_enabled,badge_name,badge_icon,badge_description
-
-
-def create_gamification_event(name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    if not str(name or "").strip(): raise ValueError("Eventname fehlt")
-    if winner_badge_enabled and not winner_badge_name:
-        winner_badge_name=f"Sieger: {str(name).strip()}"
-    if winner_badge_enabled and not winner_badge_description:
-        winner_badge_description=f"Gewinner des Events „{str(name).strip()}“."
-    with _lock,_connect() as conn:
-        cur=conn.execute("""INSERT INTO gamification_events(name,description,metric,starts_at,ends_at,active,created_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(str(name).strip(),description or None,metric,starts_at,ends_at,1 if active else 0,utc_now(),min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,1 if reward_bonus_enabled else 0,1 if winner_badge_enabled else 0,winner_badge_name,winner_badge_icon,winner_badge_description))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def update_gamification_event(event_id, name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    if not str(name or "").strip(): raise ValueError("Eventname fehlt")
-    if winner_badge_enabled and not winner_badge_name:
-        winner_badge_name=f"Sieger: {str(name).strip()}"
-    if winner_badge_enabled and not winner_badge_description:
-        winner_badge_description=f"Gewinner des Events „{str(name).strip()}“."
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT finalized_at,winner_achievement_id FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return False
-        if event["finalized_at"]:
-            raise ValueError("Ein bereits abgeschlossenes Event ist archiviert und kann nicht mehr verändert werden")
-        paid=conn.execute("SELECT 1 FROM gamification_event_rewards WHERE event_id=? LIMIT 1",(event_id,)).fetchone()
-        badge_awarded=conn.execute("SELECT 1 FROM achievement_awards WHERE source=? LIMIT 1",(f"event:{event_id}",)).fetchone()
-        if paid or badge_awarded:
-            raise ValueError("Ein bereits automatisch prämiertes oder ausgezeichnetes Event kann nicht mehr verändert werden")
-        cur=conn.execute("""UPDATE gamification_events SET name=?,description=?,metric=?,starts_at=?,ends_at=?,active=?,min_sessions=?,min_session_kwh=?,reward_bonus_kwh=?,reward_valid_days=?,reward_bonus_enabled=?,winner_badge_enabled=?,winner_badge_name=?,winner_badge_icon=?,winner_badge_description=? WHERE id=?""",
-            (str(name).strip(),description or None,metric,starts_at,ends_at,1 if active else 0,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,1 if reward_bonus_enabled else 0,1 if winner_badge_enabled else 0,winner_badge_name,winner_badge_icon,winner_badge_description,event_id))
-        conn.commit(); return cur.rowcount>0
-
-
-def set_gamification_event_active(event_id, active):
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT finalized_at FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return False
-        if event["finalized_at"] and bool(active):
-            raise ValueError("Ein archiviertes Event kann nicht wieder aktiviert werden")
-        cur=conn.execute("UPDATE gamification_events SET active=? WHERE id=?",(1 if active else 0,event_id)); conn.commit(); return cur.rowcount>0
 
 
 def _event_user_join_sql():
@@ -6144,21 +5948,6 @@ def _event_leaderboard_conn(conn, event):
         value=float(r["energy_kwh"] or 0) if metric=="energy_kwh" else float(r["sessions"] or 0)
         items.append({"user_id":int(r["id"]),"name":r["name"],"sessions":int(r["sessions"] or 0),"energy_kwh":round(float(r["energy_kwh"] or 0),3),"value":value,"qualified":value>0})
     return _rank_event_items(items,False)
-
-
-def preview_gamification_event(name, description, metric, starts_at, ends_at, active=True, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
-                               reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
-    values=_validate_event_fields(metric,starts_at,ends_at,min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description)
-    min_sessions,min_session_kwh,reward_bonus_kwh,reward_valid_days,reward_bonus_enabled,winner_badge_enabled,winner_badge_name,winner_badge_icon,winner_badge_description=values
-    event={"id":None,"name":str(name or "Vorschau").strip() or "Vorschau","description":description,"metric":metric,"starts_at":starts_at,"ends_at":ends_at,
-        "active":1 if active else 0,"min_sessions":min_sessions,"min_session_kwh":min_session_kwh,"reward_bonus_kwh":reward_bonus_kwh,
-        "reward_valid_days":reward_valid_days,"reward_bonus_enabled":1 if reward_bonus_enabled else 0,"winner_badge_enabled":1 if winner_badge_enabled else 0,
-        "winner_badge_name":winner_badge_name,"winner_badge_icon":winner_badge_icon,"winner_badge_description":winner_badge_description}
-    with _lock,_connect() as conn:
-        board=_event_leaderboard_conn(conn,event)
-    participants=sum(1 for x in board if int(x.get("sessions") or 0)>0 or float(x.get("energy_kwh") or 0)>0)
-    qualified=sum(1 for x in board if x.get("qualified") and x.get("value") is not None)
-    return {**event,"leaderboard":board,"participant_count":participants,"qualified_count":qualified,"preview":True}
 
 
 def _event_rewards_conn(conn,event_id):
@@ -6262,21 +6051,6 @@ def _event_detail_summary(event,board):
     return {"participant_count":participants,"qualified_count":qualified,"top3":top3}
 
 
-def gamification_event_detail(event_id):
-    finalize_ended_gamification_events()
-    with _lock,_connect() as conn:
-        event=conn.execute("SELECT * FROM gamification_events WHERE id=?",(event_id,)).fetchone()
-        if not event: return None
-        d=dict(event)
-        d["event_state"]=_event_state(d)
-        d["finalized"]=bool(d.get("finalized_at"))
-        board=_event_snapshot_board_conn(conn,event) if d["finalized"] else _event_leaderboard_conn(conn,event)
-        d["leaderboard"]=board
-        d.update(_event_detail_summary(event,board))
-        d["rewards"]=_event_rewards_conn(conn,event_id)
-        d["badge_awards"]=_event_badge_awards_conn(conn,event)
-        return d
-
 BRANDING_DEFAULTS = {
     "product_name":"VoltCore Community",
     "organization_name":"Ihre Organisation",
@@ -6354,17 +6128,6 @@ def _bonus_policy_settings_conn(conn):
 def bonus_policy_settings():
     with _lock,_connect() as conn:
         return _bonus_policy_settings_conn(conn)
-
-
-def set_bonus_policy_settings(default_valid_days, transfer_after_days, transfer_enabled=True):
-    validity=max(1,min(730,int(default_valid_days)))
-    transfer_after=max(0,min(729,int(transfer_after_days)))
-    if transfer_after>=validity:
-        raise ValueError("Weitergabe muss vor Ablauf der Bonusgültigkeit möglich werden")
-    set_setting("bonus_default_valid_days",validity)
-    set_setting("bonus_transfer_after_days",transfer_after)
-    set_setting("bonus_transfer_enabled","1" if transfer_enabled else "0")
-    return bonus_policy_settings()
 
 
 def active_event_leaderboards_for_portal(user_id):
@@ -6660,24 +6423,6 @@ def bonus_wallet(user_id,now=None):
         return _bonus_wallet_conn(conn,user_id,now)
 
 
-def grant_bonus_kwh(user_id,amount_kwh,expires_at,source="admin",note=None,voucher_id=None):
-    amount=float(amount_kwh or 0)
-    if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-    expiry=_parse_iso_utc(expires_at)
-    if not expiry or expiry<=datetime.now(timezone.utc): raise ValueError("Ablaufdatum muss in der Zukunft liegen")
-    with _lock,_connect() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE id=?",(user_id,)).fetchone(): raise ValueError("Benutzer nicht gefunden")
-        cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,?,?,?,1)",(user_id,amount,amount,utc_now(),expiry.isoformat(),source,note or None,voucher_id))
-        conn.commit(); return int(cur.lastrowid)
-
-
-def revoke_bonus_grant(grant_id):
-    with _lock,_connect() as conn:
-        used=conn.execute("SELECT COALESCE(SUM(amount_kwh),0) FROM bonus_usage WHERE grant_id=?",(grant_id,)).fetchone()[0]
-        if float(used or 0)>1e-9: raise ValueError("Bereits verwendetes Bonusguthaben kann nicht widerrufen werden")
-        cur=conn.execute("UPDATE bonus_grants SET active=0,remaining_kwh=0 WHERE id=? AND active=1",(grant_id,)); conn.commit(); return cur.rowcount>0
-
-
 def _allocate_bonus_for_transaction_conn(conn,tx_id,user_id,session_energy,used_at=None):
     # Idempotent: a completed transaction is allocated at most once.
     if conn.execute("SELECT 1 FROM bonus_usage WHERE transaction_id=? LIMIT 1",(tx_id,)).fetchone(): return 0.0
@@ -6710,90 +6455,6 @@ def _allocate_bonus_for_transaction_conn(conn,tx_id,user_id,session_energy,used_
     return round(allocated,6)
 
 
-def list_bonus_grants(limit=250):
-    with _lock,_connect() as conn:
-        now=utc_now()
-        return [dict(r) for r in conn.execute("""SELECT g.*,u.name AS user_name,
-            CASE WHEN g.active=0 THEN 'inactive' WHEN g.expires_at<=? THEN 'expired' WHEN g.remaining_kwh<=0.0000001 THEN 'used' ELSE 'available' END AS state
-            FROM bonus_grants g JOIN users u ON u.id=g.user_id ORDER BY g.id DESC LIMIT ?""",(now,limit)).fetchall()]
-
-
-def create_bonus_voucher(code,amount_kwh,redeem_until=None,bonus_valid_days=None,max_redemptions=1,note=None,active=True):
-    code=str(code or "").strip().upper()
-    if len(code)<6: raise ValueError("Gutscheincode muss mindestens 6 Zeichen haben")
-    amount=float(amount_kwh or 0)
-    if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-    days=max(1,int(bonus_valid_days or bonus_policy_settings()["default_valid_days"])); max_redemptions=max(1,int(max_redemptions or 1))
-    if redeem_until and not _parse_iso_utc(redeem_until): raise ValueError("Ungültiges Einlöse-Ende")
-    with _lock,_connect() as conn:
-        try:
-            cur=conn.execute("INSERT INTO bonus_vouchers(code,amount_kwh,redeem_until,bonus_valid_days,max_redemptions,active,note,created_at) VALUES(?,?,?,?,?,?,?,?)",(code,amount,redeem_until,days,max_redemptions,1 if active else 0,note or None,utc_now()))
-        except sqlite3.IntegrityError: raise ValueError("Dieser Gutscheincode existiert bereits")
-        conn.commit(); return int(cur.lastrowid)
-
-
-def list_bonus_vouchers():
-    with _lock,_connect() as conn:
-        return [dict(r) for r in conn.execute("""SELECT v.*,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v ORDER BY v.id DESC""").fetchall()]
-
-
-def set_bonus_voucher_active(voucher_id,active):
-    with _lock,_connect() as conn:
-        cur=conn.execute("UPDATE bonus_vouchers SET active=? WHERE id=?",(1 if active else 0,voucher_id)); conn.commit(); return cur.rowcount>0
-
-def update_bonus_voucher(voucher_id, code=None, amount_kwh=None, redeem_until=None, bonus_valid_days=None, max_redemptions=None, note=None, active=True):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT v.*,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v WHERE v.id=?""",(int(voucher_id),)).fetchone()
-        if not row: return False
-        if int(row["redemptions"] or 0)>0:
-            raise ValueError("Dieser Gutschein wurde bereits eingelöst und kann nicht mehr inhaltlich bearbeitet werden. Er kann nur deaktiviert werden.")
-        clean_code=str(code or row["code"] or "").strip().upper()
-        if len(clean_code)<6: raise ValueError("Gutscheincode muss mindestens 6 Zeichen haben")
-        amount=float(row["amount_kwh"] if amount_kwh is None else amount_kwh)
-        if amount<=0: raise ValueError("Bonus-kWh müssen größer als 0 sein")
-        days=max(1,int(row["bonus_valid_days"] if bonus_valid_days is None else bonus_valid_days))
-        maximum=max(1,int(row["max_redemptions"] if max_redemptions is None else max_redemptions))
-        if redeem_until and not _parse_iso_utc(redeem_until): raise ValueError("Ungültiges Einlöse-Ende")
-        try:
-            conn.execute("""UPDATE bonus_vouchers SET code=?,amount_kwh=?,redeem_until=?,bonus_valid_days=?,max_redemptions=?,active=?,note=?
-                WHERE id=?""",(clean_code,amount,redeem_until,days,maximum,1 if active else 0,note or None,int(voucher_id)))
-            conn.commit(); return True
-        except sqlite3.IntegrityError as exc:
-            raise ValueError("Dieser Gutscheincode existiert bereits") from exc
-
-
-def delete_bonus_voucher(voucher_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("""SELECT v.id,(SELECT COUNT(*) FROM bonus_voucher_redemptions r WHERE r.voucher_id=v.id) AS redemptions
-            FROM bonus_vouchers v WHERE v.id=?""",(int(voucher_id),)).fetchone()
-        if not row: return False
-        if int(row["redemptions"] or 0)>0:
-            raise ValueError("Dieser Gutschein wurde bereits eingelöst und kann aus Nachvollziehbarkeitsgründen nicht gelöscht werden. Bitte deaktivieren.")
-        conn.execute("DELETE FROM bonus_vouchers WHERE id=?",(int(voucher_id),))
-        conn.commit(); return True
-
-
-
-def redeem_bonus_voucher(user_id,code):
-    code=str(code or "").strip().upper(); now=datetime.now(timezone.utc); now_iso=now.isoformat()
-    with _lock,_connect() as conn:
-        user=conn.execute("SELECT id FROM users WHERE id=? AND status='Aktiv'",(user_id,)).fetchone()
-        if not user: raise ValueError("Benutzer nicht gefunden")
-        v=conn.execute("SELECT * FROM bonus_vouchers WHERE code=? COLLATE NOCASE",(code,)).fetchone()
-        if not v or not bool(v["active"]): raise ValueError("Gutschein ist ungültig oder nicht aktiv")
-        if v["redeem_until"] and (_parse_iso_utc(v["redeem_until"]) or now)<=now: raise ValueError("Gutschein ist abgelaufen")
-        if conn.execute("SELECT 1 FROM bonus_voucher_redemptions WHERE voucher_id=? AND user_id=?",(v["id"],user_id)).fetchone(): raise ValueError("Dieser Gutschein wurde bereits eingelöst")
-        count=conn.execute("SELECT COUNT(*) FROM bonus_voucher_redemptions WHERE voucher_id=?",(v["id"],)).fetchone()[0]
-        if int(count)>=int(v["max_redemptions"]): raise ValueError("Gutschein ist vollständig eingelöst")
-        expires=(now+timedelta(days=max(1,int(v["bonus_valid_days"] or _bonus_policy_settings_conn(conn)["default_valid_days"])))).isoformat()
-        cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,'voucher',?,?,1)",(user_id,float(v["amount_kwh"]),float(v["amount_kwh"]),now_iso,expires,v["note"],v["id"]))
-        grant_id=int(cur.lastrowid)
-        conn.execute("INSERT INTO bonus_voucher_redemptions(voucher_id,user_id,grant_id,redeemed_at) VALUES(?,?,?,?)",(v["id"],user_id,grant_id,now_iso))
-        conn.commit(); return {"grant_id":grant_id,"amount_kwh":float(v["amount_kwh"]),"expires_at":expires}
-
-
 def bonus_transfer_recipients(user_id):
     with _lock,_connect() as conn:
         return [dict(r) for r in conn.execute("SELECT id,name FROM users WHERE status='Aktiv' AND id<>? ORDER BY name COLLATE NOCASE",(user_id,)).fetchall()]
@@ -6805,43 +6466,6 @@ def bonus_transfer_history(user_id,limit=20):
             FROM bonus_transfers bt JOIN users fu ON fu.id=bt.from_user_id JOIN users tu ON tu.id=bt.to_user_id
             WHERE bt.from_user_id=? OR bt.to_user_id=? ORDER BY bt.id DESC LIMIT ?""",(user_id,user_id,max(1,min(int(limit or 20),100)))).fetchall()
         return [dict(r) for r in rows]
-
-
-def transfer_bonus_kwh(from_user_id,to_user_id,amount_kwh,now=None):
-    policy=bonus_policy_settings()
-    if not policy["transfer_enabled"]: raise ValueError("Die Weitergabe von Bonus-kWh ist derzeit deaktiviert")
-    if int(from_user_id)==int(to_user_id): raise ValueError("Bonus-kWh können nicht an sich selbst übertragen werden")
-    amount=round(float(amount_kwh or 0),6)
-    if amount<=0: raise ValueError("Bitte eine Bonusmenge größer als 0 kWh angeben")
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    now_iso=now_dt.isoformat(); cutoff=(now_dt-timedelta(days=policy["transfer_after_days"])).isoformat()
-    with _lock,_connect() as conn:
-        sender=conn.execute("SELECT id,name FROM users WHERE id=? AND status='Aktiv'",(from_user_id,)).fetchone()
-        recipient=conn.execute("SELECT id,name FROM users WHERE id=? AND status='Aktiv'",(to_user_id,)).fetchone()
-        if not sender: raise ValueError("Absender nicht gefunden oder nicht aktiv")
-        if not recipient: raise ValueError("Empfänger nicht gefunden oder nicht aktiv")
-        rows=conn.execute("""SELECT * FROM bonus_grants WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001
-            AND expires_at>? AND granted_at<=? ORDER BY expires_at,granted_at,id""",(from_user_id,now_iso,cutoff)).fetchall()
-        eligible=round(sum(float(r["remaining_kwh"] or 0) for r in rows),6)
-        if eligible+1e-9<amount: raise ValueError(f"Aktuell sind maximal {eligible:.1f} Bonus-kWh übertragbar")
-        remaining=amount; parts=[]
-        try:
-            for source in rows:
-                if remaining<=1e-9: break
-                take=min(remaining,float(source["remaining_kwh"] or 0))
-                if take<=1e-9: continue
-                note=f"Übertragen von {sender['name']}"
-                cur=conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,voucher_id,active) VALUES(?,?,?,?,?,'transfer',?,NULL,1)",(to_user_id,take,take,now_iso,source["expires_at"],note))
-                target_id=int(cur.lastrowid)
-                conn.execute("UPDATE bonus_grants SET remaining_kwh=MAX(0,remaining_kwh-?) WHERE id=?",(take,source["id"]))
-                conn.execute("INSERT INTO bonus_transfers(from_user_id,to_user_id,source_grant_id,target_grant_id,amount_kwh,transferred_at,expires_at) VALUES(?,?,?,?,?,?,?)",(from_user_id,to_user_id,source["id"],target_id,take,now_iso,source["expires_at"]))
-                parts.append({"source_grant_id":source["id"],"target_grant_id":target_id,"amount_kwh":round(take,6),"expires_at":source["expires_at"]})
-                remaining-=take
-            conn.commit()
-        except Exception:
-            conn.rollback(); raise
-        return {"amount_kwh":round(amount,3),"to_user_id":int(to_user_id),"to_name":recipient["name"],"parts":parts}
 
 
 def _portal_driver_profile(user_id, tx_rows, analytics, gamification, achievements):
