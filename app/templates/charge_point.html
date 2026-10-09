@@ -1,5 +1,9 @@
 {% extends "base.html" %}{% block title %}Ladepunkt {{ cp_id }} - {{ branding.product_name }}{% endblock %}{% block heading %}<span id="title">Ladepunkt</span>{% endblock %}{% block subtitle %}Übersicht, Live-Daten, Ladevorgänge und OCPP-Diagnose an einem Ort{% endblock %}
 {% block content %}
+<style>
+/* P02: management writes are admin-only, matching the server-side checks. */
+body[data-role="user"] .write-action { display: none !important; }
+</style>
 <a class="back" href="/charge-points">← Zurück zu Ladepunkten</a>
 <div id="onboardingNotice" class="onboarding-notice" hidden><div><strong>Neu erkannter Ladepunkt</strong><span>Dieser OCPP-Ladepunkt ist technisch erreichbar, aber noch nicht eingerichtet.</span></div><a class="primary button" href="/charge-points#discovery">Jetzt einrichten</a></div>
 <section class="detail-kpis"><div class="stat"><span>Status</span><b id="status">—</b><small>OCPP</small></div><div class="stat"><span>Ladeleistung</span><b><span id="power">—</span> kW</b><small>live</small></div><div class="stat"><span id="energyLabel">Session-Energie</span><b><span id="energy">—</span> kWh</b><small id="energyHint">aktuelle Session</small></div><div class="stat"><span>Ladedauer</span><b id="duration">—</b><small>aktuelle Session</small></div><div class="stat"><span>SoC</span><b id="soc">—</b><small>Fahrzeug</small></div><div class="stat"><span>Heartbeat</span><b id="heartbeat">—</b><small>Kommunikation</small></div></section>
@@ -131,6 +135,6 @@ $('remoteOperative').onclick=()=>remotePost('/api/remote-control/'+encodeURIComp
 $('remoteInoperative').onclick=()=>remotePost('/api/remote-control/'+encodeURIComponent(cpId)+'/availability',{connector_id:Number($('remoteConnector').value),availability_type:'Inoperative'},'Ausgewählten Bereich wirklich außer Betrieb setzen?');
 $('remoteReset').onclick=()=>{const type=$('remoteResetType').value;remotePost('/api/remote-control/'+encodeURIComponent(cpId)+'/reset',{reset_type:type},type==='Hard'?'Hard Reset kann Verbindung und laufende Sessions unterbrechen. Wirklich senden?':'Soft Reset senden?')};
 loadRemoteState();setInterval(loadRemoteState,5000);
-$('diagnosticFilter').addEventListener$('diagnosticFilter').addEventListener('click',e=>{const b=e.target.closest('[data-diag-filter]');if(!b)return;diagnosticFilter=b.dataset.diagFilter;document.querySelectorAll('#diagnosticFilter [data-diag-filter]').forEach(x=>x.classList.toggle('active',x===b));load()});
+$('diagnosticFilter').addEventListener('click',e=>{const b=e.target.closest('[data-diag-filter]');if(!b)return;diagnosticFilter=b.dataset.diagFilter;document.querySelectorAll('#diagnosticFilter [data-diag-filter]').forEach(x=>x.classList.toggle('active',x===b));load()});
 $('refreshBtn').onclick=load;load();setInterval(load,2000);
 </script>{% endblock %}

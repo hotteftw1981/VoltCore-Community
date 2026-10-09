@@ -158,22 +158,46 @@ async def sync_local_list(cp_id, force_full=False, reason="Automatisch"):
         if low=="accepted":
             offline_cfg=await _ensure_offline_authorization(cp,cp_id)
             cfg_text="OfflineAuth="+str(offline_cfg.get("status") or "Unbekannt")+(" (read-only)" if offline_cfg.get("readonly") else "")
-            effective_station_version=station_version if station_version==-1 else backend_version
+            # Accepted confirms request acceptance, not the station's installed
+            # version or number of stored entries. Always read back the version.
+            verified_version=None
+            try:
+                verified_version=await _local_list_version_from_station(cp)
+            except (asyncio.TimeoutError, Exception) as exc:
+                db.add_event(cp_id,"GetLocalListVersion",f"readback_after_send={type(exc).__name__}",direction="OUT")
+            confirmed=verified_version==backend_version
             response_text=status+("; "+cfg_text if cfg_text else "")
-            if station_version==-1:
-                response_text+="; GetLocalListVersion=-1 widerspricht erfolgreichem SendLocalList"
-            db.set_local_list_state(cp_id,station_version=effective_station_version,station_entry_count=len(entries),pending=False,supported=True,status="Synchronisiert",update_type=update_type,response=response_text,synced=True)
-            return {"ok":True,"status":"Synchronisiert","version":backend_version,"station_version":effective_station_version,"update_type":update_type,"entries":len(entries),"offline_configuration":offline_cfg}
+            if not confirmed:
+                response_text+="; Versionsabfrage nach SendLocalList nicht bestätigt"
+            db.set_local_list_state(cp_id,station_version=verified_version if verified_version is not None else station_version,
+                pending=not confirmed,supported=True,status="Synchronisiert" if confirmed else "Prüfung erforderlich",
+                update_type=update_type,response=response_text,synced=confirmed)
+            return {"ok":confirmed,"accepted":True,"status":"Synchronisiert" if confirmed else "Prüfung erforderlich",
+                "version":backend_version,"station_version":verified_version,"update_type":update_type,
+                "entries_sent":len(entries),"offline_configuration":offline_cfg}
         if low=="notsupported":
             db.set_local_list_state(cp_id,station_version=station_version,pending=False,supported=False,status="Nicht unterstützt",update_type=update_type,response=status)
             return {"ok":False,"supported":False,"status":"Nicht unterstützt","update_type":update_type}
         db.set_local_list_state(cp_id,station_version=station_version,pending=True,supported=True,status=status or "Fehlgeschlagen",update_type=update_type,response=status)
         return {"ok":False,"status":status,"update_type":update_type}
 
+def _automatic_local_list_retry_allowed(state, *, now=None, cooldown_seconds=120):
+    """Avoid tight retry loops on failing stations; manual full sync bypasses this."""
+    if str(state.get("status") or "") not in ("Timeout", "Fehler", "Failed", "Fehlgeschlagen", "Prüfung erforderlich"):
+        return True
+    observed = db._parse_iso_utc(state.get("last_attempt_at"))
+    if observed is None:
+        return True
+    current = now or datetime.now(timezone.utc)
+    return (current - observed).total_seconds() >= cooldown_seconds
+
+
 async def sync_pending_local_lists(reason="RFID geändert", force_full=False):
     results=[]
     for cp_id in list(ACTIVE_CONNECTIONS.keys()):
         state=db.ensure_local_list_state(cp_id) or {}
+        if not force_full and not _automatic_local_list_retry_allowed(state):
+            continue
         if force_full or int(state.get("pending",1) or 0) or state.get("station_version")!=db.rfid_local_list_version():
             results.append(await sync_local_list(cp_id,force_full=force_full,reason=reason))
     return results
@@ -830,6 +854,22 @@ class ChargePoint(OcppChargePoint):
         occupancy_started=None
         occupancy_finished=None
         observed_at=kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat()
+        # A delayed Available from an earlier connection must not end a newer
+        # session. Without a trustworthy timestamp, retain legacy behavior.
+        if cid > 0 and status_text == "Available" and kwargs.get("timestamp"):
+            from . import db as _p03_db
+            with _p03_db._lock, _p03_db._connect() as _p03_conn:
+                _p03_active = _p03_conn.execute(
+                    "SELECT started_at FROM transactions WHERE charge_point_id=? AND connector_id=? AND status='Active' AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+                    (self.id, cid),
+                ).fetchone()
+            if _p03_active:
+                _p03_when = _p03_db._parse_iso_utc(observed_at)
+                _p03_start = _p03_db._parse_iso_utc(_p03_active["started_at"])
+                if _p03_when and _p03_start and _p03_when < _p03_start:
+                    db.mark_message(self.id, "StatusNotification")
+                    db.add_event(self.id, "StatusNotificationIgnored", f"connector={cid}; status=Available; timestamp={observed_at}; reason=OlderThanActiveSession")
+                    return call_result.StatusNotification()
         if cid > 0:
             # Discover first without overwriting the previous connector state.
             # That lets timing reconciliation still see Charging/SuspendedEV
@@ -925,7 +965,16 @@ class ChargePoint(OcppChargePoint):
             start_meter_kwh = float(meter_start) / 1000.0
         except (TypeError, ValueError):
             start_meter_kwh = None
-        tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
+        try:
+            tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
+        except ValueError as exc:
+            if str(exc) not in ("RFID_CONCURRENT_SESSION_LIMIT", "USER_CONCURRENT_SESSION_LIMIT", "CONNECTOR_ACTIVE_SESSION"):
+                raise
+            # OCPP 1.6: reject the new transaction without changing the connector's
+            # existing session or issuing any status/update side effects.
+            db.mark_message(self.id, "StartTransaction")
+            db.add_event(self.id, "StartTransaction", f"connector={connector_id}; id_tag={id_tag}; rejected=true; reason={exc}")
+            return call_result.StartTransaction(transaction_id=0, id_tag_info={"status": "Blocked"})
         db.upsert_charge_point(self.id, transaction_id=tx)
         db.set_status_notification(self.id, int(connector_id or 0), "Charging")
         db.mark_message(self.id, "StartTransaction")

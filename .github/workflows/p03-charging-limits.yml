@@ -1,0 +1,44 @@
+name: P03 Concurrent Charging Regression
+on:
+  push:
+    branches:
+      - feature/p12-final-regression
+  pull_request:
+    branches: [feature/p10-p11-i18n-security, feature/p08-p09-backup-ui, feature/p07-report-integrity, feature/p06-session-data-quality, feature/p05-ocpp-diagnostics, feature/p03-simultaneous-charging-limits, fix/p02-scope-and-access-control, develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  charging-limits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install -r tests/requirements.txt
+      - name: Compile Python application and test modules
+        run: python -m compileall -q app tests
+      - name: Concurrent sessions and limit regressions
+        run: |
+          python -m unittest discover -s tests -p 'test_p02_community_scope.py' -v
+          python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
+          python -m unittest discover -s tests -p 'test_p03_integrity_batch.py' -v
+          python -m unittest discover -s tests -p 'test_p03_api_permissions.py' -v
+          python -m unittest discover -s tests -p 'test_p03_ocpp_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_p04_rfid_sync_diagnostics.py' -v
+          python -m unittest discover -s tests -p 'test_p04_ui_contract.py' -v
+          python -m unittest discover -s tests -p 'test_p04_sync_readback.py' -v
+          python -m unittest discover -s tests -p 'test_p04_retry_policy.py' -v
+          python -m unittest discover -s tests -p 'test_p06_session_data_quality.py' -v
+          python -m unittest discover -s tests -p 'test_p07_report_quality.py' -v
+          python -m unittest discover -s tests -p 'test_p08_p09_backup_integrity.py' -v
+          python -m unittest discover -s tests -p 'test_p10_p11_contracts.py' -v
+          python -m unittest discover -s tests -p 'test_p05_connector_integrity.py' -v
+          python -m unittest discover -s tests -p 'test_p03_legacy_upgrade.py' -v
+          python -m unittest discover -s tests -p 'test_p03_ui_smoke.py' -v

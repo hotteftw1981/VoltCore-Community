@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import sqlite3
@@ -271,7 +272,7 @@ def init_db():
                 vehicle TEXT,
                 monthly_kwh_limit REAL,
                 monthly_limit_mode TEXT NOT NULL DEFAULT 'warn',
-                gamification_enabled INTEGER NOT NULL DEFAULT 1,
+                gamification_enabled INTEGER NOT NULL DEFAULT 0,
                 gamification_seen_award_id INTEGER,
                 gamification_seen_level INTEGER,
                 weekly_hours REAL,
@@ -781,6 +782,11 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_recovery_codes_user ON system_recovery_codes(user_id,used_at)")
 
         user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "max_concurrent_sessions" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN max_concurrent_sessions INTEGER NOT NULL DEFAULT 1")
+        card_columns = {r[1] for r in conn.execute("PRAGMA table_info(rfid_cards)").fetchall()}
+        if "max_concurrent_sessions" not in card_columns:
+            conn.execute("ALTER TABLE rfid_cards ADD COLUMN max_concurrent_sessions INTEGER NOT NULL DEFAULT 1")
         for col in ("email", "phone"):
             if col not in user_columns:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
@@ -789,7 +795,7 @@ def init_db():
         if "monthly_limit_mode" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN monthly_limit_mode TEXT NOT NULL DEFAULT 'warn'")
         if "gamification_enabled" not in user_columns:
-            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 1")
+            conn.execute("ALTER TABLE users ADD COLUMN gamification_enabled INTEGER NOT NULL DEFAULT 0")
         if "weekly_hours" not in user_columns:
             conn.execute("ALTER TABLE users ADD COLUMN weekly_hours REAL")
         if "budget_source" not in user_columns:
@@ -1149,6 +1155,8 @@ def init_db():
         # V0.9.7.75: LiveView is not part of Community. Remove settings left
         # behind by the short-lived 0.9.7.74 release candidate.
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'liveview_%'")
+        # Legacy Community users must not retain active PIN/XP access.
+        conn.execute("UPDATE users SET portal_enabled=0, gamification_enabled=0 WHERE portal_enabled<>0 OR gamification_enabled<>0")
 
         # Community does not rewrite historical billing data during initialization.
         # Existing transaction costs and tariff snapshots are preserved verbatim.
@@ -1807,7 +1815,9 @@ def _reconcile_duplicate_active_transactions_conn(conn):
 
 def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=None, vehicle_id=None, meter_start_kwh=None):
     with _lock, _connect() as conn:
-        card=conn.execute("SELECT id,user_id,vehicle_id,status FROM rfid_cards WHERE uid=? LIMIT 1",(id_tag,)).fetchone()
+        # BEGIN IMMEDIATE serializes admission across workers and processes, not just Python threads.
+        conn.execute("BEGIN IMMEDIATE")
+        card=conn.execute("SELECT id,user_id,vehicle_id,status,max_concurrent_sessions FROM rfid_cards WHERE uid=? LIMIT 1",(id_tag,)).fetchone()
         user_id=card[1] if card else None; rfid_card_id=card[0] if card else None
         if card and card[3] != "Aktiv": user_id=None
         if not card and id_tag:
@@ -1821,9 +1831,32 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
         grace=STANDTIME_GRACE_SECONDS if not policy or policy[0] is None else max(0,int(policy[0]))
         auto_stop=0 if not policy or policy[1] is None else max(0,int(policy[1]))
         started_at=utc_now()
-        _reconcile_active_transactions_for_connector_conn(
-            conn, cp_id, connector_id, ended_at=started_at, reason="SupersededByNewTransaction"
-        )
+        # A repeated start with the same credential on an occupied connector
+        # cannot be safely identified as a new physical charging session.
+        # Preserve the active transaction even if this RFID permits >1 sessions.
+        existing_on_connector = conn.execute(
+            """SELECT id,id_tag FROM transactions
+               WHERE charge_point_id=? AND connector_id=?
+                 AND status='Active' AND ended_at IS NULL
+               ORDER BY id DESC LIMIT 1""",
+            (cp_id, int(connector_id)),
+        ).fetchone()
+        if existing_on_connector:
+            # Do not evict an existing physical session based only on a new
+            # StartTransaction request. This applies to different RFIDs too.
+            # A StopTransaction or authoritative connector recovery must close it.
+            raise ValueError("CONNECTOR_ACTIVE_SESSION")
+        if id_tag:
+            card_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND (rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=?))", (rfid_card_id, id_tag)).fetchone()[0] if card else conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND id_tag=?", (id_tag,)).fetchone()[0]
+            card_limit = max(1, int(card[4] or 1)) if card else 1
+            if card_count >= card_limit:
+                raise ValueError("RFID_CONCURRENT_SESSION_LIMIT")
+        if user_id is not None:
+            user_limit_row = conn.execute("SELECT max_concurrent_sessions FROM users WHERE id=?", (user_id,)).fetchone()
+            user_limit = max(1, int(user_limit_row[0] or 1)) if user_limit_row else 1
+            user_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND user_id=?", (user_id,)).fetchone()[0]
+            if user_count >= user_limit:
+                raise ValueError("USER_CONCURRENT_SESSION_LIMIT")
         cur=conn.execute("""INSERT INTO transactions(
             charge_point_id,connector_id,transaction_id,id_tag,vehicle_id,user_id,rfid_card_id,
             started_at,status,meter_start_kwh,last_meter_kwh,stand_grace_seconds,auto_stop_zero_minutes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1836,6 +1869,46 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
                      (tx,meter_start_kwh,meter_start_kwh,cp_id,int(connector_id)))
         if rfid_card_id: conn.execute("UPDATE rfid_cards SET last_used_at=? WHERE id=?",(utc_now(),rfid_card_id))
         conn.commit(); return tx
+
+
+def charging_session_limit_snapshot(kind, item_id):
+    """Return the configured limit and active usage for one card or driver."""
+    if kind not in ("user", "rfid"):
+        raise ValueError("INVALID_CHARGING_LIMIT_KIND")
+    table, key = ("users", "user_id") if kind == "user" else ("rfid_cards", "rfid_card_id")
+    with _lock, _connect() as conn:
+        row = conn.execute(f"SELECT max_concurrent_sessions FROM {table} WHERE id=?", (int(item_id),)).fetchone()
+        if row is None:
+            return None
+        active = conn.execute(
+            f"SELECT COUNT(*) FROM transactions WHERE {key}=? AND status='Active' AND ended_at IS NULL",
+            (int(item_id),),
+        ).fetchone()[0]
+        return {"limit": int(row[0]), "active": int(active), "available": max(0, int(row[0]) - int(active))}
+
+
+def set_charging_session_limit(kind, item_id, limit):
+    """Validate and persist a per-card or per-driver session cap.
+
+    This is a database primitive, not an authorization endpoint. API callers
+    must perform their own administrator permission check.
+    """
+    if kind not in ("user", "rfid"):
+        raise ValueError("INVALID_CHARGING_LIMIT_KIND")
+    if isinstance(limit, bool) or not str(limit).isdecimal() or not (1 <= int(limit) <= 100):
+        raise ValueError("INVALID_CHARGING_LIMIT_VALUE")
+    table = "users" if kind == "user" else "rfid_cards"
+    with _lock, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            f"UPDATE {table} SET max_concurrent_sessions=? WHERE id=?",
+            (int(limit), int(item_id)),
+        )
+        if cur.rowcount != 1:
+            return False
+        conn.commit()
+        return True
+
 
 def update_transaction_from_meter(tx, meter_kwh=None, power_kw=None, measured_at=None):
     with _lock, _connect() as conn:
@@ -2168,14 +2241,8 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
         station=conn.execute("SELECT station_status FROM charge_points WHERE id=?",(row[0],)).fetchone()
         overall=_overall_status_from_rows(station[0] if station else None, connector_rows)
         conn.execute("UPDATE charge_points SET status=? WHERE id=?",(overall,row[0]))
-        if achievement_user_id and session_energy is not None:
-            _allocate_bonus_for_transaction_conn(conn, int(tx), int(achievement_user_id), float(session_energy or 0), end_ts)
         conn.commit()
-    if achievement_user_id:
-        try:
-            evaluate_user_achievements(int(achievement_user_id))
-        except Exception:
-            pass
+    # No Community XP or achievement evaluation.
     return session_energy
 
 def active_transactions_for_charge_point(cp_id, limit=20):
@@ -2488,6 +2555,42 @@ def authorization_decision(rfid,charge_point_id=None):
     if budget and budget.get("status") in {"warning","critical","exceeded"}:
         reason=f"Autorisierung gültig; Monatslimit {budget.get('percent')} %"
     return {"accepted":True,"ocpp_status":"Accepted","reason":reason,"user":user,"budget":budget}
+
+def session_data_quality(limit=100, charge_point_id=None):
+    """Read-only anomaly report; never infer or rewrite missing meter values."""
+    limit=max(1,min(500,int(limit)))
+    with _lock,_connect() as conn:
+        condition="WHERE charge_point_id=?" if charge_point_id else ""
+        args=[str(charge_point_id)] if charge_point_id else []
+        rows=conn.execute(
+            "SELECT id,charge_point_id,connector_id,status,started_at,ended_at,energy_kwh,meter_start_kwh,last_meter_kwh FROM transactions "
+            +condition+" ORDER BY id DESC LIMIT ?",(*args,limit)).fetchall()
+    items=[]
+    for row in rows:
+        flags=[]
+        start=_parse_iso_utc(row["started_at"])
+        end=_parse_iso_utc(row["ended_at"])
+        if not start:
+            flags.append("invalid_start_timestamp")
+        if row["ended_at"] and not end:
+            flags.append("invalid_end_timestamp")
+        if start and end and end<start:
+            flags.append("end_before_start")
+        if row["status"]=="Active" and row["ended_at"]:
+            flags.append("active_with_end_timestamp")
+        if row["status"]!="Active" and not row["ended_at"]:
+            flags.append("closed_without_end_timestamp")
+        energy=row["energy_kwh"]
+        if energy is not None and (not math.isfinite(float(energy)) or float(energy)<0):
+            flags.append("invalid_energy")
+        first,last=row["meter_start_kwh"],row["last_meter_kwh"]
+        if first is not None and last is not None and float(last)<float(first)-0.000001:
+            flags.append("meter_rollback")
+        if flags:
+            items.append({"transaction_id":int(row["id"]),"charge_point_id":row["charge_point_id"],
+                          "connector_id":int(row["connector_id"]),"flags":flags})
+    return {"checked":len(rows),"flagged":len(items),"items":items,"read_only":True}
+
 
 def get_transaction(tx_id):
     with _lock, _connect() as conn:
@@ -2822,6 +2925,39 @@ def local_list_states():
         conn.commit()
         return result
 
+def local_list_diagnostics():
+    """Read-only, conservative assessment: an accepted send is not proof of an installed list."""
+    result = []
+    for row in local_list_states():
+        item = dict(row)
+        backend = int(item.get("backend_version") or 1)
+        raw_station = item.get("station_version")
+        try:
+            station = int(raw_station) if raw_station is not None else None
+        except (TypeError, ValueError):
+            station = None
+        supported = item.get("supported")
+        pending = bool(item.get("pending"))
+        response = str(item.get("last_response") or "").strip().lower()
+        if supported == 0:
+            code = "unsupported"
+        elif station is None or station < 0:
+            code = "unknown"
+        elif station > backend:
+            code = "station_ahead"
+        elif pending or station < backend:
+            code = "out_of_sync"
+        elif str(item.get("status") or "") == "Synchronisiert":
+            code = "version_match"
+        else:
+            code = "needs_verification"
+        item["sync_diagnostic"] = code
+        item["sync_verified"] = code == "version_match" and supported == 1
+        item["station_version_known"] = station is not None and station >= 0
+        result.append(item)
+    return result
+
+
 def local_list_uids_for_user(user_id):
     with _lock,_connect() as conn:
         return [str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(int(user_id),)).fetchall()]
@@ -2908,7 +3044,7 @@ def user_may_charge_at(user_id,charge_point_id):
         return bool(conn.execute("SELECT 1 FROM user_charge_point_access WHERE user_id=? AND charge_point_id=?",(int(user_id),str(charge_point_id))).fetchone())
 
 
-def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=True,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
+def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=False,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
     """Create a neutral Community charging user.
 
     weekly_hours and budget_source remain accepted for backwards compatibility,
@@ -2917,7 +3053,7 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
     limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
-        gamification = 1 if gamification_enabled else 0
+        gamification = 0  # No gamification in Community.
         access_mode=_normalize_charge_access_mode(charge_access_mode)
         cur=conn.execute(
             "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -2933,7 +3069,7 @@ def update_user(user_id,**fields):
     access_ids=fields.pop("allowed_charge_point_ids",None)
     fields.pop("weekly_hours",None)
     fields.pop("budget_source",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled"}
+    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2943,8 +3079,6 @@ def update_user(user_id,**fields):
             value = None if value in (None, "") else max(0.0, float(value))
         elif k == "monthly_limit_mode":
             value = "block" if str(value).lower() == "block" else "warn"
-        elif k == "gamification_enabled":
-            value = 1 if value else 0
         updates.append((k,value))
     if not updates and access_mode is None and access_ids is None:return False
     with _lock,_connect() as conn:
@@ -3442,19 +3576,11 @@ def user_monthly_budget(user_id, now=None):
         limit_value=user["monthly_kwh_limit"]
         mode=user["monthly_limit_mode"] or "warn"
         state=_budget_status(limit_value,used,mode)
-        bonus=_bonus_wallet_conn(conn,user_id,now=now)
-        # A hard monthly limit blocks only when both the regular monthly budget
-        # and all valid bonus kWh are exhausted. Bonus never lowers the regular
-        # progress bar: the monthly budget is consumed first, then FEFO bonus.
-        if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-            state["blocked"]=False
-            state["status"]="bonus"
-            state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
         base_used=used if limit_value is None else min(max(0.0,used),max(0.0,float(limit_value)))
         return {
             "month":month_key,"limit_kwh":None if limit_value is None else float(limit_value),
             "used_kwh":round(used,3),"base_used_kwh":round(base_used,3),"mode":mode,
-            "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"],**state
+            "bonus_available_kwh":0.0,"bonus_expiring_next":None,**state
         }
 
 def user_budget_summary(now=None):
@@ -3465,8 +3591,7 @@ def user_budget_summary(now=None):
         for user in users:
             used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
             state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
-            bonus=_bonus_wallet_conn(conn,user["id"],now=now)
-            effective_blocked=bool(state["blocked"] and bonus["available_kwh"] <= 1e-9)
+            effective_blocked=bool(state["blocked"])
             if state["status"] == "unlimited": summary["unlimited"] += 1
             elif effective_blocked: summary["blocked"] += 1
             elif (state["percent"] or 0) >= 70: summary["warning"] += 1
@@ -3759,8 +3884,10 @@ def list_users_rich():
         result=[]
         for row in rows:
             item=dict(row)
-            item.pop("portal_pin_hash", None)
-            item["portal_pin_set"] = bool(item.get("portal_pin_set_at"))
+            for legacy in ("portal_pin_hash","portal_pin_set_at","portal_enabled",
+                           "portal_last_login_at","gamification_enabled",
+                           "gamification_seen_award_id","gamification_seen_level"):
+                item.pop(legacy,None)
             item["charge_access_mode"]=_normalize_charge_access_mode(item.get("charge_access_mode"))
             item["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(item["id"],)).fetchall()]
             cost_row=conn.execute("""SELECT COALESCE(SUM(COALESCE(t.cost_cents,0)),0)
@@ -3769,16 +3896,13 @@ def list_users_rich():
             item["costs"]=round(float((cost_row or [0])[0] or 0)/100.0,2)
             used=_user_month_energy_conn(conn,item["id"],start_utc,end_utc)
             state=_budget_status(item.get("monthly_kwh_limit"),used,item.get("monthly_limit_mode") or "warn")
-            bonus=_bonus_wallet_conn(conn,item["id"])
-            if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                state["blocked"]=False; state["status"]="bonus"; state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
             item.update({
                 "budget_month":month_key,"month_energy_kwh":round(used,3),
                 "monthly_limit_kwh":None if item.get("monthly_kwh_limit") is None else float(item.get("monthly_kwh_limit")),
                 "monthly_limit_mode":item.get("monthly_limit_mode") or "warn",
                 "budget_status":state["status"],"status_label":state["status_label"],
                 "percent":state["percent"],"remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"],
-                "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"]
+                "bonus_available_kwh":0.0,"bonus_expiring_next":None
             })
             result.append(item)
         return result
@@ -3834,8 +3958,10 @@ def user_details(user_id, transaction_page=1, transaction_page_size=10):
             tx["timing"]=_transaction_time_breakdown_conn(conn,int(tx["id"])) or {"charging_seconds":float(tx.get("charging_seconds") or 0),"stand_seconds":float(tx.get("stand_seconds") or 0),"connection_seconds":float(tx.get("connection_seconds") or 0)}
         st=conn.execute("""SELECT COUNT(*) sessions,COALESCE(SUM(energy_kwh),0) energy,COALESCE(SUM(COALESCE(cost_cents,0)),0)/100.0 costs,MAX(started_at) last_used_at FROM transactions WHERE user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?)))""",(user_id,user_id,user_id)).fetchone()
         user=dict(u)
-        user.pop("portal_pin_hash", None)
-        user["portal_pin_set"] = bool(user.get("portal_pin_set_at"))
+        for legacy in ("portal_pin_hash","portal_pin_set_at","portal_enabled",
+                       "portal_last_login_at","gamification_enabled",
+                       "gamification_seen_award_id","gamification_seen_level"):
+            user.pop(legacy,None)
         user["charge_access_mode"]=_normalize_charge_access_mode(user.get("charge_access_mode"))
         user["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(int(user_id),)).fetchall()]
         used=_user_month_energy_conn(conn,user_id,start_utc,end_utc)
@@ -5229,6 +5355,66 @@ def _update_tx_cost_conn(conn, tx_id):
 def billing_groups_for_user(user_id):
     with _lock, _connect() as conn:
         return [dict(r) for r in conn.execute("SELECT g.* FROM billing_groups g JOIN user_billing_groups x ON x.group_id=g.id WHERE x.user_id=?",(user_id,)).fetchall()]
+
+def ocpp_connector_integrity(cp_id, now=None):
+    """Read-only connector and session consistency report; never change active charging."""
+    now = now or datetime.now(timezone.utc)
+    with _lock, _connect() as conn:
+        cp = conn.execute("SELECT id,last_message_at,last_seen,status FROM charge_points WHERE id=?", (str(cp_id),)).fetchone()
+        if cp is None:
+            return None
+        rows = conn.execute(
+            "SELECT connector_id,status,last_error_code,transaction_id FROM connectors WHERE charge_point_id=? ORDER BY connector_id",
+            (str(cp_id),),
+        ).fetchall()
+        sessions = conn.execute(
+            "SELECT id,connector_id,started_at,id_tag FROM transactions WHERE charge_point_id=? AND status='Active' AND ended_at IS NULL ORDER BY id",
+            (str(cp_id),),
+        ).fetchall()
+    grouped = {}
+    for tx in sessions:
+        grouped.setdefault(int(tx["connector_id"]), []).append(dict(tx))
+    findings = []
+    connectors = []
+    for row in rows:
+        cid = int(row["connector_id"])
+        active = grouped.pop(cid, [])
+        status = str(row["status"] or "Unknown")
+        error = str(row["last_error_code"] or "")
+        codes = []
+        if len(active) > 1:
+            codes.append("duplicate_active_sessions")
+        if row["transaction_id"] is not None and not any(int(x["id"]) == int(row["transaction_id"]) for x in active):
+            codes.append("stale_connector_transaction_reference")
+        if status == "Faulted" or (error and error not in ("NoError", "None")):
+            codes.append("connector_fault")
+        # Charging may be reported before StartTransaction; do not auto-stop or fabricate a transaction.
+        if status in ("Charging", "SuspendedEV", "SuspendedEVSE") and not active:
+            codes.append("charging_without_backend_session")
+        if status == "Available" and active:
+            codes.append("available_with_active_session")
+        for code in codes:
+            findings.append({"code":code,"connector_id":cid,"severity":"critical" if code in ("duplicate_active_sessions","connector_fault") else "warning"})
+        connectors.append({"connector_id":cid,"status":status,"active_transaction_ids":[int(x["id"]) for x in active],"findings":codes})
+    for cid, active in grouped.items():
+        findings.append({"code":"session_without_connector_record","connector_id":cid,"severity":"warning"})
+    stamp = _parse_iso_utc(cp["last_message_at"] or cp["last_seen"])
+    age = max(0, int((now-stamp).total_seconds())) if stamp else None
+    guidance = {
+        "duplicate_active_sessions": ("Mehrere aktive Sessions am selben Anschluss", "Sessions prüfen, nicht automatisch beenden", "Multiple active sessions on one connector"),
+        "stale_connector_transaction_reference": ("Connector verweist auf eine nicht aktive Session", "OCPP- und Connectorzustand vergleichen", "Connector points to a non-active session"),
+        "connector_fault": ("Ladepunkt meldet einen OCPP-Fehler", "Fehlercode und Ladepunkt vor Ort prüfen", "Connector reports an OCPP fault"),
+        "charging_without_backend_session": ("Ladepunkt meldet Laden ohne Backend-Session", "Letzte StartTransaction und Verbindung prüfen", "Charging reported without backend session"),
+        "available_with_active_session": ("Ladepunkt frei, Session im Backend noch aktiv", "StopTransaction und Meldungsreihenfolge prüfen", "Available connector still has an active session"),
+        "session_without_connector_record": ("Aktive Session ohne Connector-Datensatz", "Connectorerkennung und Session prüfen", "Active session without connector record"),
+    }
+    for item in findings:
+        de, action, en = guidance.get(item["code"], ("Unbekannter Zustand", "Log prüfen", "Unknown state"))
+        item["message_de"], item["message_en"], item["recommendation_de"] = de, en, action
+    return {"charge_point_id":str(cp_id),"last_message_age_seconds":age,"last_message_known":stamp is not None,
+            "connectors":connectors,"active_sessions":len(sessions),"findings":findings,
+            "level":"critical" if any(f["severity"]=="critical" for f in findings) else "warning" if findings else "ok"}
+
 
 def diagnostic_summary(cp_id):
     caps=meter_capabilities_for_charge_point(cp_id)
@@ -7259,8 +7445,9 @@ def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_
         limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
         normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
         vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
-        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_pin_hash,portal_pin_set_at,portal_enabled,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,?, ?,1,?,?)""",(req['name'],vehicle_text,limit_value,mode,1,req['email'],req['phone'],str(portal_pin_hash),now,None,source))
+        # Approvals create only charging users, never portal accounts or XP.
+        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_enabled,weekly_hours,budget_source)
+            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,0,?,?)""",(req['name'],vehicle_text,limit_value,mode,0,req['email'],req['phone'],None,source))
         user_id=int(cur.lastrowid)
         vehicle_id=None; vehicle_created=False
         if normalized_plate:
@@ -7647,6 +7834,28 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
              ORDER BY t.started_at DESC,t.id DESC
         """, params).fetchall()]
 
+        # P07: preserve historical totals, but explicitly mark questionable source data.
+        quality_issues=[]
+        for row in rows:
+            flags=[]
+            start=_parse_iso_utc(row.get("started_at"))
+            end=_parse_iso_utc(row.get("ended_at"))
+            if not start: flags.append("invalid_start_timestamp")
+            if not end: flags.append("invalid_end_timestamp")
+            if start and end and end<start: flags.append("end_before_start")
+            try:
+                amount=float(row.get("energy_kwh") or 0)
+                if not math.isfinite(amount) or amount<0: flags.append("invalid_energy")
+            except (TypeError,ValueError):
+                flags.append("invalid_energy")
+            try:
+                if row.get("cost_cents") is not None and int(row["cost_cents"])<0: flags.append("negative_cost")
+            except (TypeError,ValueError):
+                flags.append("invalid_cost")
+            row["quality_flags"]=flags
+            if flags:
+                quality_issues.append({"transaction_id":row["id"],"flags":flags})
+
         def aggregate(items):
             sessions=len(items)
             energy=round(sum(float(x.get("energy_kwh") or 0) for x in items),3)
@@ -7695,6 +7904,8 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
             bucket=monthly[key]; item={"key":key,"label":bucket["label"]}; item.update(aggregate(bucket["rows"])); by_month.append(item)
 
         summary=aggregate(rows)
+        summary["quality_flagged_sessions"]=len(quality_issues)
+        summary["quality_review_required"]=bool(quality_issues)
         summary["unassigned_user_sessions"]=sum(1 for x in rows if x.get("user_id") is None)
         summary["unassigned_vehicle_sessions"]=sum(1 for x in rows if x.get("vehicle_id") is None)
         summary["unassigned_cost_center_sessions"]=sum(1 for x in rows if not str(x.get("cost_center") or "").strip())
@@ -7714,6 +7925,7 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
             "by_cost_center":group_by(lambda x:x.get("cost_center") or "__none__", lambda x:x.get("cost_center") or "Ohne Kostenstelle"),
             "by_billing_group":group_by(lambda x:x.get("billing_group_id") if x.get("billing_group_id") is not None else "unassigned", lambda x:x.get("billing_group_name") or "Ohne Abrechnungsgruppe"),
             "by_month":by_month,
+            "quality":{"flagged_sessions":len(quality_issues),"issues":quality_issues,"review_required":bool(quality_issues),"totals_preserved":True},
             "transactions":rows,
             "options":options,
         }
