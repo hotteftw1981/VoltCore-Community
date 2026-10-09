@@ -22,6 +22,13 @@ class ChargingLimitUISmoke(unittest.TestCase):
         self.assertIn("p03Load('user'", TEMPLATE)
         self.assertIn("p03Load('rfid'", TEMPLATE)
 
+    def test_limit_loading_is_guarded_against_stale_answers(self):
+        self.assertIn("dataset.p03Ready", TEMPLATE)
+        self.assertIn("el.disabled=true", TEMPLATE)
+        self.assertIn("el.disabled=false", TEMPLATE)
+        self.assertIn("Ladelimit noch nicht geladen", TEMPLATE)
+        self.assertIn("Limit konnte nicht geladen werden", TEMPLATE)
+
     def test_admin_gate_on_put_endpoints(self):
         for name in ("api_p03_set_user_charging_limit", "api_p03_set_rfid_charging_limit"):
             start = API.index("async def " + name)
