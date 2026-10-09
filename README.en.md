@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** Release Candidate **0.9.7.94** is available. Self-hosting and evaluation are possible; verify security, HTTPS/WSS, backups, and charger compatibility before production deployments.
+> 🚧 **Status:** Release Candidate **0.9.7.95** is available. Self-hosting and evaluation are possible; verify security, HTTPS/WSS, backups, and charger compatibility before production deployments.
 
 ## 🚀 Installation
 
