@@ -253,6 +253,14 @@ def _manifest_from_zip(path: Path):
         return {}
 
 
+def _archive_integrity_ok(path):
+    try:
+        validate_restore(path)
+        return True
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError):
+        return False
+
+
 def backup_info(path: Path):
     stat = path.stat()
     manifest = _manifest_from_zip(path)
@@ -261,7 +269,7 @@ def backup_info(path: Path):
         "size_bytes": stat.st_size,
         "created_at": manifest.get("created_at") or datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
         "sha256": _sha256(path),
-        "valid": bool(manifest.get("database")),
+        "valid": _archive_integrity_ok(path),
         "label": "pre-restore" if "pre-restore" in path.name else ("scheduled" if "scheduled" in path.name else "manual"),
     }
 
