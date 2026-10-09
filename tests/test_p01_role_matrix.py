@@ -48,12 +48,10 @@ class PermissionMatrixTests(unittest.IsolatedAsyncioTestCase):
         result = await self.check_role("admin", "POST", "/api/users")
         self.assertEqual(result.status_code, 200)
 
-    @unittest.expectedFailure
     async def test_regular_user_must_not_create_charge_point(self):
         result = await self.check_role("user", "POST", "/api/charge-points")
         self.assertEqual(result.status_code, 403)
 
-    @unittest.expectedFailure
     async def test_regular_user_must_not_delete_users(self):
         result = await self.check_role("user", "DELETE", "/api/users/42")
         self.assertEqual(result.status_code, 403)
