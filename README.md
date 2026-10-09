@@ -149,7 +149,7 @@ VoltCore Community ist als **kostenlose VoltCore-Edition** geplant. 🆓💙
 Das ist bewusst getrennt:
 
 - 🆓 **Community Edition: kostenlos**
-- 📜 **endgültige öffentliche Lizenz: noch festzulegen**
+- 📜 **geplante öffentliche Lizenz: AGPLv3; Rechteprüfung ausstehend**
 - 🔐 **Repository: bleibt privat, bis Community veröffentlichungsreif ist**
 
 ## 📚 Dokumentation
