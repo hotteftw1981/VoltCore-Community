@@ -5363,6 +5363,17 @@ def ocpp_connector_integrity(cp_id, now=None):
         findings.append({"code":"session_without_connector_record","connector_id":cid,"severity":"warning"})
     stamp = _parse_iso_utc(cp["last_message_at"] or cp["last_seen"])
     age = max(0, int((now-stamp).total_seconds())) if stamp else None
+    guidance = {
+        "duplicate_active_sessions": ("Mehrere aktive Sessions am selben Anschluss", "Sessions prüfen, nicht automatisch beenden", "Multiple active sessions on one connector"),
+        "stale_connector_transaction_reference": ("Connector verweist auf eine nicht aktive Session", "OCPP- und Connectorzustand vergleichen", "Connector points to a non-active session"),
+        "connector_fault": ("Ladepunkt meldet einen OCPP-Fehler", "Fehlercode und Ladepunkt vor Ort prüfen", "Connector reports an OCPP fault"),
+        "charging_without_backend_session": ("Ladepunkt meldet Laden ohne Backend-Session", "Letzte StartTransaction und Verbindung prüfen", "Charging reported without backend session"),
+        "available_with_active_session": ("Ladepunkt frei, Session im Backend noch aktiv", "StopTransaction und Meldungsreihenfolge prüfen", "Available connector still has an active session"),
+        "session_without_connector_record": ("Aktive Session ohne Connector-Datensatz", "Connectorerkennung und Session prüfen", "Active session without connector record"),
+    }
+    for item in findings:
+        de, action, en = guidance.get(item["code"], ("Unbekannter Zustand", "Log prüfen", "Unknown state"))
+        item["message_de"], item["message_en"], item["recommendation_de"] = de, en, action
     return {"charge_point_id":str(cp_id),"last_message_age_seconds":age,"last_message_known":stamp is not None,
             "connectors":connectors,"active_sessions":len(sessions),"findings":findings,
             "level":"critical" if any(f["severity"]=="critical" for f in findings) else "warning" if findings else "ok"}
