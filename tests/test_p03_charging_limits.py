@@ -80,6 +80,34 @@ class ChargingLimits(unittest.TestCase):
         second = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
         self.assertNotEqual(first, second)
 
+    def test_other_card_cannot_evict_occupied_connector(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertIsNone(db.get_transaction(first)["ended_at"])
+
+    def test_reassignment_preserves_original_session_owner(self):
+        second_user = db.create_user("P03 second driver", gamification_enabled=False)
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with db._connect() as conn:
+            conn.execute("UPDATE rfid_cards SET user_id=? WHERE uid='P03-A'", (second_user,))
+            conn.commit()
+        original = db.get_transaction(first)
+        self.assertEqual(original["user_id"], self.user)
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+        self.assertEqual(db.charging_session_limit_snapshot("user", second_user)["active"], 0)
+        with self.assertRaisesRegex(ValueError, "USER_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+
+    def test_active_count_persists_after_database_reinitialization(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        db.init_db()
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+
     def test_limit_applies_across_charge_points(self):
         db.upsert_charge_point("P03-B", status="Available", connector_count=1)
         db.discover_connector("P03-B", 1, status="Available")
