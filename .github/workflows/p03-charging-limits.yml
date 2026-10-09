@@ -1,0 +1,26 @@
+name: P03 Concurrent Charging Regression
+on:
+  push:
+    branches:
+      - feature/p03-simultaneous-charging-limits
+  pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  charging-limits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install -r tests/requirements.txt
+      - name: Concurrent sessions and limit regressions
+        run: python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
