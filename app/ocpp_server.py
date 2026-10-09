@@ -925,7 +925,16 @@ class ChargePoint(OcppChargePoint):
             start_meter_kwh = float(meter_start) / 1000.0
         except (TypeError, ValueError):
             start_meter_kwh = None
-        tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
+        try:
+            tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
+        except ValueError as exc:
+            if str(exc) not in ("RFID_CONCURRENT_SESSION_LIMIT", "USER_CONCURRENT_SESSION_LIMIT"):
+                raise
+            # OCPP 1.6: reject the new transaction without changing the connector's
+            # existing session or issuing any status/update side effects.
+            db.mark_message(self.id, "StartTransaction")
+            db.add_event(self.id, "StartTransaction", f"connector={connector_id}; id_tag={id_tag}; rejected=true; reason={exc}")
+            return call_result.StartTransaction(transaction_id=0, id_tag_info={"status": "Blocked"})
         db.upsert_charge_point(self.id, transaction_id=tx)
         db.set_status_notification(self.id, int(connector_id or 0), "Charging")
         db.mark_message(self.id, "StartTransaction")
