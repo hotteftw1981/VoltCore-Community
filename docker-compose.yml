@@ -1,6 +1,7 @@
 services:
   voltcore-community:
     build: .
+    pull_policy: build
     container_name: voltcore-community
     restart: unless-stopped
     init: true
