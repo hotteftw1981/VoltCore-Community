@@ -1,5 +1,9 @@
 {% extends "base.html" %}{% block title %}Ladepunkte - {{ branding.product_name }}{% endblock %}{% block heading %}Ladepunkte{% endblock %}{% block subtitle %}Ein Ort für Erkennung, Betrieb, Live-Daten und Verwaltung{% endblock %}
 {% block content %}
+<style>
+/* P02: management writes are admin-only, matching the server-side checks. */
+body[data-role="user"] .write-action { display: none !important; }
+</style>
 <section class="stats six"><div class="stat"><span>Ladepunkte</span><b id="count">0</b><small>eingerichtet</small></div><div class="stat"><span>Neu erkannt</span><b id="pending">0</b><small>wartet auf Einrichtung</small></div><div class="stat"><span>Online</span><b id="online">0</b><small>verbunden / aktiv</small></div><div class="stat"><span>Laden</span><b id="charging">0</b><small>aktive Ladepunkte</small></div><div class="stat"><span>Gesamtleistung</span><b id="power">—</b><small>live</small></div><div class="stat"><span>Connectoren</span><b id="connectors">0</b><small>erkannt / konfiguriert</small></div></section>
 <div class="toolbar"><div><h2>Ladeinfrastruktur <button type="button" class="context-help" aria-label="Info: Ladeinfrastruktur" aria-haspopup="dialog" aria-expanded="false" data-help-title="Ladeinfrastruktur" data-help="Hier stehen alle eingerichteten, neu erkannten, archivierten oder außer Betrieb genommenen OCPP-Ladepunkte. Ein gepflegter Standort wird als sprechende Hauptbezeichnung verwendet.">i</button></h2><p>Erkannte und eingerichtete OCPP-Ladepunkte in einer gemeinsamen Ansicht.</p></div><div class="toolbar-actions"><input class="toolbar-search" id="search" placeholder="Ladepunkt, Hersteller, Modell, Standort ..."><button class="primary write-action" id="add" type="button">+ Ladepunkt hinzufügen</button></div></div>
 
