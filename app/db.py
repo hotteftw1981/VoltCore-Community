@@ -1149,6 +1149,8 @@ def init_db():
         # V0.9.7.75: LiveView is not part of Community. Remove settings left
         # behind by the short-lived 0.9.7.74 release candidate.
         conn.execute("DELETE FROM app_settings WHERE key LIKE 'liveview_%'")
+        # Legacy Community users must not retain active PIN/XP access.
+        conn.execute("UPDATE users SET portal_enabled=0, gamification_enabled=0 WHERE portal_enabled<>0 OR gamification_enabled<>0")
 
         # Community does not rewrite historical billing data during initialization.
         # Existing transaction costs and tariff snapshots are preserved verbatim.
@@ -2168,14 +2170,8 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
         station=conn.execute("SELECT station_status FROM charge_points WHERE id=?",(row[0],)).fetchone()
         overall=_overall_status_from_rows(station[0] if station else None, connector_rows)
         conn.execute("UPDATE charge_points SET status=? WHERE id=?",(overall,row[0]))
-        if achievement_user_id and session_energy is not None:
-            _allocate_bonus_for_transaction_conn(conn, int(tx), int(achievement_user_id), float(session_energy or 0), end_ts)
         conn.commit()
-    if achievement_user_id:
-        try:
-            evaluate_user_achievements(int(achievement_user_id))
-        except Exception:
-            pass
+    # No Community XP or achievement evaluation.
     return session_energy
 
 def active_transactions_for_charge_point(cp_id, limit=20):
@@ -2908,7 +2904,7 @@ def user_may_charge_at(user_id,charge_point_id):
         return bool(conn.execute("SELECT 1 FROM user_charge_point_access WHERE user_id=? AND charge_point_id=?",(int(user_id),str(charge_point_id))).fetchone())
 
 
-def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=True,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
+def create_user(name,role="Fahrer",department=None,email=None,phone=None,status="Aktiv",monthly_kwh_limit=None,monthly_limit_mode="warn",gamification_enabled=False,weekly_hours=None,budget_source="manual",charge_access_mode="all",allowed_charge_point_ids=None):
     """Create a neutral Community charging user.
 
     weekly_hours and budget_source remain accepted for backwards compatibility,
@@ -2917,7 +2913,7 @@ def create_user(name,role="Fahrer",department=None,email=None,phone=None,status=
     limit_value = None if monthly_kwh_limit in (None, "") else max(0.0, float(monthly_kwh_limit))
     with _lock,_connect() as conn:
         mode = "block" if str(monthly_limit_mode).lower() == "block" else "warn"
-        gamification = 1 if gamification_enabled else 0
+        gamification = 0  # No gamification in Community.
         access_mode=_normalize_charge_access_mode(charge_access_mode)
         cur=conn.execute(
             "INSERT INTO users(name,role,department,status,email,phone,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,weekly_hours,budget_source,charge_access_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -2933,7 +2929,7 @@ def update_user(user_id,**fields):
     access_ids=fields.pop("allowed_charge_point_ids",None)
     fields.pop("weekly_hours",None)
     fields.pop("budget_source",None)
-    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode","gamification_enabled"}
+    allowed={"name","role","department","email","phone","status","monthly_kwh_limit","monthly_limit_mode"}
     updates=[]
     for k in allowed:
         if k not in fields:
@@ -2943,8 +2939,6 @@ def update_user(user_id,**fields):
             value = None if value in (None, "") else max(0.0, float(value))
         elif k == "monthly_limit_mode":
             value = "block" if str(value).lower() == "block" else "warn"
-        elif k == "gamification_enabled":
-            value = 1 if value else 0
         updates.append((k,value))
     if not updates and access_mode is None and access_ids is None:return False
     with _lock,_connect() as conn:
@@ -3442,19 +3436,11 @@ def user_monthly_budget(user_id, now=None):
         limit_value=user["monthly_kwh_limit"]
         mode=user["monthly_limit_mode"] or "warn"
         state=_budget_status(limit_value,used,mode)
-        bonus=_bonus_wallet_conn(conn,user_id,now=now)
-        # A hard monthly limit blocks only when both the regular monthly budget
-        # and all valid bonus kWh are exhausted. Bonus never lowers the regular
-        # progress bar: the monthly budget is consumed first, then FEFO bonus.
-        if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-            state["blocked"]=False
-            state["status"]="bonus"
-            state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
         base_used=used if limit_value is None else min(max(0.0,used),max(0.0,float(limit_value)))
         return {
             "month":month_key,"limit_kwh":None if limit_value is None else float(limit_value),
             "used_kwh":round(used,3),"base_used_kwh":round(base_used,3),"mode":mode,
-            "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"],**state
+            "bonus_available_kwh":0.0,"bonus_expiring_next":None,**state
         }
 
 def user_budget_summary(now=None):
@@ -3465,8 +3451,7 @@ def user_budget_summary(now=None):
         for user in users:
             used=_user_month_energy_conn(conn,user["id"],start_utc,end_utc)
             state=_budget_status(user["monthly_kwh_limit"],used,user["monthly_limit_mode"] or "warn")
-            bonus=_bonus_wallet_conn(conn,user["id"],now=now)
-            effective_blocked=bool(state["blocked"] and bonus["available_kwh"] <= 1e-9)
+            effective_blocked=bool(state["blocked"])
             if state["status"] == "unlimited": summary["unlimited"] += 1
             elif effective_blocked: summary["blocked"] += 1
             elif (state["percent"] or 0) >= 70: summary["warning"] += 1
@@ -3769,16 +3754,13 @@ def list_users_rich():
             item["costs"]=round(float((cost_row or [0])[0] or 0)/100.0,2)
             used=_user_month_energy_conn(conn,item["id"],start_utc,end_utc)
             state=_budget_status(item.get("monthly_kwh_limit"),used,item.get("monthly_limit_mode") or "warn")
-            bonus=_bonus_wallet_conn(conn,item["id"])
-            if state.get("blocked") and bonus["available_kwh"] > 1e-9:
-                state["blocked"]=False; state["status"]="bonus"; state["status_label"]="Monatsbudget verbraucht · Bonus aktiv"
             item.update({
                 "budget_month":month_key,"month_energy_kwh":round(used,3),
                 "monthly_limit_kwh":None if item.get("monthly_kwh_limit") is None else float(item.get("monthly_kwh_limit")),
                 "monthly_limit_mode":item.get("monthly_limit_mode") or "warn",
                 "budget_status":state["status"],"status_label":state["status_label"],
                 "percent":state["percent"],"remaining_kwh":state["remaining_kwh"],"blocked":state["blocked"],
-                "bonus_available_kwh":bonus["available_kwh"],"bonus_expiring_next":bonus["expiring_next"]
+                "bonus_available_kwh":0.0,"bonus_expiring_next":None
             })
             result.append(item)
         return result
@@ -7259,8 +7241,9 @@ def approve_access_request(request_id, system_user_id, portal_pin_hash, monthly_
         limit_value=None if monthly_kwh_limit in (None,"") else max(0.0,float(monthly_kwh_limit))
         normalized_plate=normalize_vehicle_plate(req['vehicle_plate'])
         vehicle_text=" · ".join(x for x in [str(req['vehicle_make_model'] or '').strip(),normalized_plate] if x) or None
-        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_pin_hash,portal_pin_set_at,portal_enabled,weekly_hours,budget_source)
-            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,?, ?,1,?,?)""",(req['name'],vehicle_text,limit_value,mode,1,req['email'],req['phone'],str(portal_pin_hash),now,None,source))
+        # Approvals create only charging users, never portal accounts or XP.
+        cur=conn.execute("""INSERT INTO users(name,role,department,rfid,status,vehicle,monthly_kwh_limit,monthly_limit_mode,gamification_enabled,email,phone,portal_enabled,weekly_hours,budget_source)
+            VALUES(?,'Fahrer',NULL,NULL,'Aktiv',?,?,?,?,?,?,0,?,?)""",(req['name'],vehicle_text,limit_value,mode,0,req['email'],req['phone'],None,source))
         user_id=int(cur.lastrowid)
         vehicle_id=None; vehicle_created=False
         if normalized_plate:
