@@ -23,4 +23,6 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r tests/requirements.txt
       - name: Concurrent sessions and limit regressions
-        run: python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
+        run: |
+          python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
+          python -m unittest discover -s tests -p 'test_p03_integrity_batch.py' -v
