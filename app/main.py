@@ -2096,7 +2096,7 @@ async def remove_group_user(group_id:int,user_id:int):
 async def api_charge_point_diagnostics(cp_id: str, severity: str | None = None, category: str | None = None, limit: int = 100):
     if not db.get_charge_point(cp_id):
         raise HTTPException(404, "Ladepunkt nicht gefunden")
-    return {"health":db.charge_point_health(cp_id),"active":db.active_diagnostic_states(cp_id),"history":db.diagnostic_history(cp_id,severity=severity,category=category,limit=limit)}
+    return {"health":db.charge_point_health(cp_id),"active":db.active_diagnostic_states(cp_id),"history":db.diagnostic_history(cp_id,severity=severity,category=category,limit=limit),"integrity":db.ocpp_connector_integrity(cp_id)}
 
 
 @app.get("/api/charge-points/{cp_id}/analytics")
