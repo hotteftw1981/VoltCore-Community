@@ -8,6 +8,7 @@ permissions:
   contents: write
 jobs:
   regression-release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -22,7 +23,7 @@ jobs:
           cache: pip
       - name: Dependencies
         run: pip install -r requirements.txt -r tests/requirements.txt
-      - name: Apply existing reviewed application patch
+      - name: Apply application and test changes only
         run: |
           mkdir -p /tmp/voltcore-regression-evidence "$DATA_DIR"
           python scripts/publication_closeout_patch.py
@@ -59,10 +60,12 @@ jobs:
 
           The existing AGPL-3.0-only license remains unchanged. Repository visibility and historical GitHub objects are not changed by this release. Prior branches, tags, pull requests and build artifacts still require separate publication review; a clean current source tree does not erase those records. No production data or Pro repository was modified.
           ''')
-          # Discard the applied one-time patch script and this one-time runner.
           Path('scripts/publication_closeout_patch.py').unlink()
-          Path('.github/workflows/community-regression-release.yml').unlink()
           PY
+          # The build token may write application contents, not change workflows.
+          # Discard every proposed workflow edit and deletion before testing or committing.
+          git restore --source=HEAD --worktree --staged -- .github/workflows
+          git diff --exit-code -- .github/workflows
       - name: All regression tests, no expected-failure exceptions
         shell: bash
         run: |
@@ -97,12 +100,13 @@ jobs:
           assert result == {'status':'ok','version':'0.9.7.97'},result
           PY
           test "$(curl --silent --output /tmp/voltcore-regression-setup.html --write-out '%{http_code}' http://127.0.0.1:18040/setup)" = 200
-      - name: Save tested code with a normal fast-forward commit
+      - name: Save application contents with a normal fast-forward commit
         id: source
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
+          git add -- app tests docs README.md README.en.md CHANGELOG.md scripts/publication_closeout_patch.py
+          git diff --cached --exit-code -- .github/workflows
           git commit -m 'fix(community): close eight remaining regression cases in v0.9.7.97'
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
