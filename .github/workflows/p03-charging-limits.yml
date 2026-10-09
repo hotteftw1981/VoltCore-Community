@@ -2,7 +2,7 @@ name: P03 Concurrent Charging Regression
 on:
   push:
     branches:
-      - feature/p03-simultaneous-charging-limits
+      - feature/p04-rfid-sync-diagnostics
   pull_request:
     branches: [fix/p02-scope-and-access-control, develop, main]
   workflow_dispatch:
@@ -30,5 +30,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_p03_integrity_batch.py' -v
           python -m unittest discover -s tests -p 'test_p03_api_permissions.py' -v
           python -m unittest discover -s tests -p 'test_p03_ocpp_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_p04_rfid_sync_diagnostics.py' -v
           python -m unittest discover -s tests -p 'test_p03_legacy_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_p03_ui_smoke.py' -v
