@@ -488,6 +488,16 @@ async def web_access_control(request: Request, call_next):
 
     # Settings and system-account administration are admin-only.
     admin_only = path in {"/settings","/security","/tariffs","/cost-centers","/engagement","/imports","/load-management","/backups","/updates","/openapi.json","/first-run","/registration-onboarding","/registration-requests"} or path.startswith("/api/updates") or path.startswith("/docs") or path.startswith("/redoc") or path.startswith("/system-users") or path.startswith("/api/system-users") or path.startswith("/api/security") or path.startswith("/api/tariffs") or path.startswith("/api/billing-groups") or path.startswith("/api/settings/") or path.startswith("/api/backups") or path.startswith("/api/rfid/local-list") or path.startswith("/api/remote-control/") or path.startswith("/api/access-requests") or path.startswith("/api/engagement") or path.startswith("/api/import/") or path.startswith("/api/cost-centers") or path.startswith("/api/smart-charging/") or path.startswith("/api/portal-admin")
+    # Editing charge points, user identities, vehicles or RFID credentials changes
+    # authorization and billing. These writes require administrator privileges.
+    management_write = request.method in ("POST", "PUT", "PATCH", "DELETE") and (
+        path.startswith("/api/users")
+        or path.startswith("/api/rfid")
+        or path.startswith("/api/vehicles")
+        or path.startswith("/api/charge-points")
+        or path.startswith("/api/ocpp-devices")
+    )
+    admin_only = admin_only or management_write
     if admin_only and auth.get("role") != "admin":
         if path.startswith("/api/"):
             return JSONResponse({"detail":"Administratorrechte erforderlich"}, status_code=403)
