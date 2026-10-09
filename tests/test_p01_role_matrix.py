@@ -56,10 +56,9 @@ class PermissionMatrixTests(unittest.IsolatedAsyncioTestCase):
         result = await self.check_role("user", "DELETE", "/api/users/42")
         self.assertEqual(result.status_code, 403)
 
-    @unittest.expectedFailure
-    async def test_user_portal_admin_preview_must_be_private(self):
-        result = await self.check_role("viewer", "GET", "/admin/ladeguthaben/42")
-        self.assertEqual(result.status_code, 403)
+    async def test_portal_admin_preview_is_no_longer_a_route(self):
+        routes = {route.path for route in main.app.routes}
+        self.assertNotIn("/admin/ladeguthaben/{user_id}", routes)
 
 
 if __name__ == "__main__":
