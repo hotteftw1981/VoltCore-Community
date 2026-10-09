@@ -973,3 +973,11 @@ html[data-theme="dark"] .registration-budget-card,html[data-theme="dark"] .regis
 .offline-auth-cell{display:grid;gap:4px;min-width:145px}.offline-auth-cell small{font-size:8px;color:var(--muted);white-space:nowrap}
 .local-list-actions{display:grid;gap:6px;min-width:150px}.local-list-actions button{width:100%;white-space:nowrap;font-size:9px;padding:7px 9px}
 @media(max-width:900px){.offline-auth-cell,.local-list-actions{min-width:130px}}
+
+/* Community P12: readable charging limits, RFID notes and tariff version rows */
+.user-modal-card .parallel-limit-field{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:5px}
+.user-modal-card .parallel-limit-field input{width:84px;max-width:100%;margin:0}
+.user-modal-card .parallel-limit-hint{display:block;margin:0 0 12px;color:var(--muted,#9aa6b7);line-height:1.45}
+.user-modal-card .rfid-notes-field{display:grid;gap:7px;width:100%;margin-top:12px}
+.user-modal-card .rfid-notes-field textarea{box-sizing:border-box;display:block;width:100%;min-height:84px;resize:vertical}
+.tariff-table-panel .tariff-row-detail{display:block;margin-top:4px;line-height:1.4;color:var(--muted,#9aa6b7)}
