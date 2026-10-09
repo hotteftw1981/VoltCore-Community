@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7.92 — Update-Center correction
+
+- Public GitHub Releases can be checked without a GitHub token; private repositories still need a read token.
+- Updated confusing token/Portainer UI; installation now shows an explicit backup and manual Docker/Portainer deployment procedure, without pretending one-click installation is available.
+- No Docker socket or privileged background updater added.
+
 ## 0.9.7.91 — CSV import and migration consolidation
 
 - Added provider-neutral CSV import with column mapping, preview, duplicate detection and explicit execution.
