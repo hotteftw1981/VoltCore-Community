@@ -30,7 +30,7 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** in Entwicklung. Noch nicht für den öffentlichen Produktiveinsatz vorgesehen.
+> 🚧 **Status:** Release Candidate **0.9.7.90** ist verfügbar. Selbsthosting und Tests sind möglich; vor produktivem Betrieb Sicherheit, HTTPS/WSS, Backups und Ladepunkt-Kompatibilität selbst prüfen.
 
 ## 🚀 Installation
 
@@ -134,17 +134,17 @@ Funktionen, die nicht zu Community gehören, werden aus dem Community-Quellcode 
 
 Branches:
 
-- 🟢 `main` — zukünftige stabile Community-Releases
+- 🟢 `main` — veröffentlichte Community-Releases
 - 🟡 `develop` — Integrationsbranch der Community Edition
 - 🔵 kurzlebige Feature-Branches — einzelne Änderungen vor der Integration
 
-Das Repository bleibt privat, während der erste Community-Build aufgebaut und geprüft wird. 🔐🚧
+Das Repository ist aktuell privat. Vor einer öffentlichen Freigabe werden Lizenz und Veröffentlichungsfreigabe geklärt. 🔐
 
 ## 🧾 Was „kostenlos“ hier bedeutet
 
 VoltCore Community ist als **kostenlose VoltCore-Edition** geplant. 🆓💙
 
-Die endgültige öffentliche Softwarelizenz ist noch nicht festgelegt. Diese Entscheidung treffen wir, bevor das Repository öffentlich wird. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage. ⚖️
+Die öffentliche Softwarelizenz ist noch nicht festgelegt. **Ohne eine veröffentlichte Lizenz sind Kopieren, Verändern und Weiterverteilen des Quellcodes rechtlich nicht automatisch erlaubt.** Die Lizenzentscheidung muss vor dem Umschalten auf öffentlich erfolgen. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage. ⚖️
 
 Das ist bewusst getrennt:
 
