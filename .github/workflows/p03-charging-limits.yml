@@ -32,5 +32,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_p03_ocpp_cycle.py' -v
           python -m unittest discover -s tests -p 'test_p04_rfid_sync_diagnostics.py' -v
           python -m unittest discover -s tests -p 'test_p04_ui_contract.py' -v
+          python -m unittest discover -s tests -p 'test_p04_sync_readback.py' -v
           python -m unittest discover -s tests -p 'test_p03_legacy_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_p03_ui_smoke.py' -v
