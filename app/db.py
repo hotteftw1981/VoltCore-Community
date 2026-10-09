@@ -781,6 +781,11 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_system_recovery_codes_user ON system_recovery_codes(user_id,used_at)")
 
         user_columns = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "max_concurrent_sessions" not in user_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN max_concurrent_sessions INTEGER NOT NULL DEFAULT 1")
+        card_columns = {r[1] for r in conn.execute("PRAGMA table_info(rfid_cards)").fetchall()}
+        if "max_concurrent_sessions" not in card_columns:
+            conn.execute("ALTER TABLE rfid_cards ADD COLUMN max_concurrent_sessions INTEGER NOT NULL DEFAULT 1")
         for col in ("email", "phone"):
             if col not in user_columns:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
@@ -1809,7 +1814,9 @@ def _reconcile_duplicate_active_transactions_conn(conn):
 
 def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=None, vehicle_id=None, meter_start_kwh=None):
     with _lock, _connect() as conn:
-        card=conn.execute("SELECT id,user_id,vehicle_id,status FROM rfid_cards WHERE uid=? LIMIT 1",(id_tag,)).fetchone()
+        # BEGIN IMMEDIATE serializes admission across workers and processes, not just Python threads.
+        conn.execute("BEGIN IMMEDIATE")
+        card=conn.execute("SELECT id,user_id,vehicle_id,status,max_concurrent_sessions FROM rfid_cards WHERE uid=? LIMIT 1",(id_tag,)).fetchone()
         user_id=card[1] if card else None; rfid_card_id=card[0] if card else None
         if card and card[3] != "Aktiv": user_id=None
         if not card and id_tag:
@@ -1826,6 +1833,17 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
         _reconcile_active_transactions_for_connector_conn(
             conn, cp_id, connector_id, ended_at=started_at, reason="SupersededByNewTransaction"
         )
+        if id_tag:
+            card_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND (rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=?))", (rfid_card_id, id_tag)).fetchone()[0] if card else conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND id_tag=?", (id_tag,)).fetchone()[0]
+            card_limit = max(1, int(card[4] or 1)) if card else 1
+            if card_count >= card_limit:
+                raise ValueError("RFID_CONCURRENT_SESSION_LIMIT")
+        if user_id is not None:
+            user_limit_row = conn.execute("SELECT max_concurrent_sessions FROM users WHERE id=?", (user_id,)).fetchone()
+            user_limit = max(1, int(user_limit_row[0] or 1)) if user_limit_row else 1
+            user_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND user_id=?", (user_id,)).fetchone()[0]
+            if user_count >= user_limit:
+                raise ValueError("USER_CONCURRENT_SESSION_LIMIT")
         cur=conn.execute("""INSERT INTO transactions(
             charge_point_id,connector_id,transaction_id,id_tag,vehicle_id,user_id,rfid_card_id,
             started_at,status,meter_start_kwh,last_meter_kwh,stand_grace_seconds,auto_stop_zero_minutes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
