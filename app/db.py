@@ -1840,11 +1840,11 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
                ORDER BY id DESC LIMIT 1""",
             (cp_id, int(connector_id)),
         ).fetchone()
-        if existing_on_connector and id_tag and existing_on_connector["id_tag"] == id_tag:
+        if existing_on_connector:
+            # Do not evict an existing physical session based only on a new
+            # StartTransaction request. This applies to different RFIDs too.
+            # A StopTransaction or authoritative connector recovery must close it.
             raise ValueError("CONNECTOR_ACTIVE_SESSION")
-        _reconcile_active_transactions_for_connector_conn(
-            conn, cp_id, connector_id, ended_at=started_at, reason="SupersededByNewTransaction"
-        )
         if id_tag:
             card_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND (rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=?))", (rfid_card_id, id_tag)).fetchone()[0] if card else conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND id_tag=?", (id_tag,)).fetchone()[0]
             card_limit = max(1, int(card[4] or 1)) if card else 1
