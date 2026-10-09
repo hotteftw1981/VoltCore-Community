@@ -1,0 +1,177 @@
+name: Community Final Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/community-final-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: community-final-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  final-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATA_DIR: /tmp/voltcore-community-final-check-data
+      ENABLE_API_DOCS: '0'
+      VOLTCORE_UPDATE_CHECK_ENABLED: '0'
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          mkdir -p audit-results "$DATA_DIR"
+          pip install -r requirements.txt
+
+      - name: Source inventory and tracked-file safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee audit-results/source-inventory.txt
+          import ast
+          import re
+          import subprocess
+          from collections import Counter
+          from pathlib import Path
+          print('SOURCE_COMMIT', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          files = [Path(p) for p in files if p]
+          forbidden = [str(p) for p in files if p.name == '.env' or p.suffix.lower() in {'.db', '.sqlite', '.sqlite3', '.pem', '.key', '.p12', '.pfx'}]
+          print('TRACKED_SENSITIVE_FILE_CANDIDATES', len(forbidden))
+          for path in forbidden:
+              print('REVIEW_TRACKED_FILE', path)
+          trees = {p: ast.parse(p.read_text(encoding='utf-8'), filename=str(p)) for p in files if p.suffix == '.py' and str(p).startswith('app/')}
+          references = Counter()
+          for tree in trees.values():
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                      references[node.id] += 1
+                  elif isinstance(node, ast.Attribute):
+                      references[node.attr] += 1
+          pattern = re.compile(r'portal|achievement|gamif|bonus|voucher|leaderboard|(^|_)xp(_|$)|(^|_)event(s)?(_|$)', re.I)
+          candidates = []
+          for path, tree in trees.items():
+              for node in tree.body:
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and pattern.search(node.name):
+                      print('LEGACY_FUNCTION', str(path), node.lineno, node.end_lineno, node.name, 'references=' + str(references[node.name]), 'decorators=' + str(len(node.decorator_list)))
+                      if references[node.name] == 0 and not node.decorator_list:
+                          candidates.append((str(path), node.name))
+          print('UNREFERENCED_LEGACY_REVIEW_CANDIDATES', len(candidates))
+          print('Inventory is advisory: reflection, templates and schema compatibility require review before deleting code.')
+          if forbidden:
+              raise SystemExit('Review tracked sensitive-file candidates before release.')
+          PY
+
+      - name: Compile application and tests
+        run: python -m compileall -q app tests
+
+      - name: Full regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_*.py' 2>&1 | tee audit-results/tests.txt
+
+      - name: Build release archive and immutable source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_release.py --dist audit-results
+          git archive --format=zip --prefix=VoltCore-Community-source/ HEAD > audit-results/VoltCore-Community-source.zip
+          python - <<'PY' | tee audit-results/archive-check.txt
+          import ast
+          import hashlib
+          import json
+          import subprocess
+          import zipfile
+          from pathlib import Path
+          tree = ast.parse(Path('app/main.py').read_text(encoding='utf-8'))
+          version = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'APP_VERSION' for t in n.targets))
+          archives = list(Path('audit-results').glob('VoltCore_Community_V*.zip'))
+          assert len(archives) == 1, archives
+          archive = archives[0]
+          required = {'.env.example', 'CHANGELOG.md', 'LICENSE', 'CONTRIBUTING.md', 'Dockerfile', 'README.md', 'README.en.md', 'docker-compose.yml', 'docker-compose.portainer.yml', 'requirements.txt', 'app/main.py'}
+          with zipfile.ZipFile(archive) as zf:
+              assert zf.testzip() is None, 'Corrupt ZIP member'
+              names = zf.namelist()
+              roots = {name.split('/', 1)[0] for name in names}
+              assert len(roots) == 1, roots
+              root = next(iter(roots))
+              assert all(f'{root}/{p}' in names for p in required), 'Missing required archive member'
+              for name in names:
+                  parts = Path(name).parts
+                  assert not Path(name).is_absolute() and '..' not in parts, 'Unsafe ZIP path'
+                  assert '.git' not in parts and '__pycache__' not in parts and '.env' not in parts, 'Private/runtime file in ZIP'
+              assert zf.read(f'{root}/app/main.py') == Path('app/main.py').read_bytes(), 'Archive source differs from tested application'
+          result = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'version': version, 'archive': archive.name, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(), 'archive_verified': True}
+          Path('audit-results/provenance.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps(result, indent=2))
+          PY
+
+      - name: Build container from checked source
+        run: docker build -t voltcore-community-final-check .
+
+      - name: Container health and setup smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name voltcore-community-final-check -p 18020:8000 -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -v voltcore-community-final-check-data:/data voltcore-community-final-check
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18020/health > audit-results/health.json; then
+              break
+            fi
+            sleep 2
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          health = json.loads(Path('audit-results/health.json').read_text())
+          provenance = json.loads(Path('audit-results/provenance.json').read_text())
+          assert health.get('status') == 'ok', health
+          assert health.get('version') == provenance['version'], (health, provenance)
+          print('CONTAINER_HEALTH_OK', health)
+          PY
+          code=$(curl --silent --output audit-results/setup.html --write-out '%{http_code}' http://127.0.0.1:18020/setup)
+          test "$code" = 200
+          echo 'CONTAINER_FRESH_SETUP_OK'
+
+      - name: Collect container logs and clean isolated test data
+        if: always()
+        run: |
+          mkdir -p audit-results
+          docker logs voltcore-community-final-check > audit-results/container.log 2>&1 || true
+          docker rm -f voltcore-community-final-check >/dev/null 2>&1 || true
+          docker volume rm voltcore-community-final-check-data >/dev/null 2>&1 || true
+          rm -f audit-results/setup.html
+
+      - name: Retain final-check evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-final-check-${{ github.sha }}
+          path: audit-results/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Scope of this evidence
+        if: always()
+        run: |
+          echo 'Checks cover the exact source commit, automated regressions, packaging and an isolated container.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'They do not certify copyright ownership, historic/unreferenced GitHub object removal, live hardware or production TLS/WSS.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'No production volume, Pro repository or repository visibility was modified.' >> "$GITHUB_STEP_SUMMARY"
