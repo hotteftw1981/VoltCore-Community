@@ -7834,6 +7834,28 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
              ORDER BY t.started_at DESC,t.id DESC
         """, params).fetchall()]
 
+        # P07: preserve historical totals, but explicitly mark questionable source data.
+        quality_issues=[]
+        for row in rows:
+            flags=[]
+            start=_parse_iso_utc(row.get("started_at"))
+            end=_parse_iso_utc(row.get("ended_at"))
+            if not start: flags.append("invalid_start_timestamp")
+            if not end: flags.append("invalid_end_timestamp")
+            if start and end and end<start: flags.append("end_before_start")
+            try:
+                amount=float(row.get("energy_kwh") or 0)
+                if not math.isfinite(amount) or amount<0: flags.append("invalid_energy")
+            except (TypeError,ValueError):
+                flags.append("invalid_energy")
+            try:
+                if row.get("cost_cents") is not None and int(row["cost_cents"])<0: flags.append("negative_cost")
+            except (TypeError,ValueError):
+                flags.append("invalid_cost")
+            row["quality_flags"]=flags
+            if flags:
+                quality_issues.append({"transaction_id":row["id"],"flags":flags})
+
         def aggregate(items):
             sessions=len(items)
             energy=round(sum(float(x.get("energy_kwh") or 0) for x in items),3)
@@ -7882,6 +7904,8 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
             bucket=monthly[key]; item={"key":key,"label":bucket["label"]}; item.update(aggregate(bucket["rows"])); by_month.append(item)
 
         summary=aggregate(rows)
+        summary["quality_flagged_sessions"]=len(quality_issues)
+        summary["quality_review_required"]=bool(quality_issues)
         summary["unassigned_user_sessions"]=sum(1 for x in rows if x.get("user_id") is None)
         summary["unassigned_vehicle_sessions"]=sum(1 for x in rows if x.get("vehicle_id") is None)
         summary["unassigned_cost_center_sessions"]=sum(1 for x in rows if not str(x.get("cost_center") or "").strip())
@@ -7901,6 +7925,7 @@ def reporting_bundle(start_at=None, end_at=None, user_id=None, vehicle_id=None, 
             "by_cost_center":group_by(lambda x:x.get("cost_center") or "__none__", lambda x:x.get("cost_center") or "Ohne Kostenstelle"),
             "by_billing_group":group_by(lambda x:x.get("billing_group_id") if x.get("billing_group_id") is not None else "unassigned", lambda x:x.get("billing_group_name") or "Ohne Abrechnungsgruppe"),
             "by_month":by_month,
+            "quality":{"flagged_sessions":len(quality_issues),"issues":quality_issues,"review_required":bool(quality_issues),"totals_preserved":True},
             "transactions":rows,
             "options":options,
         }
