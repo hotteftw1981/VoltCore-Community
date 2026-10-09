@@ -1,0 +1,147 @@
+name: Community Regression Fix Release
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/community-regression-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  regression-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATA_DIR: /tmp/voltcore-regression-release-data
+      VOLTCORE_UPDATE_CHECK_ENABLED: '0'
+      ENABLE_API_DOCS: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Dependencies
+        run: pip install -r requirements.txt -r tests/requirements.txt
+      - name: Apply existing reviewed application patch
+        run: |
+          mkdir -p /tmp/voltcore-regression-evidence "$DATA_DIR"
+          python scripts/publication_closeout_patch.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('app/db.py');text=p.read_text()
+          assert text.count('"ocpp_status":"ConcurrentTx"')==1
+          p.write_text(text.replace('"ocpp_status":"ConcurrentTx"','"ocpp_status":"Blocked"'))
+          p=Path('tests/test_p01_parallel_transactions.py');text=p.read_text()
+          assert 'self.assertLessEqual(len(self.active_sessions()), 1)' in text
+          p.write_text(text.replace('self.assertLessEqual(len(self.active_sessions()), 1)','self.assertEqual(len(self.active_sessions()), 1)'))
+          for name in ('README.md','README.en.md'):
+              p=Path(name);text=p.read_text().replace('0.9.7.96','0.9.7.97')
+              p.write_text(text)
+          p=Path('CHANGELOG.md');text=p.read_text()
+          entry='''## 0.9.7.97 - Remaining charging and restore regression fixes
+
+          - Preserve completed sessions on duplicate stop and late meter messages; reject out-of-order or regressing measurements.
+          - Keep meter samples on their own connector/station; reject foreign-station stop requests.
+          - Preserve replacement WebSocket connections when an obsolete connection disconnects.
+          - Enforce RFID/user concurrency at authorization as well as atomic start admission.
+          - Stage restore files before changes and restore both database and applied files after apply/migration failure.
+          - Require all eight former expected-failure cases to pass normally; preserve the exact atomic rejection contract in the race test.
+          - No Git history rewrite, old release deletion, build-run deletion, pull-request archival or repository visibility change.
+
+          '''
+          assert text.startswith('# Changelog\n\n')
+          p.write_text('# Changelog\n\n'+entry+text[len('# Changelog\n\n'):])
+          Path('docs/PUBLICATION_CLOSEOUT.md').write_text('''# Publication closeout - 0.9.7.97
+
+          The maintainer requested public publication on 2026-10-09. This release resolves the eight previous expected-failure regressions; tests must pass with zero expected failures. Physical chargers, production TLS/WSS and complete English localization are not certified by these tests.
+
+          The eight generic-api-key candidates found in reachable history are four achievement identifiers in two revisions: month-energy-50, month-energy-150, max-month-energy-500 and charging-hours-100. These dictionary keys are not credentials. The current application-source scan had zero findings.
+
+          The existing AGPL-3.0-only license remains unchanged. Repository visibility and historical GitHub objects are not changed by this release. Prior branches, tags, pull requests and build artifacts still require separate publication review; a clean current source tree does not erase those records. No production data or Pro repository was modified.
+          ''')
+          # Discard the applied one-time patch script and this one-time runner.
+          Path('scripts/publication_closeout_patch.py').unlink()
+          Path('.github/workflows/community-regression-release.yml').unlink()
+          PY
+      - name: All regression tests, no expected-failure exceptions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q app tests
+          if python - <<'PY' > /tmp/voltcore-regression-evidence/tests.txt 2>&1
+          import json,unittest
+          from pathlib import Path
+          result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests',pattern='test_*.py'))
+          summary={'tests':result.testsRun,'errors':len(result.errors),'failures':len(result.failures),'expected_failures':len(result.expectedFailures),'skipped':len(result.skipped),'unexpected_successes':len(result.unexpectedSuccesses)}
+          Path('/tmp/voltcore-regression-evidence/test-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          assert result.wasSuccessful() and not result.expectedFailures and not result.skipped,summary
+          PY
+          then tail -5 /tmp/voltcore-regression-evidence/tests.txt
+          else tail -100 /tmp/voltcore-regression-evidence/tests.txt; exit 1
+          fi
+          git diff --check
+      - name: Container build, health and fresh setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t voltcore-regression-release . > /tmp/voltcore-regression-evidence/docker-build.txt 2>&1
+          docker run -d --name voltcore-regression-release -p 127.0.0.1:18040:8000 -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -v voltcore-regression-release-data:/data voltcore-regression-release
+          for i in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18040/health > /tmp/voltcore-regression-evidence/health.json; then break; fi
+            sleep 2
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result=json.loads(Path('/tmp/voltcore-regression-evidence/health.json').read_text())
+          assert result == {'status':'ok','version':'0.9.7.97'},result
+          PY
+          test "$(curl --silent --output /tmp/voltcore-regression-setup.html --write-out '%{http_code}' http://127.0.0.1:18040/setup)" = 200
+      - name: Save tested code with a normal fast-forward commit
+        id: source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(community): close eight remaining regression cases in v0.9.7.97'
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Create and verify release archive
+        run: |
+          python scripts/build_release.py --dist /tmp/voltcore-regression-evidence
+          git archive --format=zip --prefix=VoltCore-Community-source/ HEAD > /tmp/voltcore-regression-evidence/VoltCore-Community-source.zip
+          python - <<'PY'
+          import hashlib,json,subprocess,zipfile
+          from pathlib import Path
+          root=Path('/tmp/voltcore-regression-evidence');archive=root/'VoltCore_Community_V0_9_7_97.zip'
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              names=z.namelist();prefix=names[0].split('/')[0]
+              for name in ('app/db.py','app/ocpp_server.py','app/backup.py','app/main.py','LICENSE'):
+                  assert z.read(prefix+'/'+name)==Path(name).read_bytes()
+              assert all(not Path(n).is_absolute() and '..' not in Path(n).parts and '.env' not in Path(n).parts and '.git' not in Path(n).parts for n in names)
+          digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+          (root/'SHA256SUMS.txt').write_text(digest+'  '+archive.name+'\n')
+          (root/'provenance.json').write_text(json.dumps({'version':'0.9.7.97','commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'archive':archive.name,'sha256':digest},indent=2)+'\n')
+          text=Path('CHANGELOG.md').read_text();body=text.split('## 0.9.7.97 - ',1)[1].split('\n## ',1)[0]
+          (root/'release-notes.md').write_text('# '+body+'\nSee docs/PUBLICATION_CLOSEOUT.md for publication boundaries.\n')
+          PY
+      - name: Create new release without changing old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.source.outputs.sha }}
+        run: gh release create v0.9.7.97 /tmp/voltcore-regression-evidence/VoltCore_Community_V0_9_7_97.zip /tmp/voltcore-regression-evidence/SHA256SUMS.txt --target "$TARGET_SHA" --title 'VoltCore Community 0.9.7.97' --notes-file /tmp/voltcore-regression-evidence/release-notes.md --latest
+      - name: Cleanup isolated test container
+        if: always()
+        run: |
+          mkdir -p /tmp/voltcore-regression-evidence
+          docker logs voltcore-regression-release > /tmp/voltcore-regression-evidence/container.log 2>&1 || true
+          docker rm -f voltcore-regression-release >/dev/null 2>&1 || true
+          docker volume rm voltcore-regression-release-data >/dev/null 2>&1 || true
+      - name: Retain source and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-regression-release-0.9.7.97
+          path: /tmp/voltcore-regression-evidence/
+          retention-days: 7
