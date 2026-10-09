@@ -181,10 +181,23 @@ async def sync_local_list(cp_id, force_full=False, reason="Automatisch"):
         db.set_local_list_state(cp_id,station_version=station_version,pending=True,supported=True,status=status or "Fehlgeschlagen",update_type=update_type,response=status)
         return {"ok":False,"status":status,"update_type":update_type}
 
+def _automatic_local_list_retry_allowed(state, *, now=None, cooldown_seconds=120):
+    """Avoid tight retry loops on failing stations; manual full sync bypasses this."""
+    if str(state.get("status") or "") not in ("Timeout", "Fehler", "Failed", "Fehlgeschlagen"):
+        return True
+    observed = db._parse_iso_utc(state.get("last_attempt_at"))
+    if observed is None:
+        return True
+    current = now or datetime.now(timezone.utc)
+    return (current - observed).total_seconds() >= cooldown_seconds
+
+
 async def sync_pending_local_lists(reason="RFID geändert", force_full=False):
     results=[]
     for cp_id in list(ACTIVE_CONNECTIONS.keys()):
         state=db.ensure_local_list_state(cp_id) or {}
+        if not force_full and not _automatic_local_list_retry_allowed(state):
+            continue
         if force_full or int(state.get("pending",1) or 0) or state.get("station_version")!=db.rfid_local_list_version():
             results.append(await sync_local_list(cp_id,force_full=force_full,reason=reason))
     return results
