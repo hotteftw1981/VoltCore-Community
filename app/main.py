@@ -454,6 +454,7 @@ async def web_access_control(request: Request, call_next):
         or path.startswith("/api/vehicles")
         or path.startswith("/api/charge-points")
         or path.startswith("/api/ocpp-devices")
+        or path.startswith("/api/transactions/")
     )
     admin_only = admin_only or management_write
     if admin_only and auth.get("role") != "admin":
