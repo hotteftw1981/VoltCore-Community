@@ -1,9 +1,13 @@
 """P01: middleware permission regression tests (no network or live sessions)."""
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from starlette.requests import Request
 from starlette.responses import Response
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="voltcore-p01-import-"))
+
 from app import db, main
 
 
