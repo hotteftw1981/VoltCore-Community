@@ -2,7 +2,7 @@ name: P03 Concurrent Charging Regression
 on:
   push:
     branches:
-      - feature/p06-session-data-quality
+      - feature/p07-report-integrity
   pull_request:
     branches: [feature/p05-ocpp-diagnostics, feature/p03-simultaneous-charging-limits, fix/p02-scope-and-access-control, develop, main]
   workflow_dispatch:
@@ -35,5 +35,6 @@ jobs:
           python -m unittest discover -s tests -p 'test_p04_sync_readback.py' -v
           python -m unittest discover -s tests -p 'test_p04_retry_policy.py' -v
           python -m unittest discover -s tests -p 'test_p06_session_data_quality.py' -v
+          python -m unittest discover -s tests -p 'test_p07_report_quality.py' -v
           python -m unittest discover -s tests -p 'test_p03_legacy_upgrade.py' -v
           python -m unittest discover -s tests -p 'test_p03_ui_smoke.py' -v
