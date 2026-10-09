@@ -3,6 +3,10 @@
 {% block heading %}Fahrzeuge{% endblock %}
 {% block subtitle %}Fahrzeugstammdaten, Zuordnung und Ladehistorie{% endblock %}
 {% block content %}
+<style>
+/* P02: management writes are admin-only, matching the server-side checks. */
+body[data-role="user"] .write-action { display: none !important; }
+</style>
 <section class="stats five">
   <div class="stat"><span>Fahrzeuge</span><b id="count">0</b><small>aktiv</small></div>
   <div class="stat"><span>E-Fahrzeuge</span><b id="electric">0</b><small>elektrisch</small></div>
