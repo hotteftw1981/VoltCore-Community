@@ -208,6 +208,12 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
 def render(request: Request, template_name: str, status_code: int = 200, **context):
+    # Explicit locale selection: query override, then browser preference, default DE.
+    locale = str(request.query_params.get("lang") or "").strip().lower()
+    if locale not in ("de", "en"):
+        header = str(request.headers.get("accept-language") or "").lower()
+        locale = "en" if header.lstrip().startswith("en") else "de"
+    context.setdefault("lang", locale)
     context.setdefault("app_version", APP_VERSION)
     context.setdefault("app_edition", APP_EDITION)
     context.setdefault("branding", db.branding_settings())
