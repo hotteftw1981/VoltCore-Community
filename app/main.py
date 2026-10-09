@@ -2630,6 +2630,16 @@ async def delete_vehicle_image(vehicle_id: int):
     return {"ok": True}
 
 
+def _neutral_community_user_response(user):
+    """Do not expose legacy portal or XP columns through Community user APIs."""
+    safe=dict(user or {})
+    for field in ("portal_pin_hash","portal_pin_set_at","portal_enabled",
+                  "portal_last_login_at","gamification_enabled",
+                  "gamification_seen_award_id","gamification_seen_level"):
+        safe.pop(field,None)
+    return safe
+
+
 class UserPayload(BaseModel):
     name: str
     role: str = "Fahrer"
@@ -2679,7 +2689,7 @@ async def create_user(payload: UserPayload):
     data.update({"gamification_enabled":False,"weekly_hours":None,"budget_source":"manual"})
     try: uid=db.create_user(**data)
     except ValueError as exc: raise HTTPException(400,str(exc))
-    user=db.get_user(uid) or {}; user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    user=db.get_user(uid) or {}; return {"ok":True,"user":_neutral_community_user_response(user)}
 
 @app.put("/api/users/{user_id}")
 async def update_user(request:Request,user_id: int,payload: UserPayload):
@@ -2707,7 +2717,7 @@ async def update_user(request:Request,user_id: int,payload: UserPayload):
         before_text="Alle Ladepunkte" if before_access["mode"]=="all" else (", ".join(before_access["charge_point_ids"]) or "Keine Ladepunkte")
         after_text="Alle Ladepunkte" if after_access["mode"]=="all" else (", ".join(after_access["charge_point_ids"]) or "Keine Ladepunkte")
         db.add_activity(system_user_id=auth.get("id"),username=auth.get("username"),display_name=auth.get("display_name"),action="Ladeberechtigung geändert",category="Ladebenutzer",target=f"{user.get('name') or 'Benutzer'} · #{user_id}",details=f"{before_text} → {after_text}")
-    user.pop("portal_pin_hash",None); user["portal_pin_set"]=bool(user.get("portal_pin_set_at")); return {"ok":True,"user":user}
+    return {"ok":True,"user":_neutral_community_user_response(user)}
 
 @app.post("/api/users/{user_id}/image")
 async def upload_user_image(user_id:int, image:UploadFile=File(...)):
