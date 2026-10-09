@@ -67,6 +67,19 @@ class ChargingLimits(unittest.TestCase):
         self.assertIsNone(current["ended_at"])
         self.assertEqual(db.get_charge_point("P03")["transaction_id"], first)
 
+    def test_same_connector_duplicate_preserves_original_when_limit_is_two(self):
+        with db._connect() as conn:
+            conn.execute("UPDATE users SET max_concurrent_sessions=2 WHERE id=?", (self.user,))
+            conn.execute("UPDATE rfid_cards SET max_concurrent_sessions=2 WHERE uid='P03-A'")
+            conn.commit()
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertIsNone(db.get_transaction(first)["ended_at"])
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+        self.assertNotEqual(first, second)
+
     def test_limit_applies_across_charge_points(self):
         db.upsert_charge_point("P03-B", status="Available", connector_count=1)
         db.discover_connector("P03-B", 1, status="Available")
