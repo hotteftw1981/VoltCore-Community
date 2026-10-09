@@ -2918,10 +2918,6 @@ async def api_rfid_local_list():
     for item in states:
         item["online"]=is_connected(item.get("id"))
         item["authorized_count"]=len(db.rfid_local_list_full(item.get("id")))
-        if item.get("station_entry_count") is None and item.get("status")=="Synchronisiert" and item.get("last_update_type")=="Full":
-            response=str(item.get("last_response") or "").strip().casefold()
-            if response.startswith("accepted"):
-                item["station_entry_count"]=item["authorized_count"]
         item["backend_authorized_count"]=authorized
     return {"version":version,"authorized_count":authorized,"pending_count":sum(1 for x in states if x.get("pending")),"states":states}
 
