@@ -215,6 +215,7 @@ def create_backup(label=None, keep_local=True):
             "product": db.branding_settings().get("product_name") or "VoltCore Community",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "database": "database/ocpp.sqlite3",
+            "database_sha256": _sha256(snapshot),
             "data_root": "data/",
             "excluded": ["backups/", ".backup_external_password", ".smtp_password", ".update_github_token"],
         }
@@ -230,6 +231,8 @@ def create_backup(label=None, keep_local=True):
                 raise RuntimeError(f"ZIP-Integritätsprüfung fehlgeschlagen: {bad}")
             if "database/ocpp.sqlite3" not in zf.namelist() or "manifest.json" not in zf.namelist():
                 raise RuntimeError("Backup ist unvollständig.")
+        # Verify the completed archive before atomically publishing it.
+        validate_restore(tmp_zip)
         tmp_zip.replace(final_path)
         try:
             os.chmod(final_path,0o600)
@@ -555,6 +558,16 @@ def validate_restore(path: Path):
         total=sum(i.file_size for i in zf.infolist())
         if total > MAX_RESTORE_BYTES:
             raise ValueError("Entpackte Backup-Daten sind zu groß.")
+        # Reject duplicate paths and symlinks before any extraction.
+        if len(names) != len(set(names)):
+            raise ValueError("Backup enthält doppelte Dateipfade.")
+        for member in zf.infolist():
+            if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError("Backup enthält symbolische Links.")
+        database = zf.read("database/ocpp.sqlite3")
+        expected = manifest.get("database_sha256")
+        if expected and hashlib.sha256(database).hexdigest() != expected:
+            raise ValueError("Datenbank-Prüfsumme stimmt nicht überein.")
     return manifest
 
 
