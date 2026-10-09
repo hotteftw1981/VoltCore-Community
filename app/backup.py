@@ -189,7 +189,7 @@ def _sqlite_snapshot(target: Path):
 
 
 def _persistent_files():
-    excluded_roots = {BACKUP_DIR.resolve()}
+    excluded_roots = {BACKUP_DIR.resolve(), (db.DATA_DIR / "imports").resolve(), (db.DATA_DIR / "migration_uploads").resolve()}
     excluded_files = {db.DB_PATH.resolve(), CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}
     for path in db.DATA_DIR.rglob("*"):
         if not path.is_file():
