@@ -15,7 +15,7 @@
 - [ ] Confirm the public-repository history policy. Consider publishing a clean Community-only repository/history if prior commits contain Pro-exclusive IP or secrets.
 - [ ] Confirm control of every shared original code component for **independent commercial licensing** of Pro/Cloud. Publishing one owned version under AGPL does not by itself prevent the owner separately licensing the same owned code, but outside contributions generally require additional rights for proprietary reuse.
 - [ ] Decide on contributor terms (e.g. DCO plus explicit contributor agreement/assignment or separate commercial licensing permission as legally appropriate) **before accepting third-party PRs intended for Pro/Cloud reuse**.
-- [ ] Decide appropriate copyright notices and whether DRK OV Schwelm or another entity is an actual rights holder, not just a developer credit.
+- [ ] Confirm appropriate copyright notices naming Patrick Garbe only where ownership is legally established; investigate any other potentially relevant rights holders separately.
 - [ ] Check public hosting defaults, configuration, TLS/WSS instructions, data handling and security disclosures; the RC was not live field-tested with chargers.
 - [ ] Obtain legal review of licensing, trademark and third-party rights before changing repository visibility.
 
