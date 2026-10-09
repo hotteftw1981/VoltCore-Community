@@ -66,6 +66,15 @@ The application should:
 
 LiveView / Kiosk is explicitly **not part of VoltCore Community**. This applies to all former variants, including Standard, Pro and People.
 
-The Community edition now includes additional neutral modules restored from the VoltCore 0.9.7.74 baseline, including Smart Charging, Engagement, Cost Centers, imports and read-only Fleet Integration. Community-specific defaults and privacy/security constraints still take precedence.
+The Community edition retains neutral modules such as Smart Charging, Cost Centers, imports, and read-only Fleet Integration. Engagement (achievements, XP, events, leaderboards, rewards, bonuses, vouchers), the personal PIN charging portal, and RFID self-service are NOT Community features. The backend is the only account-based management area. Historical tables may remain for safe migrations, but Community must never re-enable the removed features.
 
 This repository remains private while the first Community build is being prepared and verified.
+
+## P02 security and scope regression contract
+
+- Creating and approving charging users must not create a portal PIN or activate gamification.
+- Admin rights are required for write requests to charging users, RFID, vehicles and charge points.
+- Viewer accounts cannot write operational data; regular backend accounts can read permitted operational data but cannot mutate those management collections.
+- The personal PIN portal, its API routes and the engagement/bonus management routes must not exist.
+- Legacy database rows are preserved during migration rather than destructively dropped; portal and XP flags are disabled on Community database initialization.
+- Before a release, the P02 automated checks and Community CI must pass. No Pro-only modules should be revived by merges.
