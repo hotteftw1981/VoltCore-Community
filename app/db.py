@@ -1,3 +1,4 @@
+import math
 import os
 import json
 import sqlite3
@@ -2554,6 +2555,42 @@ def authorization_decision(rfid,charge_point_id=None):
     if budget and budget.get("status") in {"warning","critical","exceeded"}:
         reason=f"Autorisierung gültig; Monatslimit {budget.get('percent')} %"
     return {"accepted":True,"ocpp_status":"Accepted","reason":reason,"user":user,"budget":budget}
+
+def session_data_quality(limit=100, charge_point_id=None):
+    """Read-only anomaly report; never infer or rewrite missing meter values."""
+    limit=max(1,min(500,int(limit)))
+    with _lock,_connect() as conn:
+        condition="WHERE charge_point_id=?" if charge_point_id else ""
+        args=[str(charge_point_id)] if charge_point_id else []
+        rows=conn.execute(
+            "SELECT id,charge_point_id,connector_id,status,started_at,ended_at,energy_kwh,meter_start_kwh,last_meter_kwh FROM transactions "
+            +condition+" ORDER BY id DESC LIMIT ?",(*args,limit)).fetchall()
+    items=[]
+    for row in rows:
+        flags=[]
+        start=_parse_iso_utc(row["started_at"])
+        end=_parse_iso_utc(row["ended_at"])
+        if not start:
+            flags.append("invalid_start_timestamp")
+        if row["ended_at"] and not end:
+            flags.append("invalid_end_timestamp")
+        if start and end and end<start:
+            flags.append("end_before_start")
+        if row["status"]=="Active" and row["ended_at"]:
+            flags.append("active_with_end_timestamp")
+        if row["status"]!="Active" and not row["ended_at"]:
+            flags.append("closed_without_end_timestamp")
+        energy=row["energy_kwh"]
+        if energy is not None and (not math.isfinite(float(energy)) or float(energy)<0):
+            flags.append("invalid_energy")
+        first,last=row["meter_start_kwh"],row["last_meter_kwh"]
+        if first is not None and last is not None and float(last)<float(first)-0.000001:
+            flags.append("meter_rollback")
+        if flags:
+            items.append({"transaction_id":int(row["id"]),"charge_point_id":row["charge_point_id"],
+                          "connector_id":int(row["connector_id"]),"flags":flags})
+    return {"checked":len(rows),"flagged":len(items),"items":items,"read_only":True}
+
 
 def get_transaction(tx_id):
     with _lock, _connect() as conn:
