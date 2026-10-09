@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
       - name: Include all branches and tags
         run: |
-          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' --prune
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' '+refs/pull/*/head:refs/remotes/pull/*' --prune
           echo "Refs: $(git for-each-ref --format='%(refname)' | wc -l)"
           echo "Unique commits: $(git rev-list --all | wc -l)"
       - name: Scan entire reachable Git history for secrets
@@ -38,6 +38,10 @@ jobs:
           print("Potential secret finding count:",len(findings))
           for (path,rule),count in sorted(Counter((item.get("File","?"),item.get("RuleID","?")) for item in findings).items()):
               print("Finding group:",path,"rule:",rule,"count:",count)
+          import hashlib
+          for item in findings:
+              secret=str(item.get("Secret") or "")
+              print("Details:", "commit="+str(item.get("Commit",""))[:12], "line="+str(item.get("StartLine","")), "match_length="+str(len(secret)), "digest="+hashlib.sha256(secret.encode()).hexdigest()[:12], "description="+str(item.get("Description",""))[:70])
           if findings:
               print("::warning::Potential historical secrets detected. Do not publish before verified cleanup.")
           PY
