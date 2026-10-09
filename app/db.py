@@ -3744,8 +3744,10 @@ def list_users_rich():
         result=[]
         for row in rows:
             item=dict(row)
-            item.pop("portal_pin_hash", None)
-            item["portal_pin_set"] = bool(item.get("portal_pin_set_at"))
+            for legacy in ("portal_pin_hash","portal_pin_set_at","portal_enabled",
+                           "portal_last_login_at","gamification_enabled",
+                           "gamification_seen_award_id","gamification_seen_level"):
+                item.pop(legacy,None)
             item["charge_access_mode"]=_normalize_charge_access_mode(item.get("charge_access_mode"))
             item["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(item["id"],)).fetchall()]
             cost_row=conn.execute("""SELECT COALESCE(SUM(COALESCE(t.cost_cents,0)),0)
@@ -3816,8 +3818,10 @@ def user_details(user_id, transaction_page=1, transaction_page_size=10):
             tx["timing"]=_transaction_time_breakdown_conn(conn,int(tx["id"])) or {"charging_seconds":float(tx.get("charging_seconds") or 0),"stand_seconds":float(tx.get("stand_seconds") or 0),"connection_seconds":float(tx.get("connection_seconds") or 0)}
         st=conn.execute("""SELECT COUNT(*) sessions,COALESCE(SUM(energy_kwh),0) energy,COALESCE(SUM(COALESCE(cost_cents,0)),0)/100.0 costs,MAX(started_at) last_used_at FROM transactions WHERE user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?)))""",(user_id,user_id,user_id)).fetchone()
         user=dict(u)
-        user.pop("portal_pin_hash", None)
-        user["portal_pin_set"] = bool(user.get("portal_pin_set_at"))
+        for legacy in ("portal_pin_hash","portal_pin_set_at","portal_enabled",
+                       "portal_last_login_at","gamification_enabled",
+                       "gamification_seen_award_id","gamification_seen_level"):
+            user.pop(legacy,None)
         user["charge_access_mode"]=_normalize_charge_access_mode(user.get("charge_access_mode"))
         user["allowed_charge_point_ids"]=[str(r[0]) for r in conn.execute("SELECT charge_point_id FROM user_charge_point_access WHERE user_id=? ORDER BY charge_point_id",(int(user_id),)).fetchall()]
         used=_user_month_energy_conn(conn,user_id,start_utc,end_utc)
