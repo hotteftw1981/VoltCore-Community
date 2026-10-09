@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7.93 — Community scope cleanup
+
+- Removed unused legacy Pro achievement seed catalog and private PIN portal functions.
+- No Community charging API or persistent database schema removed.
+- Community CI and P03 charging regressions validated changes.
+
 ## 0.9.7.92 — Update-Center correction
 
 - Public GitHub Releases can be checked without a GitHub token; private repositories still need a read token.
