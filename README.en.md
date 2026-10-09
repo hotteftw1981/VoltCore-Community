@@ -144,7 +144,7 @@ The repository is currently private. Licensing and publication approval are requ
 
 VoltCore Community is intended to be the **free VoltCore edition**. 🆓💙
 
-The public software license has not yet been selected. **Without a published license, copying, modifying, and redistributing the source code are not automatically permitted.** A license decision is required before making this repository public. Until then, this private development repository is not a final licensing statement. ⚖️
+**Proposed public release license:** GNU AGPLv3 (`AGPL-3.0-only`). Publication remains subject to the rights review. **Without a published license, copying, modifying, and redistributing the source code are not automatically permitted.** A license decision is required before making this repository public. Until then, this private development repository is not a final licensing statement. ⚖️
 
 That distinction is intentional:
 
