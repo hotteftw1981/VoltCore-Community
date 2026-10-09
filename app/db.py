@@ -2888,6 +2888,39 @@ def local_list_states():
         conn.commit()
         return result
 
+def local_list_diagnostics():
+    """Read-only, conservative assessment: an accepted send is not proof of an installed list."""
+    result = []
+    for row in local_list_states():
+        item = dict(row)
+        backend = int(item.get("backend_version") or 1)
+        raw_station = item.get("station_version")
+        try:
+            station = int(raw_station) if raw_station is not None else None
+        except (TypeError, ValueError):
+            station = None
+        supported = item.get("supported")
+        pending = bool(item.get("pending"))
+        response = str(item.get("last_response") or "").strip().lower()
+        if supported == 0:
+            code = "unsupported"
+        elif station is None or station < 0:
+            code = "unknown"
+        elif station > backend:
+            code = "station_ahead"
+        elif pending or station < backend:
+            code = "out_of_sync"
+        elif response and response not in ("accepted",):
+            code = "needs_verification"
+        else:
+            code = "version_match"
+        item["sync_diagnostic"] = code
+        item["sync_verified"] = code == "version_match" and supported == 1
+        item["station_version_known"] = station is not None and station >= 0
+        result.append(item)
+    return result
+
+
 def local_list_uids_for_user(user_id):
     with _lock,_connect() as conn:
         return [str(r[0]) for r in conn.execute("SELECT uid FROM rfid_cards WHERE user_id=?",(int(user_id),)).fetchall()]
