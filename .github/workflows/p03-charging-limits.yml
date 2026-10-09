@@ -4,7 +4,7 @@ on:
     branches:
       - feature/p04-rfid-sync-diagnostics
   pull_request:
-    branches: [fix/p02-scope-and-access-control, develop, main]
+    branches: [feature/p03-simultaneous-charging-limits, fix/p02-scope-and-access-control, develop, main]
   workflow_dispatch:
 permissions:
   contents: read
