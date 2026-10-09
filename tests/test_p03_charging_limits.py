@@ -141,6 +141,31 @@ class ChargingLimits(unittest.TestCase):
         self.assertNotEqual(db.get_transaction(first)["status"], "Active")
         self.assertEqual(db.get_transaction(second)["status"], "Active")
 
+    def test_lowering_limits_does_not_stop_existing_transactions(self):
+        db.set_charging_session_limit("user", self.user, 3)
+        card_id = db.get_rfid_card(1)["id"]
+        db.set_charging_session_limit("rfid", card_id, 3)
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 1))
+        self.assertTrue(db.set_charging_session_limit("rfid", card_id, 1))
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.get_transaction(second)["status"], "Active")
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 2)
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=3)
+
+    def test_failed_admission_does_not_mutate_connector_ownership(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "USER_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+        self.assertEqual(db.get_charge_point("P03")["transaction_id"], first)
+        with db._connect() as conn:
+            row = conn.execute("SELECT transaction_id,status FROM connectors WHERE charge_point_id='P03' AND connector_id=2").fetchone()
+            self.assertIsNone(row["transaction_id"])
+            count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL").fetchone()[0]
+        self.assertEqual(count, 1)
+
     def test_simultaneous_two_threads_one_slot(self):
         gate = threading.Barrier(2, timeout=5)
         def start(connector):
