@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.7.90 — Community release candidate
+
+- Community-only scope enforced; no personal PIN portal, XP or gamification UI.
+- Concurrent charging limits per charging user and RFID.
+- RFID local-list diagnostics, OCPP connector and charging session data quality improvements.
+- Reporting and backup integrity checks, release regression coverage and access-control improvements.
+- Improved tariff row readability, parallel limit form layout and RFID notes editor.
+- Standalone Portainer source build supported via `pull_policy: build`.
+- Known limitation: additional physical Amtron/Amedio field tests deliberately waived for this release candidate.
+
+
 All notable changes to VoltCore Community are documented here.
 
 ## 0.9.7.75 — Community scope correction
