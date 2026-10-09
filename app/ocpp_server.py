@@ -158,12 +158,23 @@ async def sync_local_list(cp_id, force_full=False, reason="Automatisch"):
         if low=="accepted":
             offline_cfg=await _ensure_offline_authorization(cp,cp_id)
             cfg_text="OfflineAuth="+str(offline_cfg.get("status") or "Unbekannt")+(" (read-only)" if offline_cfg.get("readonly") else "")
-            effective_station_version=station_version if station_version==-1 else backend_version
+            # Accepted confirms request acceptance, not the station's installed
+            # version or number of stored entries. Always read back the version.
+            verified_version=None
+            try:
+                verified_version=await _local_list_version_from_station(cp)
+            except (asyncio.TimeoutError, Exception) as exc:
+                db.add_event(cp_id,"GetLocalListVersion",f"readback_after_send={type(exc).__name__}",direction="OUT")
+            confirmed=verified_version==backend_version
             response_text=status+("; "+cfg_text if cfg_text else "")
-            if station_version==-1:
-                response_text+="; GetLocalListVersion=-1 widerspricht erfolgreichem SendLocalList"
-            db.set_local_list_state(cp_id,station_version=effective_station_version,station_entry_count=len(entries),pending=False,supported=True,status="Synchronisiert",update_type=update_type,response=response_text,synced=True)
-            return {"ok":True,"status":"Synchronisiert","version":backend_version,"station_version":effective_station_version,"update_type":update_type,"entries":len(entries),"offline_configuration":offline_cfg}
+            if not confirmed:
+                response_text+="; Versionsabfrage nach SendLocalList nicht bestätigt"
+            db.set_local_list_state(cp_id,station_version=verified_version if verified_version is not None else station_version,
+                pending=not confirmed,supported=True,status="Synchronisiert" if confirmed else "Prüfung erforderlich",
+                update_type=update_type,response=response_text,synced=confirmed)
+            return {"ok":confirmed,"accepted":True,"status":"Synchronisiert" if confirmed else "Prüfung erforderlich",
+                "version":backend_version,"station_version":verified_version,"update_type":update_type,
+                "entries_sent":len(entries),"offline_configuration":offline_cfg}
         if low=="notsupported":
             db.set_local_list_state(cp_id,station_version=station_version,pending=False,supported=False,status="Nicht unterstützt",update_type=update_type,response=status)
             return {"ok":False,"supported":False,"status":"Nicht unterstützt","update_type":update_type}
