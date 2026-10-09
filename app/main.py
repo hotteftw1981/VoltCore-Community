@@ -2914,7 +2914,7 @@ async def delete_rfid(card_id: int):
 
 @app.get("/api/rfid/local-list")
 async def api_rfid_local_list():
-    states=db.local_list_states(); version=db.rfid_local_list_version(); authorized=len(db.rfid_local_list_full())
+    states=db.local_list_diagnostics(); version=db.rfid_local_list_version(); authorized=len(db.rfid_local_list_full())
     for item in states:
         item["online"]=is_connected(item.get("id"))
         item["authorized_count"]=len(db.rfid_local_list_full(item.get("id")))
