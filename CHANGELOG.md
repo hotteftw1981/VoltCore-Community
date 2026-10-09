@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7.94 — Community-only API reduction
+
+- Remove 25 unused legacy Pro achievement, event and bonus/voucher admin functions.
+- Retain schema and shared constants required for existing installations.
+- Full Community CI and concurrent charging regression suite passed before merging.
+
 ## 0.9.7.93 — Community scope cleanup
 
 - Removed unused legacy Pro achievement seed catalog and private PIN portal functions.
