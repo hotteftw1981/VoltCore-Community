@@ -3,6 +3,10 @@
 {% block heading %}Benutzer / RFID{% endblock %}
 {% block subtitle %}Benutzerverwaltung, RFID-Lifecycle, Fahrzeuge und Ladebudgets{% endblock %}
 {% block content %}
+<style>
+/* P02: management writes are admin-only, matching the server-side checks. */
+body[data-role="user"] .write-action { display: none !important; }
+</style>
 <section class="stats six rfid-stats">
   <div class="stat"><span>Benutzer</span><b id="count">0</b><small>registriert</small></div>
   <div class="stat"><span>RFID-Karten</span><b id="cards">0</b><small>registriert</small></div>
