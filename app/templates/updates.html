@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Update-Center - {{ branding.product_name }}{% endblock %}
+{% block heading %}Update-Center{% endblock %}
+{% block subtitle %}Freigegebene Versionen erkennen, Changelog prüfen und kontrolliert installieren{% endblock %}
+{% block content %}
+<section class="stats three">
+  <div class="stat"><span>Installiert</span><b>V{{ app_version }}</b><small>aktueller Container</small></div>
+  <div class="stat"><span>Verfügbar</span><b id="latestVersion">—</b><small id="latestHint">Noch nicht geprüft</small></div>
+  <div class="stat"><span>Update-Status</span><b id="updateState">—</b><small id="lastCheck">—</small></div>
+</section>
+<section class="settings-grid">
+  <div class="panel">
+    <div class="panelhead"><div><h2>GitHub Release-Prüfung</h2><span>Öffentliche GitHub-Releases werden ohne Token geprüft. Bei privaten Repositories ist ein Lesetoken optional nötig.</span></div><span id="githubState" class="state">—</span></div>
+    <form id="updateSettingsForm">
+      <label class="toggle-line"><input id="checkEnabled" type="checkbox"><span><b>Automatisch nach freigegebenen Updates suchen</b><small>Alle sechs Stunden und zusätzlich beim Öffnen dieser Seite.</small></span></label>
+      <label>GitHub Fine-grained Token (nur für private Repositories)<input id="githubToken" type="password" autocomplete="new-password" placeholder="Leer lassen = vorhandenen Token beibehalten"></label>
+      <label class="toggle-line"><input id="clearGithubToken" type="checkbox"><span><b>Gespeicherten GitHub-Token entfernen</b></span></label>
+      <div class="detail-note">Nur während der privaten Entwicklungsphase nötig. Der Token benötigt lediglich Lesezugriff auf <code>{{ update_repository }}</code>. Ein Schreib-Token ist nicht erforderlich.</div>
+      <h3 style="margin-top:22px">Optional: Portainer-Webhook</h3>
+      <label>Portainer Stack-Webhook<input id="portainerWebhook" type="password" autocomplete="off" placeholder="https://portainer:9443/api/stacks/webhooks/..."></label>
+      <label class="toggle-line"><input id="clearPortainerWebhook" type="checkbox"><span><b>Gespeicherten Portainer-Webhook entfernen</b></span></label>
+      <label class="toggle-line"><input id="portainerTlsVerify" type="checkbox"><span><b>TLS-Zertifikat des Portainers prüfen</b><small>Nur bei internem selbstsigniertem Zertifikat deaktivieren.</small></span></label>
+      <div class="detail-note">Updates erkennen funktioniert ohne Portainer. Für die Installation bitte den jeweiligen Docker-/Portainer-Stack manuell auf die aktuelle Release-Version aktualisieren. Ein Webhook ist keine Voraussetzung.</div>
+      <div id="settingsMessage" class="form-message"></div>
+      <div class="form-actions"><button class="secondary" id="checkNow" type="button">↻ Jetzt prüfen</button><button class="primary" type="submit">Einstellungen speichern</button></div>
+    </form>
+  </div>
+  <div class="panel">
+    <div class="panelhead"><div><h2 id="releaseTitle">Freigegebenes Update</h2><span id="releaseMeta">Noch keine Release-Daten geladen.</span></div><span id="releaseBadge" class="state">—</span></div>
+    <div id="releaseNotes" class="detail-note" style="white-space:pre-wrap;max-height:360px;overflow:auto">Nach der ersten erfolgreichen Prüfung erscheint hier der Changelog.</div>
+    <div class="detail-note" style="margin-top:14px"><b>Sicherheitsnetz:</b> Vor einem manuellen Update im Menü „Backups“ ein Backup erstellen. Danach in Portainer den Git-Stack auf main mit „Pull and redeploy“ aktualisieren oder bei Docker Compose den dokumentierten Aktualisierungsvorgang verwenden.</div>
+    <div id="installMessage" class="form-message"></div>
+    <div class="form-actions"><a id="releaseLink" class="secondary" href="https://github.com/hotteftw1981/VoltCore-Community/releases" target="_blank" rel="noopener noreferrer">Releases ansehen</a><button id="installUpdate" class="primary" type="button" disabled>Update-Anleitung anzeigen</button></div>
+  </div>
+</section>
+<div class="modal" id="updateConfirmModal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="updateConfirmTitle" style="max-width:560px">
+    <div class="panelhead modal-title-row">
+      <div><h2 id="updateConfirmTitle">Update-Anleitung</h2><span id="updateConfirmSubtitle">Manuelle Installation nach Backup</span></div>
+      <button class="modal-close" id="updateConfirmClose" type="button" aria-label="Schließen">&times;</button>
+    </div>
+    <div class="detail-note" style="margin-top:14px">
+      <b id="updateConfirmVersion">—</b><br>
+      Bitte zuerst unter Backups eine Sicherung erstellen. Danach in Portainer den Git-Stack (refs/heads/main) mit Pull and redeploy aktualisieren. Ohne Portainer die Docker-Compose-Anleitung verwenden.
+    </div>
+    <div class="form-actions" style="margin-top:18px">
+      <button class="secondary" id="updateConfirmCancel" type="button">Abbrechen</button>
+      <button class="primary" id="updateConfirmRun" type="button">GitHub-Release öffnen</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $=id=>document.getElementById(id);
+let statusData=null;
+const fmt=v=>v?window.ocppLocalTime(v):'—';
+function renderStatus(d){
+  statusData=d||{};
+  $('latestVersion').textContent=d.latest_version?('V'+d.latest_version):'—';
+  $('latestHint').textContent=d.release_name||d.message||'Noch nicht geprüft';
+  $('lastCheck').textContent=d.checked_at?('geprüft '+fmt(d.checked_at)):'noch nicht geprüft';
+  $('githubState').textContent=d.configured?'Verbunden':'Nicht eingerichtet';
+  $('githubState').className='state '+(d.configured?'green':'');
+  const available=!!d.update_available;
+  $('updateState').textContent=available?'Update verfügbar':(d.up_to_date?'Aktuell':(d.ahead_of_release?'Entwicklungsstand':'Nicht geprüft'));
+  $('releaseBadge').textContent=available?'Verfügbar':(d.latest_version?'Aktuell':'—');
+  $('releaseBadge').className='state '+(!available&&d.latest_version?'green':'');
+  $('releaseTitle').textContent=d.latest_version?('V'+d.latest_version):'Freigegebenes Update';
+  $('releaseMeta').textContent=[d.published_at?fmt(d.published_at):'',d.release_url?'GitHub Release':''].filter(Boolean).join(' · ')||'Noch keine Release-Daten geladen.';
+  $('releaseNotes').textContent=d.notes||d.message||'Nach der ersten erfolgreichen Prüfung erscheint hier der Changelog.';
+  $('installUpdate').disabled=!available;
+  $('releaseLink').href=d.release_url||'https://github.com/hotteftw1981/VoltCore-Community/releases';
+  $('installUpdate').textContent=available?('Update-Anleitung V'+d.latest_version):'Kein Update erforderlich';
+}
+async function loadSettings(){
+  const r=await fetch('/api/updates/settings',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(!r.ok)return;
+  $('checkEnabled').checked=!!d.check_enabled;$('portainerTlsVerify').checked=!!d.portainer_tls_verify;
+  $('githubState').textContent=d.github_token_configured?'Privater Zugriff eingerichtet':'Ohne Token';$('githubState').className='state '+(d.github_token_configured?'green':'');
+  $('githubToken').placeholder=d.github_token_configured?'Token gespeichert – leer lassen zum Beibehalten':'GitHub Fine-grained Token';
+  $('portainerWebhook').placeholder=d.portainer_webhook_configured?'Webhook gespeichert – leer lassen zum Beibehalten':'https://portainer:9443/api/stacks/webhooks/...';
+}
+async function check(force=true){
+  const m=$('installMessage');m.textContent='Prüfe GitHub Release …';m.className='form-message';
+  const r=await fetch('/api/updates/status?force='+(force?'1':'0'),{cache:'no-store'}),d=await r.json().catch(()=>({}));
+  if(!r.ok){m.textContent=d.detail||'Update-Prüfung fehlgeschlagen.';m.className='form-message error';return}
+  m.textContent='';renderStatus(d);
+}
+$('updateSettingsForm').onsubmit=async e=>{
+  e.preventDefault();const m=$('settingsMessage');m.textContent='Speichere …';m.className='form-message';
+  const payload={check_enabled:$('checkEnabled').checked,github_token:$('githubToken').value||null,clear_github_token:$('clearGithubToken').checked,portainer_webhook:$('portainerWebhook').value||null,clear_portainer_webhook:$('clearPortainerWebhook').checked,portainer_tls_verify:$('portainerTlsVerify').checked};
+  const r=await fetch('/api/updates/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));
+  if(!r.ok){m.textContent=d.detail||'Einstellungen konnten nicht gespeichert werden.';m.className='form-message error';return}
+  $('githubToken').value='';$('portainerWebhook').value='';$('clearGithubToken').checked=false;$('clearPortainerWebhook').checked=false;
+  m.textContent='Update-Einstellungen gespeichert.';m.className='form-message success';await loadSettings();await check(true);
+};
+$('checkNow').onclick=()=>check(true);
+function closeUpdateConfirm(){$('updateConfirmModal').hidden=true}
+$('installUpdate').onclick=()=>{
+  const target=statusData?.latest_version;if(!target||!statusData?.update_available)return;
+  $('updateConfirmVersion').textContent='V{{ app_version }} → V'+target;
+  $('updateConfirmSubtitle').textContent='Freigegebenes Update V'+target;
+  $('updateConfirmModal').hidden=false;
+  $('updateConfirmRun').focus();
+};
+$('updateConfirmClose').onclick=closeUpdateConfirm;
+$('updateConfirmCancel').onclick=closeUpdateConfirm;
+$('updateConfirmModal').onclick=e=>{{}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('updateConfirmModal').hidden)closeUpdateConfirm()});
+$('updateConfirmRun').onclick=()=>{
+  const url=statusData?.release_url;
+  closeUpdateConfirm();
+  if(url && /^https:\/\/github\.com\//.test(url))window.open(url,'_blank','noopener,noreferrer');
+};
+Promise.all([loadSettings(),check(false)]);
+</script>
+{% endblock %}

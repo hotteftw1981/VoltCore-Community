@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Abrechnung & Reporting - {{ branding.product_name }}{% endblock %}
+{% block heading %}Abrechnung & Reporting{% endblock %}
+{% block subtitle %}Energie, Kosten und Nachweise nach Zeitraum und Zuordnung{% endblock %}
+{% block content %}
+<section class="reporting-toolbar panel">
+  <div class="report-periods" id="periodButtons">
+    <button type="button" data-period="current_month" class="active">Dieser Monat</button>
+    <button type="button" data-period="previous_month">Letzter Monat</button>
+    <button type="button" data-period="current_year">Dieses Jahr</button>
+    <button type="button" data-period="last12">12 Monate</button>
+    <button type="button" data-period="all">Gesamt</button>
+    <button type="button" data-period="custom">Zeitraum…</button>
+  </div>
+  <div class="report-custom-dates" id="customDates" hidden>
+    <label>Von<input type="date" id="dateFrom"></label><label>Bis<input type="date" id="dateTo"></label><button type="button" class="primary" id="applyDates">Anwenden</button>
+  </div>
+  <div class="report-filter-grid">
+    <label>Benutzer<select id="filterUser"><option value="">Alle Benutzer</option></select></label>
+    <label>Fahrzeug<select id="filterVehicle"><option value="">Alle Fahrzeuge</option></select></label>
+    <label>Ladepunkt<select id="filterCp"><option value="">Alle Ladepunkte</option></select></label>
+    <label>Kostenstelle<select id="filterCostCenter"><option value="">Alle Kostenstellen</option><option value="__none__">Ohne Kostenstelle</option></select></label>
+    <label>Abrechnungsgruppe<select id="filterBilling"><option value="">Alle Gruppen</option><option value="__none__">Ohne Gruppe</option></select></label>
+    <button type="button" class="secondary report-reset" id="resetFilters">Filter zurücksetzen</button>
+  </div>
+</section>
+
+<section class="stats report-kpis">
+  <div class="stat"><span>Abgeschlossene Sessions</span><b id="sessions">0</b><small id="periodLabel">—</small></div>
+  <div class="stat"><span>Energie</span><b id="energy">0 kWh</b><small>im gewählten Zeitraum</small></div>
+  <div class="stat"><span>Kosten</span><b id="cost">0,00 €</b><small>aus eingefrorenen Tarifdaten</small></div>
+  <div class="stat"><span>Ø Preis</span><b id="avgPrice">—</b><small>für Sessions mit Kostenwert</small></div>
+  <div class="stat"><span>Kostenabdeckung</span><b id="coverage">100 %</b><small id="coverageDetail">0 von 0 Sessions</small></div>
+</section>
+
+<div class="report-warning" id="reportWarning" hidden></div>
+
+<section class="reporting-actions panel">
+  <div><h2>Abrechnungsnachweise</h2><p>Die historischen Kosten stammen aus dem beim Ladevorgang gespeicherten Tarif-Snapshot. Spätere Tarifänderungen verändern alte Berichte nicht.</p></div>
+  <div class="report-action-buttons"><button type="button" class="secondary" id="printReport">Drucken</button><a class="secondary button" id="csvExport" href="#">↓ Einzelnachweis CSV</a><a class="primary button" id="pdfExport" href="#">↓ Abrechnungsbericht PDF</a></div>
+</section>
+
+<section class="reporting-grid">
+  <div class="panel report-trend-panel"><div class="panelhead"><div><h2>Monatsverlauf</h2><span>Energie & Kosten</span></div></div><div id="monthTrend" class="report-month-trend"><div class="empty">Noch keine Daten.</div></div></div>
+  <div class="panel report-quality-panel"><div class="panelhead"><div><h2>Zuordnungsqualität</h2><span>für saubere Abrechnung</span></div></div><div class="report-quality" id="quality"></div></div>
+</section>
+
+<section class="report-tabs panel">
+  <div class="report-tab-buttons" id="reportTabs">
+    <button type="button" data-tab="costcenter" class="active">Kostenstellen</button>
+    <button type="button" data-tab="user">Benutzer</button>
+    <button type="button" data-tab="vehicle">Fahrzeuge</button>
+    <button type="button" data-tab="cp">Ladepunkte</button>
+    <button type="button" data-tab="billing">Abrechnungsgruppen</button>
+    <button type="button" data-tab="sessions">Einzelladungen</button>
+  </div>
+  <div id="reportTable"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(()=>{
+const $=id=>document.getElementById(id), nf=new Intl.NumberFormat('de-DE',{maximumFractionDigits:2}), money=new Intl.NumberFormat('de-DE',{style:'currency',currency:'EUR'});
+let period='current_month', currentTab='costcenter', data=null, optionsLoaded=false;
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function params(){const p=new URLSearchParams({period});if(period==='custom'){if($('dateFrom').value)p.set('date_from',$('dateFrom').value);if($('dateTo').value)p.set('date_to',$('dateTo').value)}[['user_id','filterUser'],['vehicle_id','filterVehicle'],['charge_point_id','filterCp'],['cost_center','filterCostCenter'],['billing_group_id','filterBilling']].forEach(([k,id])=>{if($(id).value)p.set(k,$(id).value)});return p}
+function fillOptions(opts){if(optionsLoaded)return;const add=(id,rows,value,label)=>{const el=$(id),base=Array.from(el.options).map(o=>({v:o.value,t:o.textContent}));el.innerHTML=base.map(x=>`<option value="${esc(x.v)}">${esc(x.t)}</option>`).join('')+rows.map(r=>`<option value="${esc(value(r))}">${esc(label(r))}</option>`).join('')};add('filterUser',opts.users||[],r=>r.id,r=>r.name);add('filterVehicle',opts.vehicles||[],r=>r.id,r=>r.name+(r.plate?' · '+r.plate:''));add('filterCp',opts.charge_points||[],r=>r.id,r=>r.id);add('filterCostCenter',(opts.cost_centers||[]).map(x=>({name:x})),r=>r.name,r=>r.name);add('filterBilling',opts.billing_groups||[],r=>r.id,r=>r.name+(r.cost_center?' · '+r.cost_center:''));optionsLoaded=true}
+function renderSummary(){const s=data.summary;$('sessions').textContent=s.sessions;$('energy').textContent=formatEnergyKwh(s.energy_kwh,2,3);$('cost').textContent=money.format(s.cost_eur);$('avgPrice').textContent=s.avg_price_cents_per_kwh==null?'—':nf.format(s.avg_price_cents_per_kwh)+' ct/kWh';$('coverage').textContent=nf.format(s.cost_coverage_pct)+' %';$('coverageDetail').textContent=`${s.cost_known_sessions} von ${s.sessions} Sessions`;$('periodLabel').textContent=data.period.label;const warn=$('reportWarning');if(s.cost_missing_sessions){warn.hidden=false;warn.innerHTML=`<b>Abrechnung noch nicht vollständig:</b> ${s.cost_missing_sessions} Session${s.cost_missing_sessions===1?'':'s'} ohne gespeicherten Kostenwert. Energie und Sessionanzahl sind enthalten, die Kostensumme enthält diese Vorgänge nicht.`}else warn.hidden=true}
+function renderQuality(){const s=data.summary,total=Math.max(1,s.sessions);const rows=[['Kostenwert vorhanden',s.cost_known_sessions,s.sessions-s.cost_known_sessions],['Benutzer zugeordnet',s.sessions-s.unassigned_user_sessions,s.unassigned_user_sessions],['Fahrzeug zugeordnet',s.sessions-s.unassigned_vehicle_sessions,s.unassigned_vehicle_sessions],['Kostenstelle zugeordnet',s.sessions-s.unassigned_cost_center_sessions,s.unassigned_cost_center_sessions]];$('quality').innerHTML=rows.map(([label,ok,missing])=>`<div class="quality-row"><div><b>${esc(label)}</b><span>${ok} / ${s.sessions}</span></div><div class="quality-bar"><i style="width:${Math.min(100,ok/total*100)}%"></i></div><small class="${missing?'warn':''}">${missing?missing+' fehlt':'vollständig'}</small></div>`).join('')}
+function renderTrend(){const rows=data.by_month||[],max=Math.max(1,...rows.map(r=>Number(r.energy_kwh||0)));$('monthTrend').innerHTML=rows.length?rows.map(r=>`<div class="month-row"><span>${esc(r.label)}</span><div class="month-bar"><i style="width:${Number(r.energy_kwh||0)/max*100}%"></i></div><b>${formatEnergyKwh(r.energy_kwh,2,3)}</b><strong>${money.format(r.cost_eur)}</strong></div>`).join(''):'<div class="empty">Für diesen Zeitraum gibt es noch keine abgeschlossenen Sessions.</div>'}
+function tabRows(){return currentTab==='user'?data.by_user:currentTab==='vehicle'?data.by_vehicle:currentTab==='cp'?data.by_charge_point:currentTab==='billing'?data.by_billing_group:data.by_cost_center}
+const dtFmt=new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}),timeFmt=new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',hour:'2-digit',minute:'2-digit'});
+function fmtDateTime(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':dtFmt.format(d)}
+function fmtTime(v){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':timeFmt.format(d)}
+function fmtDuration(sec){sec=Math.max(0,Number(sec||0));if(!sec)return '—';const h=Math.floor(sec/3600),m=Math.round((sec%3600)/60);return h?(h+' h '+m+' min'):(m+' min')}
+function renderSessions(){const rows=data.transactions||[];$('reportTable').innerHTML=`<div class='report-session-head'><div><b>Einzelne Ladevorgänge</b><small>${rows.length} abgeschlossene Session${rows.length===1?'':'s'} im gewählten Zeitraum</small></div></div><div class='report-table-wrap'><table class='report-table report-session-table'><thead><tr><th>Datum / Start</th><th>Ende</th><th>Benutzer</th><th>Fahrzeug</th><th>Ladepunkt</th><th>Ladezeit</th><th>Energie</th><th>Kosten</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(fmtDateTime(r.started_at))}</b></td><td>${esc(fmtTime(r.ended_at))}</td><td>${esc(r.user_name||'Nicht zugeordnet')}</td><td>${esc((r.vehicle_name||'Nicht zugeordnet')+(r.vehicle_plate?' · '+r.vehicle_plate:''))}</td><td>${esc(r.charge_point_id||'—')}${r.connector_id?`<small>Connector ${esc(r.connector_id)}</small>`:''}</td><td>${esc(fmtDuration(r.charging_seconds||r.connection_seconds))}</td><td><strong>${formatEnergyKwh(Number(r.energy_kwh||0),2,3)}</strong></td><td>${r.cost_cents==null?'—':money.format(Number(r.cost_cents)/100)}</td><td><a class='secondary compact button' href='/transactions/${Number(r.id)}'>Details</a></td></tr>`).join('')||'<tr><td colspan=\'9\' class=\'empty\'>Keine abgeschlossenen Ladevorgänge im gewählten Zeitraum.</td></tr>'}</tbody></table></div>`}
+function renderTable(){if(currentTab==='sessions')return renderSessions();const rows=tabRows()||[],userMode=currentTab==='user';$('reportTable').innerHTML=`<div class='report-table-wrap'><table class='report-table'><thead><tr><th>Zuordnung</th><th>Sessions</th><th>Energie</th><th>Kosten</th><th>Ø Preis</th><th>Kostenabdeckung</th>${userMode?'<th></th>':''}</tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.label)}</b></td><td>${r.sessions}</td><td>${formatEnergyKwh(r.energy_kwh,2,3)}</td><td><strong>${money.format(r.cost_eur)}</strong></td><td>${r.avg_price_cents_per_kwh==null?'—':nf.format(r.avg_price_cents_per_kwh)+' ct/kWh'}</td><td><span class='coverage-pill ${r.cost_coverage_pct<100?'partial':'full'}'>${nf.format(r.cost_coverage_pct)} %</span></td>${userMode?`<td>${r.key==='unassigned'?'':`<button type='button' class='secondary compact report-user-details' data-user='${esc(r.key)}'>Ladungen</button>`}</td>`:''}</tr>`).join('')||`<tr><td colspan='${userMode?7:6}' class='empty'>Keine Daten im gewählten Zeitraum.</td></tr>`}</tbody></table></div>`;document.querySelectorAll('.report-user-details').forEach(b=>b.onclick=()=>{$('filterUser').value=b.dataset.user;currentTab='sessions';$('reportTabs').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x.dataset.tab==='sessions'));load().catch(alert)})}
+function exportLinks(){const p=params().toString();$('csvExport').href='/api/reports/export.csv?'+p;$('pdfExport').href='/api/reports/export.pdf?'+p}
+async function load(){const r=await fetch('/api/reports?'+params().toString(),{cache:'no-store'});if(!r.ok){const t=await r.text();throw new Error(t||'Bericht konnte nicht geladen werden')}data=await r.json();fillOptions(data.options||{});renderSummary();renderQuality();renderTrend();renderTable();exportLinks()}
+$('periodButtons').querySelectorAll('button').forEach(b=>b.onclick=()=>{period=b.dataset.period;$('periodButtons').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));$('customDates').hidden=period!=='custom';if(period!=='custom')load().catch(alert)});$('applyDates').onclick=()=>load().catch(alert);['filterVehicle','filterCp','filterCostCenter','filterBilling'].forEach(id=>$(id).onchange=()=>load().catch(alert));$('filterUser').onchange=()=>{if($('filterUser').value){currentTab='sessions';$('reportTabs').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x.dataset.tab==='sessions'))}load().catch(alert)};$('resetFilters').onclick=()=>{['filterUser','filterVehicle','filterCp','filterCostCenter','filterBilling'].forEach(id=>$(id).value='');load().catch(alert)};$('reportTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{currentTab=b.dataset.tab;$('reportTabs').querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));renderTable()});$('printReport').onclick=()=>window.print();
+load().catch(e=>{console.error(e);$('reportWarning').hidden=false;$('reportWarning').textContent='Bericht konnte nicht geladen werden: '+e.message});
+})();
+</script>
+{% endblock %}

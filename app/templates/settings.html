@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Einstellungen - {{ branding.product_name }}{% endblock %}
+{% block heading %}Einstellungen{% endblock %}
+{% block subtitle %}Community-Konfiguration, Branding und E-Mail{% endblock %}
+{% block content %}
+<section class="settings-grid">
+  <div class="panel branding-panel">
+    <div class="panelhead"><div><h2>Branding</h2><span>Community · Name &amp; Logo</span></div></div>
+    <p class="detail-note">Passe VoltCore Community an deine Organisation an. Die Community-Edition bleibt als Produktbasis erkennbar.</p>
+    <form id="brandingForm" class="branding-form" enctype="multipart/form-data">
+      <div class="branding-fields">
+        <label>Produktname<input id="brandProductName" name="product_name" maxlength="80" required></label>
+        <label>Organisation<input id="brandOrganization" name="organization_name" maxlength="100" required></label>
+        <label>Anzeigename<input id="brandDisplayName" name="display_name" maxlength="80" required></label>
+        <label>Untertitel<input id="brandSubtitle" name="product_subtitle" maxlength="100" required></label>
+        <label>Primär-/Akzentfarbe<div class="branding-color-row"><input id="brandColorText" name="primary_color" pattern="#[0-9A-Fa-f]{6}" required><input id="brandColor" type="color" aria-label="Akzentfarbe auswählen"></div></label>
+      </div>
+      <div class="branding-assets">
+        <label class="branding-upload">Logo · Hell<div class="branding-preview" id="previewLogoLight"></div><input name="logo_light" type="file" accept="image/png,image/jpeg,image/webp"><span class="branding-remove"><input name="remove_logo_light" type="checkbox" value="1"> Vorhandenes entfernen</span></label>
+        <label class="branding-upload">Logo · Dunkel<div class="branding-preview" id="previewLogoDark"></div><input name="logo_dark" type="file" accept="image/png,image/jpeg,image/webp"><span class="branding-remove"><input name="remove_logo_dark" type="checkbox" value="1"> Vorhandenes entfernen</span></label>
+        <label class="branding-upload">Favicon / App-Icon<div class="branding-preview" id="previewFavicon"></div><input name="favicon" type="file" accept="image/png,image/jpeg,image/webp"><span class="branding-remove"><input name="remove_favicon" type="checkbox" value="1"> Vorhandenes entfernen</span></label>
+      </div>
+      <div class="branding-actions"><button class="primary" type="submit">Branding speichern</button><div id="brandingMessage" class="form-message"></div></div>
+    </form>
+  </div>
+
+  <div class="panel mail-settings-panel">
+    <div class="panelhead"><div><h2>E-Mail / SMTP</h2><span>Einladungen &amp; Systemmeldungen</span></div></div>
+    <p class="detail-note">SMTP ist optional. Im First-Run-Assistenten kann es direkt eingerichtet werden; später lässt es sich hier jederzeit ändern.</p>
+    <form id="mailSettingsForm" class="mail-settings-form">
+      <div class="setting-switch-card"><div><b>E-Mail-Versand aktivieren</b><small>Erst nach erfolgreicher Testmail aktivieren.</small></div><label class="toggle-switch"><input id="mailEnabled" type="checkbox"><span></span></label></div>
+      <div class="form-grid mail-grid">
+        <label>SMTP-Host<input id="mailHost" placeholder="smtp.example.org"></label>
+        <label>Port<input id="mailPort" type="number" min="1" max="65535" value="587"></label>
+        <label>Sicherheit<select id="mailSecurity"><option value="starttls">STARTTLS</option><option value="ssl">SSL/TLS</option><option value="none">Keine Verschlüsselung</option></select></label>
+        <label>SMTP-Benutzer<input id="mailUsername" autocomplete="username"></label>
+        <label>SMTP-Passwort<input id="mailPassword" type="password" autocomplete="new-password" placeholder="Unverändert lassen"><small id="mailPasswordState">Noch nicht hinterlegt</small></label>
+        <label>Absenderadresse<input id="mailFromEmail" type="email" placeholder="laden@organisation.de"></label>
+        <label>Absendername<input id="mailFromName" placeholder="VoltCore Community"></label>
+        <label>Admin-Empfänger<input id="mailAdminRecipients" placeholder="admin@organisation.de"></label>
+        <label class="mail-base-url">Öffentliche Basis-URL<input id="mailPublicBaseUrl" type="url" placeholder="https://voltcore.example.org"></label>
+      </div>
+      <label class="check"><input id="mailEventBackup" type="checkbox"> Admin-Mail bei Backup-Fehler</label>
+      <label class="check"><input id="mailEventSecurity" type="checkbox"> Admin-Mail bei Security-Warnungen</label>
+      <label class="check mail-clear-password"><input id="mailClearPassword" type="checkbox"> Hinterlegtes SMTP-Passwort löschen</label>
+      <div class="branding-actions"><button class="primary" type="submit">E-Mail-Einstellungen speichern</button><div id="mailSettingsMessage" class="form-message"></div></div>
+    </form>
+    <div class="mail-test-card"><div><b>Testmail</b><small>Prüft SMTP und das aktuelle Branding.</small></div><div class="mail-test-row"><input id="mailTestRecipient" type="email" placeholder="Testadresse"><select id="mailTestTemplate"></select><button class="secondary" id="mailTestSend" type="button">Testmail senden</button></div><div id="mailTestMessage" class="form-message"></div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Administration</h2>
+    <div class="settings-list">
+      <div><span>Systembenutzer &amp; Rollen</span><a class="textlink" href="/system-users">Verwalten</a></div>
+      <div><span>OCPP-Sicherheit</span><a class="textlink" href="/security">Öffnen</a></div>
+      <div><span>Backup &amp; Restore</span><a class="textlink" href="/backups">Öffnen</a></div>
+      <div><span>Updates</span><a class="textlink" href="/updates">Öffnen</a></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>System</h2>
+    <div class="settings-list">
+      <div><span>Edition</span><b>Community</b></div>
+      <div><span>Backend</span><b>V{{ app_version }}</b></div>
+      <div><span>Protokoll</span><b>OCPP 1.6J</b></div>
+      <div><span>Webinterface</span><b>8010 extern / 8000 intern</b></div>
+      <div><span>OCPP-Port</span><b>9000</b></div>
+      <div><span>Deployment</span><b>Docker Compose / Portainer</b></div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const mailForm=document.getElementById('mailSettingsForm'),mailMsg=document.getElementById('mailSettingsMessage'),mailTestMsg=document.getElementById('mailTestMessage'),mailTestTemplate=document.getElementById('mailTestTemplate');
+function fillMail(d){document.getElementById('mailEnabled').checked=!!d.enabled;document.getElementById('mailHost').value=d.host||'';document.getElementById('mailPort').value=d.port||587;document.getElementById('mailSecurity').value=d.security||'starttls';document.getElementById('mailUsername').value=d.username||'';document.getElementById('mailFromEmail').value=d.from_email||'';document.getElementById('mailFromName').value=d.from_name||'';document.getElementById('mailAdminRecipients').value=d.admin_recipients||'';document.getElementById('mailPublicBaseUrl').value=d.public_base_url||'';document.getElementById('mailPasswordState').textContent=d.password_configured?'Passwort ist hinterlegt. Leer lassen = unverändert.':'Noch kein Passwort hinterlegt.';document.getElementById('mailEventBackup').checked=!!d.events?.backup_failures;document.getElementById('mailEventSecurity').checked=!!d.events?.security_warnings;mailTestTemplate.innerHTML=(d.templates||[]).map(x=>'<option value="'+x.key+'">'+x.label+'</option>').join('')}
+fetch('/api/settings/mail').then(r=>r.json()).then(fillMail);
+mailForm.onsubmit=async e=>{e.preventDefault();const payload={enabled:document.getElementById('mailEnabled').checked,host:document.getElementById('mailHost').value.trim(),port:Number(document.getElementById('mailPort').value||587),security:document.getElementById('mailSecurity').value,username:document.getElementById('mailUsername').value.trim(),password:document.getElementById('mailPassword').value||null,clear_password:document.getElementById('mailClearPassword').checked,from_email:document.getElementById('mailFromEmail').value.trim(),from_name:document.getElementById('mailFromName').value.trim(),admin_recipients:document.getElementById('mailAdminRecipients').value.trim(),public_base_url:document.getElementById('mailPublicBaseUrl').value.trim(),event_rfid_requests:false,event_pin_reset_admin:false,event_backup_failures:document.getElementById('mailEventBackup').checked,event_security_warnings:document.getElementById('mailEventSecurity').checked,event_access_requests:false};const r=await fetch('/api/settings/mail',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),d=await r.json().catch(()=>({}));mailMsg.textContent=r.ok?'E-Mail-Einstellungen gespeichert.':(d.detail||'Speichern fehlgeschlagen.');mailMsg.className='form-message '+(r.ok?'success':'error');if(r.ok){document.getElementById('mailPassword').value='';document.getElementById('mailClearPassword').checked=false;fillMail(d.settings)}};
+document.getElementById('mailTestSend').onclick=async()=>{const recipient=document.getElementById('mailTestRecipient').value.trim();if(!recipient){mailTestMsg.textContent='Bitte eine Testadresse angeben.';mailTestMsg.className='form-message error';return}const r=await fetch('/api/settings/mail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({recipient,template:mailTestTemplate.value||'system'})}),d=await r.json().catch(()=>({}));mailTestMsg.textContent=r.ok?'Testmail wurde versendet.':(d.detail||'Testmail konnte nicht versendet werden.');mailTestMsg.className='form-message '+(r.ok?'success':'error')};
+
+const brandingForm=document.getElementById('brandingForm'),brandingMsg=document.getElementById('brandingMessage'),brandColor=document.getElementById('brandColor'),brandColorText=document.getElementById('brandColorText');
+const previews={logo_light_url:document.getElementById('previewLogoLight'),logo_dark_url:document.getElementById('previewLogoDark'),favicon_url:document.getElementById('previewFavicon')};
+function showPreview(el,url,label){el.innerHTML=url?'<img src="'+url+'?v='+Date.now()+'" alt="'+label+'">':'<span class="empty-preview">Noch keine Datei hinterlegt</span>'}
+function fillBrand(d){document.getElementById('brandProductName').value=d.product_name||'';document.getElementById('brandOrganization').value=d.organization_name||'';document.getElementById('brandDisplayName').value=d.display_name||'';document.getElementById('brandSubtitle').value=d.product_subtitle||'';brandColorText.value=d.primary_color||'#146af5';brandColor.value=d.primary_color||'#146af5';showPreview(previews.logo_light_url,d.logo_light_url,'Logo hell');showPreview(previews.logo_dark_url,d.logo_dark_url,'Logo dunkel');showPreview(previews.favicon_url,d.favicon_url,'Favicon')}
+fetch('/api/settings/branding').then(r=>r.json()).then(fillBrand);brandColor.oninput=()=>brandColorText.value=brandColor.value;brandColorText.oninput=()=>{if(/^#[0-9a-f]{6}$/i.test(brandColorText.value))brandColor.value=brandColorText.value};
+brandingForm.onsubmit=async e=>{e.preventDefault();const fd=new FormData(brandingForm),r=await fetch('/api/settings/branding',{method:'POST',body:fd}),d=await r.json().catch(()=>({}));brandingMsg.textContent=r.ok?'Branding gespeichert.':'Branding konnte nicht gespeichert werden.';brandingMsg.className='form-message '+(r.ok?'success':'error');if(r.ok){fillBrand(d);setTimeout(()=>location.reload(),350)}};
+</script>
+{% endblock %}

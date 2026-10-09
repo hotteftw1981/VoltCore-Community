@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Ladevorg&auml;nge - {{ branding.product_name }}{% endblock %}
+{% block heading %}Ladevorg&auml;nge &amp; Analytics{% endblock %}
+{% block subtitle %}Historie, Energieverbrauch und Sessions{% endblock %}
+{% block content %}
+<section class="stats eight session-analytics-stats">
+  <div class="stat"><span>Sessions</span><b id="sessions">0</b><small>gesamt</small></div>
+  <div class="stat"><span>Energie <button type="button" class="context-help" aria-label="Info: Energie gesamt" aria-haspopup="dialog" aria-expanded="false" data-help-title="Energie gesamt" data-help="Summierte Session-Energie. Ab 1.000 kWh stellt VoltCore die Anzeige automatisch in MWh dar.">i</button></span><b id="energy">0 kWh</b><small>gesamt</small></div>
+  <div class="stat"><span>Ladezeit</span><b id="chargingTotal">0:00</b><small id="chargingAvg">Ø 0:00 / Session</small></div>
+  <div class="stat"><span>Standzeit</span><b id="standTotal">0:00</b><small id="standAvg">Ø 0:00 / Session</small></div>
+  <div class="stat"><span>Anschlussdauer</span><b id="connectionTotal">0:00</b><small id="connectionAvg">Ø 0:00 / Session</small></div>
+  <div class="stat"><span>Standanteil</span><b id="standRatio">0 %</b><small>an Anschlussdauer</small></div>
+  <div class="stat"><span>Sessions Monat</span><b id="monthSessions">0</b><small>aktueller Monat</small></div>
+  <div class="stat"><span>Energie Monat</span><b id="monthEnergy">0 kWh</b><small>aktueller Monat</small></div>
+</section>
+<div class="filters">
+  <input id="search" placeholder="Suchen: ID, Ladepunkt, RFID, Fahrzeug, Benutzer, OCPP-Transaction ...">
+  <select id="cpFilter"><option value="">Alle Ladepunkte</option></select>
+  <select id="statusFilter"><option value="">Alle Status</option><option value="Active">Aktiv</option><option value="Completed">Beendet</option><option value="Interrupted">Unterbrochen</option></select>
+  <label class="date-filter"><span>Von</span><input id="fromDate" type="date"></label>
+  <label class="date-filter"><span>Bis</span><input id="toDate" type="date"></label>
+  <select id="sortFilter" title="Sortierung">
+    <option value="newest">Neueste zuerst</option>
+    <option value="oldest">&Auml;lteste zuerst</option>
+    <option value="energy_desc">Energie absteigend</option>
+    <option value="energy_asc">Energie aufsteigend</option>
+    <option value="peak_desc">Peak absteigend</option>
+    <option value="duration_desc">Dauer absteigend</option>
+    <option value="charging_desc">Ladezeit absteigend</option>
+    <option value="stand_desc">Standzeit absteigend</option>
+    <option value="connection_desc">Anschlussdauer absteigend</option>
+  </select>
+  <select id="pageSize" title="Eintr&auml;ge pro Seite">
+    <option value="20" selected>20 pro Seite</option>
+    <option value="50">50 pro Seite</option>
+    <option value="100">100 pro Seite</option>
+  </select>
+  <button class="secondary" id="reset">Filter zur&uuml;cksetzen</button><button class="secondary" id="export">CSV exportieren</button>
+</div>
+<div id="filterSummary" class="filter-summary" hidden></div>
+<section class="panel table-panel">
+<table><thead><tr><th class="sortable" data-sort-key="id"># <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="started_at">Start <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="ended_at">Ende <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="charge_point_id">Ladepunkt <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="id_tag">RFID <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="user">Benutzer <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="vehicle">Fahrzeug <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="transaction_id">OCPP-ID <span class="sort-indicator" aria-hidden="true"></span></th><th>Zeitprofil</th><th class="sortable" data-sort-key="energy_kwh">Energie <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="max_power_kw">Peak <span class="sort-indicator" aria-hidden="true"></span></th><th class="sortable" data-sort-key="status">Status <span class="sort-indicator" aria-hidden="true"></span></th></tr></thead>
+<tbody id="body"></tbody></table></section>
+<div class="pagination-bar" id="paginationBar">
+  <div class="pagination-info" id="paginationInfo">0 Eintr&auml;ge</div>
+  <div class="pagination-controls" id="paginationControls"></div>
+</div>
+<div id="detailModal" class="modal" hidden><div class="modal-card"><button class="modal-close" id="close" type="button" aria-label="Schließen">&times;</button><div id="detail"></div></div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+let timer; let page=1; let total=0; let pages=1; let pageSize=20; let headerSortKey='started_at'; let headerSortDir='desc';
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=s=>s?new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',dateStyle:'short',timeStyle:'short'}).format(new Date(s)):'—';
+const statusLabel=s=>({Active:'Aktiv',Completed:'Beendet',Interrupted:'Unterbrochen'}[s]||s||'—');
+const duration=t=>{if(!t.started_at)return '—';const end=t.ended_at?new Date(t.ended_at):new Date();return Math.max(0,Math.round((end-new Date(t.started_at))/60000))+' min'};
+const clock=s=>{s=Math.max(0,Math.round(Number(s)||0));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return h?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`};
+function sortSelectValue(){if(headerSortKey==='started_at')return headerSortDir==='asc'?'oldest':'newest';if(headerSortKey==='energy_kwh')return headerSortDir==='asc'?'energy_asc':'energy_desc';if(headerSortKey==='max_power_kw'&&headerSortDir==='desc')return 'peak_desc';if(headerSortKey==='duration'&&headerSortDir==='desc')return 'duration_desc';if(headerSortKey==='charging_seconds'&&headerSortDir==='desc')return 'charging_desc';if(headerSortKey==='stand_seconds'&&headerSortDir==='desc')return 'stand_desc';if(headerSortKey==='connection_seconds'&&headerSortDir==='desc')return 'connection_desc';return 'newest';}
+function updateFilterSummary(){
+  const filters=[]; const q=$('search').value.trim(),cp=$('cpFilter').value,st=$('statusFilter').value,from=$('fromDate').value,to=$('toDate').value;
+  if(q)filters.push({key:'search',label:'Suche: '+q}); if(cp)filters.push({key:'cp',label:cp}); if(st)filters.push({key:'status',label:'Status: '+st}); if(from)filters.push({key:'from',label:'Von: '+from}); if(to)filters.push({key:'to',label:'Bis: '+to});
+  const box=$('filterSummary'); box.hidden=filters.length===0; box.innerHTML=filters.length?'<span class="count">Aktive Filter:</span>'+filters.map(f=>`<span class="filter-chip">${esc(f.label)} <button type="button" data-filter-clear="${f.key}" aria-label="Filter entfernen">&times;</button></span>`).join(''):'';
+}
+function renderSortIndicators(){document.querySelectorAll('th.sortable').forEach(th=>{const active=th.dataset.sortKey===headerSortKey;th.classList.toggle('sorted',active);const i=th.querySelector('.sort-indicator');if(i)i.textContent=active?(headerSortDir==='asc'?'▲':'▼'):'↕';});}
+function renderPagination(){
+  const start=total?((page-1)*pageSize+1):0, end=Math.min(total,page*pageSize); $('paginationInfo').textContent=total?`${start}–${end} von ${total}`:'Keine Einträge';
+  const box=$('paginationControls'); if(pages<=1){box.innerHTML='';return;}
+  const items=[]; const add=(p,label,disabled=false,active=false)=>items.push(`<button type="button" class="secondary page-btn ${active?'active':''}" data-page="${p}" ${disabled?'disabled':''}>${label}</button>`);
+  add(page-1,'←',page<=1); const windowSize=2; const set=new Set([1,pages]); for(let p=page-windowSize;p<=page+windowSize;p++)if(p>=1&&p<=pages)set.add(p); let last=0; [...set].sort((a,b)=>a-b).forEach(p=>{if(last&&p-last>1)items.push('<span class="page-gap">&hellip;</span>');add(p,String(p),false,p===page);last=p;}); add(page+1,'→',page>=pages); box.innerHTML=items.join('');
+}
+function renderRows(rows){
+  $('body').innerHTML=rows.map(r=>`<tr class="clickable" data-id="${r.id}"><td>#${r.id}</td><td>${esc(fmt(r.started_at))}</td><td>${esc(fmt(r.ended_at))}</td><td>${esc((r.charge_point_id||''))}</td><td>${esc(r.id_tag||'—')}</td><td>${esc(r.user_name||'—')}</td><td>${esc(r.vehicle_name||'—')}</td><td><code>${esc(r.transaction_id||'—')}</code></td><td class="session-times"><span><b>L</b> ${clock(r.charging_seconds)}</span><span><b>S</b> ${clock(r.stand_seconds)}</span><span><b>A</b> ${clock(r.connection_seconds)}</span></td><td>${formatEnergyKwh(r.energy_kwh||0,2,3)}</td><td>${Number(r.max_power_kw||0).toFixed(1)} kW</td><td><span class="state ${r.status==='Active'?'blue':r.status==='Interrupted'?'warn':''}">${esc(statusLabel(r.status))}</span></td></tr>`).join('')||'<tr><td colspan="12" class="empty">Keine Ladevorg&auml;nge gefunden.</td></tr>';
+}
+async function loadStatsAndCps(){const [ad,sd]=await Promise.all([fetch('/api/reports').then(r=>r.json()),fetch('/api/status').then(r=>r.json())]);$('sessions').textContent=ad.sessions;$('energy').textContent=formatEnergyKwh(ad.energy_kwh,2,3);$('chargingTotal').textContent=clock(ad.charging_seconds);$('chargingAvg').textContent='Ø '+clock(ad.avg_charging_seconds)+' / Session';$('standTotal').textContent=clock(ad.stand_seconds);$('standAvg').textContent='Ø '+clock(ad.avg_stand_seconds)+' / Session';$('connectionTotal').textContent=clock(ad.connection_seconds);$('connectionAvg').textContent='Ø '+clock(ad.avg_connection_seconds)+' / Session';$('standRatio').textContent=ad.stand_ratio_pct==null?'—':Number(ad.stand_ratio_pct).toFixed(1)+' %';$('monthSessions').textContent=ad.month_sessions;$('monthEnergy').textContent=formatEnergyKwh(ad.month_energy_kwh,2,3);const current=$('cpFilter').value;const cps=[...new Set(sd.charge_points.map(c=>c.id))];$('cpFilter').innerHTML='<option value="">Alle Ladepunkte</option>'+cps.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('');$('cpFilter').value=current;}
+async function loadPage(){
+  try{
+    const p=new URLSearchParams({q:$('search').value.trim(),status:$('statusFilter').value,charge_point:$('cpFilter').value,id_tag:'',from_date:$('fromDate').value,to_date:$('toDate').value,page:String(page),page_size:String(pageSize),sort_key:headerSortKey,sort_dir:headerSortDir});
+    const data=await fetch('/api/transactions?'+p.toString()).then(r=>r.json()); total=Number(data.total||0);pages=Number(data.pages||1); if(page>pages){page=pages;return loadPage();} renderRows(data.transactions||[]);renderSortIndicators();renderPagination();updateFilterSummary();
+  }catch(e){console.error(e);$('body').innerHTML='<tr><td colspan="12" class="empty">Ladevorg&auml;nge konnten nicht geladen werden.</td></tr>';}
+}
+function reloadFromFirstPage(){page=1;loadPage();}
+async function showDetail(id){const d=await fetch('/api/transactions/'+id).then(r=>r.json());const t=d.transaction;const avg=t.ended_at&&t.started_at?((Number(t.energy_kwh||0)/Math.max(1,(new Date(t.ended_at)-new Date(t.started_at))/3600000))).toFixed(1):'—';$('detail').innerHTML=`<div class="panelhead"><div><h2>Ladevorgang #${t.id}</h2><span>Session-Detail</span></div><span class="state ${t.status==='Active'?'blue':''}">${esc(statusLabel(t.status))}</span></div><div class="detail-kpis compact-kpis"><div class="stat"><span>Energie</span><b>${formatEnergyKwh(t.energy_kwh||0,2,3)}</b><small>Session</small></div><div class="stat"><span>Peak</span><b>${Number(t.max_power_kw||0).toFixed(1)} kW</b><small>maximal</small></div><div class="stat"><span>Dauer</span><b>${duration(t)}</b><small>Session</small></div><div class="stat"><span>&Oslash; Leistung</span><b>${avg} kW</b><small>berechnet</small></div></div><div class="info-list"><div><span>Ladepunkt</span><b>${esc((t.charge_point_id||''))}</b></div><div><span>Connector</span><b>${t.connector_id}</b></div><div><span>RFID</span><b>${esc(t.id_tag||'—')}</b></div><div><span>Benutzer</span><b>${esc(t.user_name||'Nicht zugeordnet')}</b></div><div><span>Fahrzeug</span><b>${esc(t.vehicle_name||'Nicht zugeordnet')}</b></div><div><span>OCPP Transaction ID</span><b><code>${esc(t.transaction_id||'—')}</code></b></div><div><span>Start</span><b>${esc(fmt(t.started_at))}</b></div><div><span>Ende</span><b>${esc(fmt(t.ended_at))}</b></div></div><div class="session-assignment"><label>Fahrzeug zuordnen<select id="sessionVehicle"><option value="">Nicht zugeordnet</option>${(d.vehicles||[]).map(v=>`<option value="${v.id}" ${Number(v.id)===Number(t.vehicle_id)?'selected':''}>${esc(v.name)}${v.plate?' · '+esc(v.plate):''}</option>`).join('')}</select></label><button type="button" class="secondary write-action" id="saveSessionVehicle">Zuordnung speichern</button><span id="vehicleSaveStatus"></span></div><div class="export-row"><button class="secondary" id="exportSessionPdf">PDF exportieren</button><button class="secondary" id="exportSessionCsv">CSV exportieren</button></div><h3 class="session-meter-heading">Messwerte der Session</h3><div class="table-panel"><table><thead><tr><th>Zeit</th><th>Leistung</th><th>Zählerstand</th><th>L1</th><th>L2</th><th>L3</th><th>SoC</th></tr></thead><tbody>${d.meter_samples.slice().reverse().slice(-80).map(m=>`<tr><td>${esc(fmt(m.sampled_at||m.ts))}</td><td>${Number(m.power_kw||0).toFixed(1)} kW</td><td>${formatEnergyKwh(m.energy_kwh||0,2,3)}</td><td>${m.current_import_l1==null?'—':Number(m.current_import_l1).toFixed(1)+' A'}</td><td>${m.current_import_l2==null?'—':Number(m.current_import_l2).toFixed(1)+' A'}</td><td>${m.current_import_l3==null?'—':Number(m.current_import_l3).toFixed(1)+' A'}</td><td>${m.soc_percent==null?'—':Number(m.soc_percent).toFixed(0)+' %'}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">Keine Messwerte gespeichert.</td></tr>'}</tbody></table></div>`;$('detailModal').hidden=false;document.getElementById('exportSessionPdf').dataset.txid=t.id;document.getElementById('exportSessionCsv').dataset.txid=t.id;document.getElementById('saveSessionVehicle').onclick=async()=>{const vehicleId=document.getElementById('sessionVehicle').value;const r=await fetch('/api/transactions/'+t.id+'/vehicle',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({vehicle_id:vehicleId||null})});const st=document.getElementById('vehicleSaveStatus');if(r.ok){st.textContent='Gespeichert';st.className='save-ok';setTimeout(()=>st.textContent='',1500);await loadStatsAndCps();await loadPage();}else{st.textContent='Fehler';st.className='save-error';}}}
+$('paginationControls').addEventListener('click',e=>{const b=e.target.closest('[data-page]');if(!b||b.disabled)return;const next=Number(b.dataset.page);if(next>=1&&next<=pages&&next!==page){page=next;loadPage();}});
+document.addEventListener('click',e=>{const th=e.target.closest('th.sortable');if(th){const key=th.dataset.sortKey;if(headerSortKey===key)headerSortDir=headerSortDir==='asc'?'desc':'asc';else{headerSortKey=key;headerSortDir=(key==='started_at'||key==='ended_at'||key==='id')?'desc':'asc';}$('sortFilter').value=sortSelectValue();reloadFromFirstPage();return;}const row=e.target.closest('tr[data-id]');if(row)showDetail(row.dataset.id);if(e.target.id==='exportSessionPdf'||e.target.id==='exportSessionCsv'){const id=e.target.dataset.txid;if(id)window.location='/api/transactions/'+id+'/export.'+(e.target.id==='exportSessionPdf'?'pdf':'csv');}});
+$('filterSummary').addEventListener('click',e=>{const key=e.target.dataset.filterClear;if(!key)return;if(key==='search')$('search').value='';if(key==='cp')$('cpFilter').value='';if(key==='status')$('statusFilter').value='';if(key==='from')$('fromDate').value='';if(key==='to')$('toDate').value='';reloadFromFirstPage();});
+$('search').addEventListener('input',()=>{clearTimeout(window.__searchTimer);window.__searchTimer=setTimeout(reloadFromFirstPage,250);});['cpFilter','statusFilter','fromDate','toDate'].forEach(id=>$(id).addEventListener('change',reloadFromFirstPage));
+$('sortFilter').addEventListener('change',()=>{const v=$('sortFilter').value;if(v==='newest'){headerSortKey='started_at';headerSortDir='desc';}else if(v==='oldest'){headerSortKey='started_at';headerSortDir='asc';}else if(v==='energy_desc'){headerSortKey='energy_kwh';headerSortDir='desc';}else if(v==='energy_asc'){headerSortKey='energy_kwh';headerSortDir='asc';}else if(v==='peak_desc'){headerSortKey='max_power_kw';headerSortDir='desc';}else if(v==='duration_desc'){headerSortKey='duration';headerSortDir='desc';}else if(v==='charging_desc'){headerSortKey='charging_seconds';headerSortDir='desc';}else if(v==='stand_desc'){headerSortKey='stand_seconds';headerSortDir='desc';}else if(v==='connection_desc'){headerSortKey='connection_seconds';headerSortDir='desc';}reloadFromFirstPage();});
+$('pageSize').addEventListener('change',()=>{pageSize=Number($('pageSize').value)||20;reloadFromFirstPage();});
+$('reset').onclick=()=>{$('search').value='';$('cpFilter').value='';$('statusFilter').value='';$('fromDate').value='';$('toDate').value='';$('sortFilter').value='newest';$('pageSize').value='20';pageSize=20;headerSortKey='started_at';headerSortDir='desc';reloadFromFirstPage();};
+$('export').onclick=()=>{const p=new URLSearchParams({q:$('search').value.trim(),status:$('statusFilter').value,charge_point:$('cpFilter').value,id_tag:'',from_date:$('fromDate').value,to_date:$('toDate').value});window.location='/api/transactions/export.csv?'+p.toString();};
+$('close').onclick=()=>$('detailModal').hidden=true;$('detailModal').onclick=e=>{if(e.target.id==='detailModal')$('detailModal').hidden=true};
+(async()=>{await loadStatsAndCps();await loadPage();timer=setInterval(async()=>{await loadStatsAndCps();await loadPage();},5000);})();
+</script>
+{% endblock %}

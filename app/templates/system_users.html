@@ -1,0 +1,102 @@
+{% extends "base.html" %}{% block title %}Systembenutzer - {{ branding.product_name }}{% endblock %}{% block heading %}Systembenutzer{% endblock %}{% block subtitle %}Login-Konten, Rollen, 2FA und Zugriffsrechte verwalten{% endblock %}
+{% block content %}
+<section class="stats three access-stats"><div class="stat"><span>Konten</span><b id="accountCount">0</b><small>gesamt</small></div><div class="stat"><span>Aktiv</span><b id="activeCount">0</b><small>dürfen sich anmelden</small></div><div class="stat"><span>Administratoren</span><b id="adminCount">0</b><small>volle Rechte</small></div></section>
+<div class="toolbar"><div><h2>Zugänge</h2><p>Systemzugänge sind getrennt von Ladebenutzern und RFID-Karten.</p></div><div class="table-actions"><button class="secondary" id="inviteAccount" type="button">✉ Benutzer einladen</button><button class="primary" id="addAccount" type="button">+ Zugang anlegen</button></div></div>
+<section class="panel table-panel"><table><thead><tr><th>Name</th><th>Benutzername</th><th>Rolle</th><th>Status</th><th>2FA</th><th>Letzte Anmeldung</th><th></th></tr></thead><tbody id="accountBody"></tbody></table></section>
+<section class="role-help-grid"><article class="panel"><h3>Administrator</h3><p>Voller Zugriff einschließlich Einstellungen und Systembenutzerverwaltung.</p></article><article class="panel"><h3>Benutzer</h3><p>Kann den operativen OCPP-Bereich lesen und bearbeiten, jedoch keine Systemzugänge oder Grundeinstellungen verwalten.</p></article><article class="panel"><h3>Nur Lesen</h3><p>Kann Status, Sessions, Berichte und Stammdaten ansehen, aber keine Änderungen speichern.</p></article></section>
+
+<div class="modal" id="inviteModal" hidden><div class="modal-card"><div class="panelhead modal-title-row"><div><h2>Benutzer einladen</h2><span>Ein sicherer Einladungslink ist 72 Stunden gültig.</span></div><button class="modal-close" id="inviteClose" type="button" aria-label="Schließen">&times;</button></div><form id="inviteForm"><div class="form-grid"><label>Anzeigename<input id="inviteDisplayName" maxlength="120" placeholder="optional"></label><label>E-Mail-Adresse<input id="inviteEmail" type="email" required autocomplete="email"></label><label>Rolle<select id="inviteRole"><option value="user">Benutzer</option><option value="viewer">Nur Lesen</option><option value="admin">Administrator</option></select></label></div><div id="inviteMessage" class="form-message"></div><div class="form-actions"><button class="secondary" id="inviteCancel" type="button">Abbrechen</button><button class="primary" type="submit">Einladung senden</button></div></form></div></div>
+
+<div class="modal" id="accountEditModal" hidden><div class="modal-card"><div class="panelhead modal-title-row"><div><h2 id="accountModalTitle">Zugang anlegen</h2><span>Systemkonto</span></div><button class="modal-close" id="accountEditClose" type="button" aria-label="Schließen">&times;</button></div><form id="accountForm"><input type="hidden" id="accountId"><div class="form-grid"><label>Anzeigename<input id="displayName" required></label><label>Benutzername<input id="username" required autocomplete="off"></label><label>Rolle<select id="role"><option value="admin">Administrator</option><option value="user">Benutzer</option><option value="viewer">Nur Lesen</option></select></label><label>Status<select id="active"><option value="1">Aktiv</option><option value="0">Deaktiviert</option></select></label><label class="full-field">Passwort <small id="passwordHint">Mindestens 12 Zeichen</small><input id="password" type="password" minlength="12" autocomplete="new-password"></label></div><div id="accountMessage" class="form-message"></div><div class="form-actions"><button class="secondary" id="accountEditCancel" type="button">Abbrechen</button><button class="primary" type="submit">Speichern</button></div></form></div></div>
+
+<div class="modal" id="accountDeleteModal" hidden><div class="modal-card confirm-modal-card"><div class="panelhead modal-title-row"><div><h2>Systemzugang löschen</h2><span>Dieser Vorgang beendet vorhandene Sitzungen.</span></div><button class="modal-close" id="accountDeleteClose" type="button" aria-label="Schließen">&times;</button></div><div class="confirm-content"><div class="confirm-icon">!</div><p id="accountDeleteText"></p></div><div id="deleteMessage" class="form-message"></div><div class="form-actions"><button class="secondary" id="accountDeleteCancel" type="button">Abbrechen</button><button class="stop" id="accountDeleteConfirm" type="button">Zugang löschen</button></div></div></div>
+{% endblock %}
+
+{% block scripts %}<script>
+const $=id=>document.getElementById(id);
+let accounts=[],deleteId=null;
+const currentId={{ auth_user.id }};
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=s=>s?new Intl.DateTimeFormat('de-DE',{timeZone:'Europe/Berlin',dateStyle:'short',timeStyle:'short'}).format(new Date(s)):'Noch nie';
+const roleLabel=r=>({admin:'Administrator',user:'Benutzer',viewer:'Nur Lesen'}[r]||r);
+
+async function load(){
+  const r=await fetch('/api/system-users');
+  if(!r.ok)return;
+  accounts=(await r.json()).users||[];
+  $('accountCount').textContent=accounts.length;
+  $('activeCount').textContent=accounts.filter(x=>Number(x.active)).length;
+  $('adminCount').textContent=accounts.filter(x=>x.role==='admin'&&Number(x.active)).length;
+  if(!accounts.length){$('accountBody').innerHTML='<tr><td colspan="7" class="empty-cell">Keine Systembenutzer.</td></tr>';return}
+  $('accountBody').innerHTML=accounts.map(a=>{
+    let actions='<button class="secondary" data-edit="'+a.id+'" type="button">Bearbeiten</button>';
+    if(Number(a.totp_enabled)&&a.id!==currentId)actions+='<button class="danger-outline" data-reset2fa="'+a.id+'" type="button">2FA zurücksetzen</button>';
+    actions+='<button class="danger-outline" data-delete="'+a.id+'" type="button" '+(a.id===currentId?'disabled':'')+'>Löschen</button>';
+    return '<tr><td><b>'+esc(a.display_name)+'</b>'+(a.id===currentId?'<small class="self-label">Du</small>':'')+'</td><td>'+esc(a.username)+'</td><td><span class="access-role '+esc(a.role)+'">'+esc(roleLabel(a.role))+'</span></td><td><span class="state '+(Number(a.active)?'green':'')+'">'+(Number(a.active)?'Aktiv':'Deaktiviert')+'</span></td><td><span class="state '+(Number(a.totp_enabled)?'green':'')+'">'+(Number(a.totp_enabled)?'Aktiv':'Aus')+'</span></td><td>'+esc(fmt(a.last_login_at))+'</td><td><div class="table-actions">'+actions+'</div></td></tr>';
+  }).join('');
+}
+
+function openEditor(a){
+  a=a||null;
+  $('accountId').value=a?.id||'';
+  $('displayName').value=a?.display_name||'';
+  $('username').value=a?.username||'';
+  $('role').value=a?.role||'viewer';
+  $('active').value=Number(a?.active??1)?'1':'0';
+  $('password').value='';
+  $('password').required=!a;
+  $('passwordHint').textContent=a?'Leer lassen zum Beibehalten. Bei Änderung werden andere aktive Sitzungen dieses Kontos beendet.':'Mindestens 12 Zeichen';
+  $('accountModalTitle').textContent=a?'Zugang bearbeiten':'Zugang anlegen';
+  $('accountMessage').textContent='';
+  $('accountEditModal').hidden=false;
+  setTimeout(()=>$('displayName').focus(),0);
+}
+$('inviteAccount').onclick=()=>{$('inviteMessage').textContent='';$('inviteEmail').value='';$('inviteDisplayName').value='';$('inviteRole').value='user';$('inviteModal').hidden=false;setTimeout(()=>$('inviteEmail').focus(),0)};
+$('inviteClose').onclick=$('inviteCancel').onclick=()=>$('inviteModal').hidden=true;
+$('inviteForm').onsubmit=async e=>{
+  e.preventDefault();
+  const payload={email:$('inviteEmail').value.trim(),display_name:$('inviteDisplayName').value.trim()||null,role:$('inviteRole').value};
+  const r=await fetch('/api/system-users/invite',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('inviteMessage').className='form-message error';$('inviteMessage').textContent=d.detail||'Einladung konnte nicht gesendet werden.';return}
+  $('inviteMessage').className='form-message success';$('inviteMessage').textContent='Einladung wurde an '+d.email+' gesendet.';
+};
+
+$('addAccount').onclick=()=>openEditor();
+$('accountEditClose').onclick=$('accountEditCancel').onclick=()=>$('accountEditModal').hidden=true;
+$('accountForm').onsubmit=async e=>{
+  e.preventDefault();
+  const id=Number($('accountId').value||0);
+  const payload={display_name:$('displayName').value.trim(),username:$('username').value.trim(),role:$('role').value,active:$('active').value==='1',password:$('password').value||null};
+  const r=await fetch(id?'/api/system-users/'+id:'/api/system-users',{method:id?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok){$('accountMessage').className='form-message error';$('accountMessage').textContent=d.detail||'Zugang konnte nicht gespeichert werden.';return}
+  $('accountEditModal').hidden=true;await load();
+};
+
+$('accountBody').onclick=async e=>{
+  const edit=e.target.closest('[data-edit]'),reset=e.target.closest('[data-reset2fa]'),del=e.target.closest('[data-delete]');
+  if(edit){openEditor(accounts.find(x=>x.id===Number(edit.dataset.edit)));return}
+  if(reset){
+    const id=Number(reset.dataset.reset2fa),a=accounts.find(x=>x.id===id);
+    if(!confirm('2FA für '+(a?.display_name||a?.username||'dieses Konto')+' zurücksetzen? Alle Sitzungen dieses Kontos werden beendet.'))return;
+    const r=await fetch('/api/system-users/'+id+'/2fa',{method:'DELETE'}),d=await r.json().catch(()=>({}));
+    if(!r.ok){alert(d.detail||'2FA konnte nicht zurückgesetzt werden.');return}
+    await load();return;
+  }
+  if(del&&!del.disabled){
+    deleteId=Number(del.dataset.delete);const a=accounts.find(x=>x.id===deleteId);
+    $('accountDeleteText').innerHTML='Möchtest du den Zugang <strong>'+esc(a?.display_name||'')+'</strong> wirklich löschen?';
+    $('deleteMessage').textContent='';$('accountDeleteModal').hidden=false;
+  }
+};
+$('accountDeleteClose').onclick=$('accountDeleteCancel').onclick=()=>{$('accountDeleteModal').hidden=true;deleteId=null};
+$('accountDeleteConfirm').onclick=async()=>{
+  if(!deleteId)return;
+  const r=await fetch('/api/system-users/'+deleteId,{method:'DELETE'}),d=await r.json().catch(()=>({}));
+  if(!r.ok){$('deleteMessage').className='form-message error';$('deleteMessage').textContent=d.detail||'Zugang konnte nicht gelöscht werden.';return}
+  $('accountDeleteModal').hidden=true;deleteId=null;await load();
+};
+['inviteModal','accountEditModal','accountDeleteModal'].forEach(id=>$(id).onclick=e=>{if(e.target.id===id)$(id).hidden=true});
+load();
+</script>{% endblock %}

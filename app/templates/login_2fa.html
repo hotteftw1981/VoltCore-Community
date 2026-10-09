@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="de" data-theme="light" style="--brand: {{ branding.primary_color }};--brand-contrast: {{ branding.contrast_color }}">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="{{ branding.primary_color }}">
+<title>Zwei-Faktor-Anmeldung - {{ branding.product_name }}</title>
+<script>(()=>{const t=localStorage.getItem('drk-ocpp-theme');document.documentElement.dataset.theme=t||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')})();</script>
+{% if branding.favicon_url %}<link rel="icon" href="{{ branding.favicon_url }}">{% endif %}
+<link rel="stylesheet" href="/static/style.css?v={{ app_version }}">
+</head>
+<body class="auth-page{% if branding.login_background_url %} has-brand-background{% endif %}"{% if branding.login_background_url %} style="--login-bg:url('{{ branding.login_background_url }}')"{% endif %}>
+<main class="auth-shell"><section class="auth-card">
+<div class="auth-brand">{% if branding.logo_light_url or branding.logo_dark_url %}<div class="brand-visual"><img class="brand-logo logo-light" src="{{ branding.logo_light_url or branding.logo_dark_url }}" alt=""><img class="brand-logo logo-dark" src="{{ branding.logo_dark_url or branding.logo_light_url }}" alt=""></div>{% endif %}<div><strong>{{ branding.display_name }}</strong><span>{{ branding.product_subtitle }}</span></div></div>
+<div class="auth-copy"><h1>Zweiter Faktor</h1><p>Passwort bestätigt{% if display_name %} für <strong>{{ display_name }}</strong>{% endif %}. Gib jetzt den 6-stelligen Code aus deiner Authenticator-App oder einen Wiederherstellungscode ein.</p></div>
+{% if error %}<div class="auth-error">{{ error }}</div>{% endif %}
+<form method="post" action="/login/2fa" class="auth-form">
+<label>Sicherheitscode<input name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" autofocus required placeholder="123456 oder XXXX-XXXX-XXXX-XXXX"></label>
+<button class="primary auth-submit" type="submit">Anmeldung abschließen</button>
+</form>
+<div class="auth-links"><a href="/login">← Zurück zur Anmeldung</a><button type="button" id="authTheme">◐ Darstellung wechseln</button><button type="button" id="infoOpen">ⓘ Info</button></div>
+<small class="auth-version">V{{ app_version }} · geschützte Anmeldung</small>
+</section></main>
+{% include "_info_modal.html" %}
+<script>
+document.getElementById('authTheme').onclick=()=>{const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark';localStorage.setItem('drk-ocpp-theme',r.dataset.theme)};
+const info=document.getElementById('infoModal'),open=document.getElementById('infoOpen'),close=document.getElementById('infoClose');
+if(open)open.onclick=()=>info.hidden=false;if(close)close.onclick=()=>info.hidden=true;
+</script>
+</body></html>

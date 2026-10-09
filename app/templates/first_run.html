@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Ersteinrichtung · {{ branding.product_name }}{% endblock %}
+{% block heading %}VoltCore Community einrichten{% endblock %}
+{% block subtitle %}Einmal die wichtigsten Grundlagen festlegen – danach kannst du direkt loslegen.{% endblock %}
+{% block content %}
+<div class="panel first-run-panel">
+  <div class="panelhead">
+    <div><h2>🚀 Willkommen bei VoltCore Community</h2><span>Schritt 2 von 2 · Grundeinstellungen</span></div>
+  </div>
+  {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
+  <form method="post" action="/first-run" class="first-run-form">
+    <section class="first-run-section">
+      <h3>🏢 Installation &amp; Organisation</h3>
+      <div class="form-grid">
+        <label>Organisationsname<input name="organization_name" value="{{ values.organization_name if values else branding.organization_name }}" required maxlength="120"></label>
+        <label>Anzeigename<input name="display_name" value="{{ values.display_name if values else branding.display_name }}" required maxlength="120"></label>
+      </div>
+      <small>Beides kann später unter Einstellungen geändert werden.</small>
+    </section>
+
+    <section class="first-run-section">
+      <h3>📧 E-Mail / SMTP</h3>
+      <label class="switch-line"><input type="checkbox" name="smtp_enabled" value="1" {% if values and values.smtp_enabled %}checked{% elif not values and mail.enabled %}checked{% endif %}><span>E-Mail-Versand jetzt einrichten</span></label>
+      <div class="form-grid">
+        <label>SMTP-Host<input name="smtp_host" value="{{ values.smtp_host if values else mail.host }}" placeholder="smtp.example.org"></label>
+        <label>Port<input name="smtp_port" type="number" min="1" max="65535" value="{{ values.smtp_port if values else (mail.port or 587) }}"></label>
+        <label>Sicherheit<select name="smtp_security">
+          {% set sec = values.smtp_security if values else (mail.security or 'starttls') %}
+          <option value="starttls" {% if sec=='starttls' %}selected{% endif %}>STARTTLS</option>
+          <option value="ssl" {% if sec=='ssl' %}selected{% endif %}>SSL/TLS</option>
+          <option value="none" {% if sec=='none' %}selected{% endif %}>Keine</option>
+        </select></label>
+        <label>Benutzername<input name="smtp_username" value="{{ values.smtp_username if values else mail.username }}"></label>
+        <label>Passwort<input name="smtp_password" type="password" autocomplete="new-password" placeholder="{% if mail.password_configured %}bereits hinterlegt{% else %}optional{% endif %}"></label>
+        <label>Absender-E-Mail<input name="smtp_from_email" type="email" value="{{ values.smtp_from_email if values else mail.from_email }}"></label>
+      </div>
+      <small>Du kannst SMTP überspringen und später konfigurieren. Für Einladungen per E-Mail wird SMTP benötigt.</small>
+    </section>
+
+    <section class="first-run-section">
+      <h3>👤 Ersten Benutzer einladen</h3>
+      <div class="form-grid">
+        <label>Anzeigename<input name="invite_display_name" value="{{ values.invite_display_name if values else '' }}" maxlength="120" placeholder="optional"></label>
+        <label>E-Mail-Adresse<input name="invite_email" type="email" value="{{ values.invite_email if values else '' }}" placeholder="name@example.org"></label>
+        <label>Rolle<select name="invite_role">
+          {% set invite_role = values.invite_role if values else 'user' %}
+          <option value="user" {% if invite_role=='user' %}selected{% endif %}>Benutzer</option>
+          <option value="viewer" {% if invite_role=='viewer' %}selected{% endif %}>Nur Lesen</option>
+          <option value="admin" {% if invite_role=='admin' %}selected{% endif %}>Administrator</option>
+        </select></label>
+      </div>
+      <small>Optional. Wenn eine E-Mail-Adresse eingetragen wird, muss der E-Mail-Versand oben aktiviert und vollständig konfiguriert sein. Die Einladung ist 72 Stunden gültig.</small>
+    </section>
+
+    <section class="first-run-section">
+      <h3>💶 Standardpreis</h3>
+      <div class="form-grid">
+        <label>Tarifname<input name="tariff_name" value="{{ values.tariff_name if values else 'Standardtarif' }}" maxlength="120"></label>
+        <label>Preis pro kWh (€)<input name="price_eur_kwh" inputmode="decimal" value="{{ values.price_eur_kwh if values else '' }}" placeholder="z. B. 0,35"></label>
+      </div>
+      <small>Leer lassen, wenn zunächst kein Preis hinterlegt werden soll. Tarife können später jederzeit ergänzt oder versioniert werden.</small>
+    </section>
+
+    <section class="first-run-section">
+      <h3>⚡ Freies Ladeguthaben / Monatslimit</h3>
+      <label class="switch-line"><input type="checkbox" name="free_credit_enabled" value="1" {% if values and values.free_credit_enabled %}checked{% endif %}><span>Monatliches Standard-Ladeguthaben verwenden</span></label>
+      <div class="form-grid">
+        <label>Standardwert (kWh / Monat)<input name="default_monthly_kwh" type="number" min="0" step="1" value="{{ values.default_monthly_kwh if values else '0' }}"></label>
+      </div>
+      <small>Standardmäßig ist diese Funktion <strong>aus</strong>. Keine Wochenarbeitszeit, keine Arbeitgeberlogik – nur ein optionales neutrales Monatslimit.</small>
+    </section>
+
+    <div class="form-actions">
+      <button class="primary" type="submit">Einrichtung abschließen →</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

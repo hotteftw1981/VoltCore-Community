@@ -1,0 +1,61 @@
+name: Community Publication History Audit
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publication-audit.yml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout all tracked history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Include all branches and tags
+        run: |
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*' --prune
+          echo "Refs: $(git for-each-ref --format='%(refname)' | wc -l)"
+          echo "Unique commits: $(git rev-list --all | wc -l)"
+      - name: Scan entire reachable Git history for secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=8.28.0
+          curl --fail --silent --show-error --location "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks git --log-opts="--all" --redact --exit-code 0 --report-format json --report-path /tmp/history-gitleaks.json .
+          python - <<'PY'
+          import json
+          from collections import Counter
+          from pathlib import Path
+          report=Path("/tmp/history-gitleaks.json")
+          findings=json.loads(report.read_text()) if report.exists() else []
+          print("Potential secret finding count:",len(findings))
+          for (path,rule),count in sorted(Counter((item.get("File","?"),item.get("RuleID","?")) for item in findings).items()):
+              print("Finding group:",path,"rule:",rule,"count:",count)
+          if findings:
+              print("::warning::Potential historical secrets detected. Do not publish before verified cleanup.")
+          PY
+      - name: Flag organization-specific terms in reachable history
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          for sha in $(git rev-list --all); do
+            if git grep -I -q -i -E 'DRK|Schwelm|drk-ocpp-backend|ocpp\.drk-schwelm|trakfog' "$sha" -- ':!LICENSE'; then
+              count=$((count+1))
+            fi
+          done
+          echo "Historical commits with excluded-brand or organization-specific terms: $count"
+          if [ "$count" -gt 0 ]; then
+            echo "::warning::Historical commits contain organization-specific references. Do not make this repository public before history remediation."
+          fi
+      - name: Publication gate reminder
+        run: |
+          echo "Automated findings are not full legal, copyright, third-party-license or GitHub unreferenced-object clearance."
+          echo "Do not change repository visibility based only on this workflow."

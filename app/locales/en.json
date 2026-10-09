@@ -1,0 +1,43 @@
+{
+  "app": {
+    "edition": "Community",
+    "language": "Language",
+    "language_auto": "Automatic"
+  },
+  "common": {
+    "info": "Info",
+    "close": "Close",
+    "save": "Save",
+    "cancel": "Cancel",
+    "search": "Search",
+    "no_results": "No results",
+    "loading": "Loading …",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "charge_points": "Charge points",
+    "users": "Users",
+    "vehicles": "Vehicles",
+    "transactions": "Charging sessions",
+    "reports": "Reports",
+    "backups": "Backups",
+    "updates": "Updates",
+    "security": "Security",
+    "system_status": "System status",
+    "audit": "Audit log",
+    "settings": "Settings"
+  },
+  "updates": {
+    "available": "Update available",
+    "up_to_date": "VoltCore Community is up to date",
+    "check_now": "Check for updates",
+    "source": "GitHub Releases"
+  },
+  "roles": {
+    "admin": "Administrator",
+    "user": "User",
+    "viewer": "Read-only"
+  }
+}

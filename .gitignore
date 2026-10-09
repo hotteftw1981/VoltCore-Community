@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Runtime data and secrets
+data/
+*.sqlite
+*.sqlite3
+*.db
+.smtp_password
+.backup_external_password
+.env
+.env.*
+
+# Generated artifacts
+dist/
+build/
+*.zip
+QA_REPORT_*.md
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Zugangsanträge · {{ branding.product_name }}{% endblock %}
+{% block heading %}Zugangsanträge{% endblock %}
+{% block subtitle %}Öffentliche Registrierungen prüfen und freigeben{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panelhead"><div><h2>Anträge</h2><span>Community-Onboarding</span></div></div>
+  {% for x in requests %}
+  <article class="row">
+    <div><b>{{ x.name }}</b><small>{{ x.email }} · {{ x.status }} · {{ x.created_at }}</small></div>
+    <a class="secondary button" href="/registration-requests/{{ x.id }}">Öffnen</a>
+  </article>
+  {% else %}<div class="empty">Keine Zugangsanträge vorhanden.</div>{% endfor %}
+</section>
+{% endblock %}

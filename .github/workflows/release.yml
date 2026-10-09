@@ -1,0 +1,146 @@
+name: Community Release
+
+on:
+  workflow_run:
+    workflows: ["Community CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optionaler Release-Tag, z. B. v0.9.7.75. Leer = APP_VERSION."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Resolve source commit
+        id: source
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          from pathlib import Path
+          text=Path("app/main.py").read_text(encoding="utf-8")
+          match=re.search(r'^APP_VERSION\s*=\s*["\x27]([^"\x27]+)["\x27]',text,re.M)
+          if not match:
+              raise SystemExit("APP_VERSION not found")
+          current=match.group(1)
+          requested=(os.environ.get("INPUT_VERSION") or "").strip()
+          tag=requested or f"v{current}"
+          if tag.removeprefix("v") != current:
+              raise SystemExit(f"Tag {tag} does not match APP_VERSION {current}")
+          if not re.fullmatch(r"v?\d+(?:\.\d+){1,5}", tag):
+              raise SystemExit(f"Unsupported release tag: {tag}")
+          print(f"version={current}")
+          print(f"tag={tag}")
+          PY
+
+      - name: Check existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Python
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.existing.outputs.exists != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Release smoke checks
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          DATA_DIR: /tmp/voltcore-community-release-data
+          ENABLE_API_DOCS: "0"
+          VOLTCORE_UPDATE_CHECK_ENABLED: "0"
+        run: |
+          mkdir -p "$DATA_DIR"
+          python -m compileall -q app tests
+          python -m unittest discover -s tests -p 'test_*.py'
+          python -c "import app.main; print('Release import OK:', app.main.APP_VERSION)"
+
+      - name: Build Community ZIP
+        if: steps.existing.outputs.exists != 'true'
+        run: python scripts/build_release.py --dist dist
+
+      - name: Verify release archive
+        if: steps.existing.outputs.exists != 'true'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          archives=list(Path("dist").glob("VoltCore_Community_V*.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected one Community ZIP, found {len(archives)}")
+          required={
+              ".env.example",
+              "CHANGELOG.md",
+              "LICENSE",
+              "CONTRIBUTING.md",
+              "Dockerfile",
+              "README.md",
+              "README.en.md",
+              "docker-compose.yml",
+              "docker-compose.portainer.yml",
+              "requirements.txt",
+          }
+          with zipfile.ZipFile(archives[0]) as zf:
+              names=zf.namelist()
+              top=names[0].split("/",1)[0]
+              missing=sorted(x for x in required if f"{top}/{x}" not in names)
+              if missing:
+                  raise SystemExit("Release archive missing: "+", ".join(missing))
+              if not any(x.startswith(f"{top}/app/") for x in names):
+                  raise SystemExit("Release archive missing app/")
+              if not any(x.startswith(f"{top}/docs/") for x in names):
+                  raise SystemExit("Release archive missing docs/")
+          print("Release archive OK:", archives[0])
+          PY
+
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          TARGET_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/VoltCore_Community_V*.zip \
+            --target "$TARGET_SHA" \
+            --generate-notes \
+            --title "VoltCore Community ${{ steps.version.outputs.version }}"

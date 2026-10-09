@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Sicherheit - {{ branding.product_name }}{% endblock %}
+{% block heading %}Sicherheit & Produktionshärtung{% endblock %}
+{% block subtitle %}OCPP-Zugang, Webschutz, Sitzungen und Sicherheitsstatus auf einen Blick{% endblock %}
+{% block content %}
+<section class="stats five security-kpis">
+  <div class="stat security-score-stat"><span>Härtungsgrad <button type="button" class="context-help" aria-label="Info: Härtungsgrad" aria-haspopup="dialog" aria-expanded="false" data-help-title="Härtungsgrad" data-help="Bewertet die aktivierten Schutzmaßnahmen wie OCPP-Authentifizierung, unbekannte Ladepunkte, TLS/WSS, Subprotocol und Secret-Abdeckung. 100 Prozent bedeutet: alle vorgesehenen Härtungsbausteine sind aktiv.">i</button></span><b id="secScore">—</b><small id="secScoreHint">Prüfe Konfiguration …</small></div>
+  <div class="stat"><span>OCPP-Schutz</span><b id="secMode">—</b><small id="secModeHint">Richtlinie</small></div>
+  <div class="stat"><span>Secrets</span><b id="secSecrets">—</b><small>aktive Ladepunkte</small></div>
+  <div class="stat"><span>Letzter Transport</span><b id="secWss">—</b><small>zuletzt per WSS gesehen</small></div>
+  <div class="stat"><span>Web-Sessions</span><b id="secSessions">—</b><small>aktiv / eigenes Konto</small></div>
+</section>
+
+<section class="panel security-readiness-panel">
+  <div class="panelhead"><div><h2>Sicherheitsstatus <button type="button" class="context-help" aria-label="Info: Sicherheitsstatus" aria-haspopup="dialog" aria-expanded="false" data-help-title="Sicherheitsstatus" data-help="Die Checkliste zeigt, welche technischen Schutzmaßnahmen bereits aktiv sind und an welcher Stelle noch Härtungspotenzial besteht.">i</button></h2><span>Technische Bereitschaft für den produktiven Betrieb</span></div><span id="readinessState" class="state">—</span></div>
+  <div class="security-readiness-layout">
+    <div class="security-gauge-wrap"><div class="security-gauge"><i id="readinessGauge"></i><strong id="readinessPercent">0%</strong></div><small>Konfigurations- und Transporthärtung</small></div>
+    <div id="readinessChecks" class="security-checklist"><div class="empty">Prüfe Sicherheitsstatus …</div></div>
+  </div>
+</section>
+
+<section class="settings-grid security-grid">
+  <div class="panel security-policy-panel">
+    <div class="panelhead"><div><h2>OCPP-Zugriffsrichtlinie <button type="button" class="context-help" aria-label="Info: OCPP-Zugriffsrichtlinie" aria-haspopup="dialog" aria-expanded="false" data-help-title="OCPP-Zugriffsrichtlinie" data-help="Steuert, wie Ladepunkte sich am Backend authentifizieren. Strikt sollte erst aktiviert werden, wenn alle produktiven Ladepunkte ein Secret besitzen.">i</button></h2><span>OCPP 1.6J · Basic Auth / TLS</span></div><span id="policyState" class="state">—</span></div>
+    <form id="securityForm" class="security-form">
+      <label>Authentifizierungsmodus
+        <select id="authMode">
+          <option value="off">Aus · Kompatibilitätsmodus</option>
+          <option value="configured">Schrittweise · Ladepunkte mit Secret schützen</option>
+          <option value="required">Strikt · nur bekannte Ladepunkte mit Secret</option>
+        </select>
+        <small>„Schrittweise“ eignet sich zum Umstellen ohne alle Ladepunkte gleichzeitig auszusperren.</small>
+      </label>
+      <div class="setting-switch-card"><div><b>Unbekannte Ladepunkte ablehnen</b><small>Neue, noch nicht eingerichtete Charge Point IDs dürfen keine OCPP-Verbindung aufbauen.</small></div><label class="toggle-switch"><input id="rejectUnknown" type="checkbox"><span></span></label></div>
+      <div class="setting-switch-card"><div><b>WSS / TLS erzwingen</b><small>Nur aktivieren, wenn der OCPP-Endpunkt sicher über WSS erreichbar ist. TLS kann direkt oder am Reverse Proxy terminiert werden.</small></div><label class="toggle-switch"><input id="requireTls" type="checkbox"><span></span></label></div>
+      <div class="setting-switch-card"><div><b>OCPP-1.6-Subprotocol erzwingen</b><small>Lehnt WebSocket-Handshakes ohne <code>ocpp1.6</code> ab. Für normkonforme OCPP-1.6J-Ladepunkte empfohlen.</small></div><label class="toggle-switch"><input id="requireSubprotocol" type="checkbox"><span></span></label></div>
+      <div id="securityMessage" class="form-message"></div>
+      <div class="form-actions"><button class="primary" type="submit">Sicherheitsrichtlinie speichern</button></div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panelhead"><div><h2>Web-Härtung</h2><span>aktive Schutzmechanismen</span></div><span class="state green">Geschützt</span></div>
+    <div class="settings-list security-web-list">
+      <div><span>Session-Cookie</span><b>HttpOnly · SameSite=Lax · Secure bei HTTPS</b></div>
+      <div><span>Login-Rate-Limit</span><b id="webRate">—</b></div>
+      <div><span>OCPP-Auth-Rate-Limit</span><b id="ocppRate">—</b></div>
+      <div><span>Neue Web-Passwörter</span><b id="passwordPolicy">—</b></div><div><span>Zwei-Faktor-Authentifizierung</span><b id="twoFactorPolicy">—</b></div>
+      <div><span>Neue OCPP-Secrets</span><b id="secretPolicy">—</b></div>
+      <div><span>Cross-Site-Schutz</span><b>Same-Origin-Prüfung aktiv</b></div>
+      <div><span>Security Header</span><b>CSP · Frame-Schutz · nosniff · HSTS bei HTTPS</b></div>
+      <div><span>Session-Laufzeit</span><b id="webSession">—</b></div>
+      <div><span>Reverse-Proxy-Header</span><b id="proxyTrust">—</b></div>
+    </div>
+    <div class="security-session-actions">
+      <div><b>Eigene Browser-Sitzungen</b><small id="ownSessionHint">—</small></div>
+      <button id="revokeOtherSessions" class="danger-outline" type="button">Andere eigene Sessions beenden</button>
+    </div>
+    <div id="sessionMessage" class="form-message"></div>
+    <div class="detail-note security-note"><b>Hinweis:</b> OCPP-Secrets werden nur gehasht gespeichert. Ein erzeugtes Secret wird nach dem Speichern genau einmal angezeigt. Neue Secrets benötigen mindestens 16 Zeichen.</div>
+  </div>
+</section>
+
+<section class="security-signal-grid">
+  <div class="panel security-signal"><span>Web-Login Fehlversuche</span><b id="failedWeb24">0</b><small>letzte 24 Stunden</small></div>
+  <div class="panel security-signal"><span>OCPP-Verbindungen blockiert</span><b id="failedOcpp24">0</b><small>letzte 24 Stunden</small></div>
+  <div class="panel security-signal"><span>Warnungen</span><b id="securityWarnings24">0</b><small>Security-Log · 24 Stunden</small></div>
+  <div class="panel security-signal"><span>Kritische Ereignisse</span><b id="securityCritical24">0</b><small>Security-Log · 24 Stunden</small></div>
+</section>
+
+<section class="panel table-panel security-access-panel">
+  <div class="panelhead"><div><h2>OCPP-Zugangsdaten je Ladepunkt</h2><span>Secret setzen, rotieren oder entfernen</span></div><button id="refreshSecurity" class="secondary" type="button">↻ Aktualisieren</button></div>
+  <div class="table-wrap"><table class="security-table"><thead><tr><th>Ladepunkt</th><th>Secret</th><th>Schutz</th><th>Transport</th><th>Letzte Authentifizierung</th><th>Aktion</th></tr></thead><tbody id="securityChargePoints"><tr><td colspan="6">Lade …</td></tr></tbody></table></div>
+</section>
+
+<section class="panel security-events-panel">
+  <div class="panelhead"><div><h2>Security-Ereignisse</h2><span>Web-Login, OCPP-Authentifizierung und Richtlinienänderungen</span></div><span id="securityEventCount">—</span></div>
+  <div id="securityEvents" class="security-events"><div class="empty">Noch keine Ereignisse.</div></div>
+  <div id="securityEventPager" class="form-actions" style="justify-content:space-between;align-items:center;margin-top:14px" hidden>
+    <button id="securityEventPrev" class="secondary compact" type="button">← Zurück</button>
+    <small id="securityEventPageInfo">Seite 1 von 1</small>
+    <button id="securityEventNext" class="secondary compact" type="button">Weiter →</button>
+  </div>
+</section>
+
+<div class="modal" id="secretModal" hidden><div class="modal-card security-secret-modal">
+  <div class="panelhead modal-title-row"><div><h2>OCPP-Secret</h2><span id="secretCp">—</span></div><button class="modal-close" id="secretClose" type="button" aria-label="Schließen">&times;</button></div>
+  <div id="secretInputStage">
+    <p class="detail-note">Leer lassen, um ein sicheres Secret automatisch zu erzeugen. Alternativ kannst du ein eigenes Secret mit 16–128 Zeichen setzen.</p>
+    <label class="field-label">Eigenes Secret (optional)<input id="secretValue" type="password" autocomplete="new-password" minlength="16" maxlength="128" placeholder="Leer = automatisch erzeugen"></label>
+    <div id="secretMessage" class="form-message"></div>
+    <div class="form-actions"><button id="secretCancel" class="secondary" type="button">Abbrechen</button><button id="secretSave" class="primary" type="button">Secret setzen / rotieren</button></div>
+  </div>
+  <div id="secretResultStage" hidden>
+    <div class="security-secret-result"><b>Secret nur jetzt sichtbar</b><span>Trage dieses Secret in der OCPP-Konfiguration des Ladepunkts ein.</span><code id="secretResult"></code></div>
+    <div class="form-actions"><button id="secretDone" class="primary" type="button">Verstanden</button></div>
+  </div>
+</div></div>
+{% endblock %}
+{% block scripts %}
+<script>
+const $=id=>document.getElementById(id), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let overview=null,currentCp=null,securityEventPage=1;
+const fmt=v=>v?window.ocppLocalTime(v):'—';
+function modeLabel(v){return v==='required'?'Strikt':v==='configured'?'Schrittweise':'Kompatibel'}
+function cpProtected(cp,mode){return mode==='required'||(mode==='configured'&&Number(cp.secret_configured));}
+function readinessClass(level){return level==='hardened'?'green':level==='good'?'blue':level==='partial'?'warn':''}
+async function loadSecurity(page=securityEventPage){const r=await fetch('/api/security/overview?event_page='+encodeURIComponent(page),{cache:'no-store'});if(!r.ok)return;overview=await r.json();const s=overview.settings,sum=overview.summary,w=overview.web,ready=overview.readiness||{},ev=overview.event_summary||{},sessions=overview.sessions||{};
+ $('authMode').value=s.auth_mode;$('rejectUnknown').checked=!!s.reject_unknown;$('requireTls').checked=!!s.require_tls;$('requireSubprotocol').checked=!!s.require_subprotocol;
+ $('secScore').textContent=`${ready.score??0}%`;$('secScoreHint').textContent=ready.label||'—';$('secMode').textContent=modeLabel(s.auth_mode);$('secModeHint').textContent=s.require_tls?'WSS/TLS erforderlich':'TLS nicht erzwungen';$('secSecrets').textContent=`${sum.with_secret}/${sum.charge_points}`;$('secWss').textContent=`${sum.last_wss}/${sum.charge_points}`;$('secSessions').textContent=`${sessions.total??0} / ${sessions.mine??0}`;
+ $('twoFactorPolicy').textContent=String(overview.two_factor?.enabled_users??0)+'/'+String(overview.two_factor?.active_users??0)+' aktive Konten · eigenes Konto '+(overview.two_factor?.own_enabled?'geschützt':'ohne 2FA');
+ $('webRate').textContent=`${w.login_failure_limit} Fehlversuche je Konto/IP in ${w.login_window_minutes} Minuten`;$('ocppRate').textContent=`${overview.ocpp_rate_limit.failure_limit} Fehlversuche in ${overview.ocpp_rate_limit.window_minutes} Minuten`;$('passwordPolicy').textContent=`mindestens ${w.password_min_length} Zeichen · nicht identisch zum aktuellen Passwort`;$('secretPolicy').textContent=`mindestens ${overview.ocpp_rate_limit.secret_min_length||16} Zeichen`;$('webSession').textContent=`${w.session_hours} Stunden`;$('proxyTrust').textContent=overview.transport.trust_proxy_headers?'Vertrauenswürdig konfiguriert':'Aus (direkte Verbindungen)';
+ $('ownSessionHint').textContent=`${sessions.mine??0} aktive Sitzung(en) für dein Konto · ${sessions.total??0} insgesamt`;$('revokeOtherSessions').disabled=Number(sessions.mine||0)<=1;
+ $('failedWeb24').textContent=ev.web_failed??0;$('failedOcpp24').textContent=ev.ocpp_rejected??0;$('securityWarnings24').textContent=ev.warnings??0;$('securityCritical24').textContent=ev.critical??0;
+ $('readinessPercent').textContent=`${ready.score??0}%`;$('readinessGauge').style.width=`${Math.max(0,Math.min(100,Number(ready.score||0)))}%`;$('readinessState').textContent=ready.label||'—';$('readinessState').className='state '+readinessClass(ready.level);
+ $('readinessChecks').innerHTML=(ready.checks||[]).map(x=>`<div class="security-check ${x.ok?'ok':'open'}"><span>${x.ok?'✓':'!'}</span><div><b>${esc(x.label)}</b><small>${esc(x.detail||'')}</small></div><strong>${Number(x.gained||0)}/${Number(x.points||0)}</strong></div>`).join('')||'<div class="empty">Keine Prüfpunkte.</div>';
+ const hardened=s.auth_mode==='required'&&s.reject_unknown&&s.require_tls&&s.require_subprotocol;$('policyState').textContent=hardened?'Produktiv gehärtet':s.auth_mode==='required'?'Strikte Auth · Transport prüfen':s.auth_mode==='configured'?'Umstellung aktiv':'Kompatibilitätsmodus';$('policyState').className='state '+(hardened?'green':'');
+ const cps=overview.charge_points||[];$('securityChargePoints').innerHTML=cps.map(cp=>{const protectedNow=cpProtected(cp,s.auth_mode),secret=Number(cp.secret_configured),transport=cp.ocpp_last_transport||'—',last=cp.ocpp_auth_last_success_at||cp.ocpp_auth_last_failure_at;return `<tr><td><b>${esc(cp.id)}</b><small>${esc(cp.location||'Ohne Standort')}</small></td><td>${secret?'<span class="state green">gesetzt</span>':'<span class="state">fehlt</span>'}<small>${cp.ocpp_secret_set_at?esc(fmt(cp.ocpp_secret_set_at)):''}</small></td><td><span class="state ${protectedNow?'green':''}">${protectedNow?'erforderlich':'nicht erzwungen'}</span></td><td><b>${esc(transport)}</b><small>${esc(cp.ocpp_last_remote||'')}</small></td><td><b>${esc(last?fmt(last):'—')}</b><small>${esc(cp.ocpp_auth_last_reason||'')}</small></td><td><div class="security-actions"><button class="secondary compact" data-secret="${esc(cp.id)}" type="button">${secret?'Rotieren':'Secret setzen'}</button>${secret?`<button class="danger-outline compact" data-clear-secret="${esc(cp.id)}" type="button">Entfernen</button>`:''}</div></td></tr>`}).join('')||'<tr><td colspan="6">Keine Ladepunkte vorhanden.</td></tr>';
+ document.querySelectorAll('[data-secret]').forEach(b=>b.onclick=()=>openSecret(b.dataset.secret));document.querySelectorAll('[data-clear-secret]').forEach(b=>b.onclick=()=>clearSecret(b.dataset.clearSecret));
+ const events=overview.events||[],pg=overview.event_pagination||{page:1,pages:1,total:events.length,page_size:10};securityEventPage=Number(pg.page||1);$('securityEventCount').textContent=String(pg.total||0)+' gesamt';$('securityEvents').innerHTML=events.map(e=>`<div class="security-event ${esc(e.severity||'info')}"><span class="security-event-dot"></span><div><b>${esc(e.event_type)}</b><small>${esc([e.charge_point_id,e.username,e.detail].filter(Boolean).join(' · '))}</small></div><time>${esc(fmt(e.ts))}</time><span class="state ${Number(e.success)===1?'green':''}">${e.success===null||e.success===undefined?'Info':Number(e.success)===1?'OK':'Blockiert'}</span></div>`).join('')||'<div class="empty">Noch keine Security-Ereignisse.</div>';
+ $('securityEventPageInfo').textContent='Seite '+securityEventPage+' von '+Number(pg.pages||1);$('securityEventPager').hidden=Number(pg.pages||1)<=1;$('securityEventPrev').disabled=securityEventPage<=1;$('securityEventNext').disabled=securityEventPage>=Number(pg.pages||1);
+}
+$('securityForm').onsubmit=async e=>{e.preventDefault();const m=$('securityMessage');m.textContent='Speichere …';m.className='form-message';const r=await fetch('/api/security/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({auth_mode:$('authMode').value,reject_unknown:$('rejectUnknown').checked,require_tls:$('requireTls').checked,require_subprotocol:$('requireSubprotocol').checked})});const d=await r.json().catch(()=>({}));m.textContent=r.ok?'Sicherheitsrichtlinie gespeichert. Änderungen gelten für neue OCPP-Verbindungen.':(d.detail||'Speichern fehlgeschlagen.');m.className='form-message '+(r.ok?'success':'error');if(r.ok)await loadSecurity()};
+$('revokeOtherSessions').onclick=async()=>{if(!confirm('Alle anderen Browser-Sitzungen deines Kontos wirklich beenden? Diese Sitzung bleibt angemeldet.'))return;const m=$('sessionMessage');m.textContent='Beende andere Sitzungen …';m.className='form-message';const r=await fetch('/api/security/sessions/revoke-other',{method:'POST'});const d=await r.json().catch(()=>({}));m.textContent=r.ok?`${d.removed||0} andere Sitzung(en) beendet.`:(d.detail||'Sitzungen konnten nicht beendet werden.');m.className='form-message '+(r.ok?'success':'error');if(r.ok)await loadSecurity()};
+function openSecret(cp){currentCp=cp;$('secretCp').textContent=cp;$('secretValue').value='';$('secretMessage').textContent='';$('secretInputStage').hidden=false;$('secretResultStage').hidden=true;$('secretModal').hidden=false}
+function closeSecret(){$('secretModal').hidden=true;currentCp=null}
+$('secretClose').onclick=closeSecret;$('secretCancel').onclick=closeSecret;$('secretDone').onclick=()=>{closeSecret();loadSecurity()};
+$('secretSave').onclick=async()=>{if(!currentCp)return;const value=$('secretValue').value.trim(),m=$('secretMessage');m.textContent='Speichere …';m.className='form-message';const r=await fetch('/api/security/charge-points/'+encodeURIComponent(currentCp)+'/secret',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:value||null})});const d=await r.json().catch(()=>({}));if(!r.ok){m.textContent=d.detail||'Secret konnte nicht gespeichert werden.';m.className='form-message error';return}$('secretResult').textContent=d.secret;$('secretInputStage').hidden=true;$('secretResultStage').hidden=false};
+async function clearSecret(cp){if(!confirm(`OCPP-Secret für ${cp} wirklich entfernen?`))return;const r=await fetch('/api/security/charge-points/'+encodeURIComponent(cp)+'/secret',{method:'DELETE'});const d=await r.json().catch(()=>({}));if(!r.ok){alert(d.detail||'Secret konnte nicht entfernt werden.');return}loadSecurity()}
+$('securityEventPrev').onclick=()=>{if(securityEventPage>1)loadSecurity(securityEventPage-1)};$('securityEventNext').onclick=()=>{const pages=Number(overview?.event_pagination?.pages||1);if(securityEventPage<pages)loadSecurity(securityEventPage+1)};$('refreshSecurity').onclick=()=>loadSecurity(securityEventPage);loadSecurity(1);
+</script>
+{% endblock %}

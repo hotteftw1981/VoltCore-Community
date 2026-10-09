@@ -1,0 +1,96 @@
+name: Community QA
+
+on:
+  push:
+    branches:
+      - refactor/community-full-runtime-base
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATA_DIR: /tmp/voltcore-community-data
+      ENABLE_API_DOCS: "0"
+      VOLTCORE_UPDATE_CHECK_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile Python
+        run: python -m compileall -q app tests
+
+      - name: Import application with fresh data directory
+        run: |
+          mkdir -p "$DATA_DIR"
+          python -c "import app.main; print('VoltCore Community import OK:', app.main.APP_VERSION)"
+
+      - name: Check route and template integrity
+        run: |
+          python - <<'PY'
+          import re
+          from collections import Counter
+          from pathlib import Path
+
+          main = Path("app/main.py").read_text(encoding="utf-8")
+          routes = re.findall(r'@app\.(get|post|put|delete|patch)\("([^"]+)"', main)
+          duplicates = [f"{method.upper()} {path}" for (method, path), count in Counter(routes).items() if count > 1]
+          if duplicates:
+              raise SystemExit("Duplicate routes: " + ", ".join(duplicates))
+
+          templates = set(re.findall(r'render\(request,\s*"([^"]+\.html)"', main))
+          missing = sorted(name for name in templates if not (Path("app/templates") / name).is_file())
+          if missing:
+              raise SystemExit("Missing templates: " + ", ".join(missing))
+
+          print(f"Route/template integrity OK: {len(routes)} routes, {len(templates)} rendered templates")
+          PY
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Build release archive
+        run: python scripts/build_release.py --dist dist
+
+      - name: Verify release archive
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import zipfile
+          archives=list(Path("dist").glob("VoltCore_Community_V*.zip"))
+          if len(archives) != 1:
+              raise SystemExit(f"Expected one Community ZIP, found {len(archives)}")
+          required={
+              ".env.example",
+              "CHANGELOG.md",
+              "Dockerfile",
+              "README.md",
+              "README.en.md",
+              "docker-compose.yml",
+              "docker-compose.portainer.yml",
+              "requirements.txt",
+          }
+          with zipfile.ZipFile(archives[0]) as zf:
+              names=zf.namelist()
+              top=names[0].split("/",1)[0]
+              missing=sorted(x for x in required if f"{top}/{x}" not in names)
+              if missing:
+                  raise SystemExit("Release archive missing: "+", ".join(missing))
+              if not any(x.startswith(f"{top}/app/") for x in names):
+                  raise SystemExit("Release archive missing app/")
+              if not any(x.startswith(f"{top}/docs/") for x in names):
+                  raise SystemExit("Release archive missing docs/")
+          print("Community release archive OK:", archives[0])
+          PY

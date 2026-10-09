@@ -1,0 +1,211 @@
+"""P03 core concurrency tests, shared between editions."""
+import concurrent.futures
+import os
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="p03-import-"))
+from app import db
+
+class ChargingLimits(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="p03-limits-")
+        self.addCleanup(tmp.cleanup)
+        for key, value in (("DATA_DIR", Path(tmp.name)), ("DB_PATH", Path(tmp.name) / "charging.sqlite3")):
+            p = patch.object(db, key, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db.init_db()
+        db.upsert_charge_point("P03", status="Available", connector_count=3)
+        for i in range(1, 4):
+            db.discover_connector("P03", i, status="Available")
+        self.user = db.create_user("P03 driver", gamification_enabled=False)
+        db.create_rfid_card("P03-A", user_id=self.user, status="Aktiv")
+        db.create_rfid_card("P03-B", user_id=self.user, status="Aktiv")
+
+    def test_one_card_default_rejects_second_start(self):
+        db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+
+    def test_different_cards_obey_user_limit(self):
+        db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "USER_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+
+    def test_configurable_limits(self):
+        with db._connect() as conn:
+            conn.execute("UPDATE users SET max_concurrent_sessions=2 WHERE id=?", (self.user,))
+            conn.execute("UPDATE rfid_cards SET max_concurrent_sessions=2 WHERE uid='P03-A'")
+            conn.commit()
+        a = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        b = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+        self.assertNotEqual(a, b)
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=3)
+
+    def test_session_limit_settings_and_usage(self):
+        snapshot = db.charging_session_limit_snapshot("rfid", 1)
+        self.assertEqual(snapshot["limit"], 1)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 2))
+        self.assertTrue(db.set_charging_session_limit("rfid", 1, 2))
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["limit"], 2)
+        with self.assertRaisesRegex(ValueError, "INVALID_CHARGING_LIMIT_VALUE"):
+            db.set_charging_session_limit("user", self.user, 0)
+        with self.assertRaisesRegex(ValueError, "INVALID_CHARGING_LIMIT_KIND"):
+            db.set_charging_session_limit("vehicle", self.user, 2)
+
+    def test_rejected_start_does_not_supersede_existing_connector_session(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        current = db.get_transaction(first)
+        self.assertEqual(current["status"], "Active")
+        self.assertIsNone(current["ended_at"])
+        self.assertEqual(db.get_charge_point("P03")["transaction_id"], first)
+
+    def test_same_connector_duplicate_preserves_original_when_limit_is_two(self):
+        with db._connect() as conn:
+            conn.execute("UPDATE users SET max_concurrent_sessions=2 WHERE id=?", (self.user,))
+            conn.execute("UPDATE rfid_cards SET max_concurrent_sessions=2 WHERE uid='P03-A'")
+            conn.commit()
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertIsNone(db.get_transaction(first)["ended_at"])
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+        self.assertNotEqual(first, second)
+
+    def test_other_card_cannot_evict_occupied_connector(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertIsNone(db.get_transaction(first)["ended_at"])
+
+    def test_reassignment_preserves_original_session_owner(self):
+        second_user = db.create_user("P03 second driver", gamification_enabled=False)
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with db._connect() as conn:
+            conn.execute("UPDATE rfid_cards SET user_id=? WHERE uid='P03-A'", (second_user,))
+            conn.commit()
+        original = db.get_transaction(first)
+        self.assertEqual(original["user_id"], self.user)
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+        self.assertEqual(db.charging_session_limit_snapshot("user", second_user)["active"], 0)
+        with self.assertRaisesRegex(ValueError, "USER_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+
+    def test_active_count_persists_after_database_reinitialization(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        db.init_db()
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+
+    def test_limit_applies_across_charge_points(self):
+        db.upsert_charge_point("P03-B", status="Available", connector_count=1)
+        db.discover_connector("P03-B", 1, status="Available")
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03-B", id_tag="P03-A", connector_id=1)
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+
+    def test_available_releases_stale_session_after_reconnect(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        db.set_status_notification("P03", 1, "Charging")
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        closed = db.reconcile_active_transactions_for_connector(
+            "P03", 1, reason="ConnectorAvailable"
+        )
+        db.set_status_notification("P03", 1, "Available")
+        self.assertIn(first, closed)
+        self.assertNotEqual(db.get_transaction(first)["status"], "Active")
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertNotEqual(first, second)
+
+    def test_other_connector_survives_available_notification(self):
+        with db._connect() as conn:
+            conn.execute("UPDATE users SET max_concurrent_sessions=2 WHERE id=?", (self.user,))
+            conn.commit()
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        second = db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+        db.reconcile_active_transactions_for_connector("P03", 1, reason="ConnectorAvailable")
+        self.assertNotEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.get_transaction(second)["status"], "Active")
+
+    def test_lowering_limits_does_not_stop_existing_transactions(self):
+        db.set_charging_session_limit("user", self.user, 3)
+        card_id = db.get_rfid_card(1)["id"]
+        db.set_charging_session_limit("rfid", card_id, 3)
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        second = db.start_transaction("P03", id_tag="P03-A", connector_id=2)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 1))
+        self.assertTrue(db.set_charging_session_limit("rfid", card_id, 1))
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.get_transaction(second)["status"], "Active")
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 2)
+        with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-A", connector_id=3)
+
+    def test_failed_admission_does_not_mutate_connector_ownership(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        with self.assertRaisesRegex(ValueError, "USER_CONCURRENT_SESSION_LIMIT"):
+            db.start_transaction("P03", id_tag="P03-B", connector_id=2)
+        self.assertEqual(db.get_charge_point("P03")["transaction_id"], first)
+        with db._connect() as conn:
+            row = conn.execute("SELECT transaction_id,status FROM connectors WHERE charge_point_id='P03' AND connector_id=2").fetchone()
+            self.assertIsNone(row["transaction_id"])
+            count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL").fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_migration_preserves_existing_history_and_limits(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 2))
+        self.assertTrue(db.set_charging_session_limit("rfid", 1, 2))
+        db.init_db()
+        db.init_db()
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["limit"], 2)
+        self.assertEqual(db.charging_session_limit_snapshot("rfid", 1)["limit"], 2)
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+
+    def test_two_cards_same_driver_race_is_serialized(self):
+        gate = threading.Barrier(2, timeout=5)
+        def start(connector, card):
+            gate.wait()
+            try:
+                return db.start_transaction("P03", id_tag=card, connector_id=connector)
+            except ValueError as exc:
+                return str(exc)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            one = pool.submit(start, 1, "P03-A")
+            two = pool.submit(start, 2, "P03-B")
+            results = (one.result(timeout=15), two.result(timeout=15))
+        self.assertEqual(sum(isinstance(r, int) for r in results), 1)
+        self.assertIn("USER_CONCURRENT_SESSION_LIMIT", results)
+
+    def test_simultaneous_two_threads_one_slot(self):
+        gate = threading.Barrier(2, timeout=5)
+        def start(connector):
+            gate.wait()
+            try:
+                return db.start_transaction("P03", id_tag="P03-A", connector_id=connector)
+            except ValueError as exc:
+                return str(exc)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(start, 1)
+            b = pool.submit(start, 2)
+            results = (a.result(timeout=15), b.result(timeout=15))
+        self.assertEqual(sum(isinstance(r, int) for r in results), 1)
+        self.assertIn("RFID_CONCURRENT_SESSION_LIMIT", results)
+
+if __name__ == "__main__":
+    unittest.main()

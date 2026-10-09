@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Einladung · {{ branding.product_name }}{% endblock %}
+{% block heading %}Einladung annehmen{% endblock %}
+{% block subtitle %}Eigenen Zugang zu {{ branding.product_name }} einrichten{% endblock %}
+{% block content %}
+<div class="panel setup-panel">
+  <div class="panelhead">
+    <div>
+      <h2>👋 Willkommen bei {{ branding.product_name }}</h2>
+      <span>Persönlichen Systemzugang einrichten</span>
+    </div>
+  </div>
+
+  {% if success %}
+    <div class="alert success">Dein Zugang wurde erfolgreich eingerichtet.</div>
+    <div class="form-actions">
+      <a class="primary button-link" href="/login">Zur Anmeldung →</a>
+    </div>
+  {% elif not invite %}
+    <div class="alert danger">{{ error or "Diese Einladung ist ungültig oder abgelaufen." }}</div>
+    <p>Bitte fordere bei einem Administrator eine neue Einladung an.</p>
+  {% else %}
+    {% if error %}<div class="alert danger">{{ error }}</div>{% endif %}
+    <div class="invite-summary">
+      <div><span>E-Mail</span><b>{{ invite.email }}</b></div>
+      <div><span>Rolle</span><b>{{ {"admin":"Administrator","user":"Benutzer","viewer":"Nur Lesen"}.get(invite.role, invite.role) }}</b></div>
+      <div><span>Gültig bis</span><b>{{ invite.expires_at }}</b></div>
+    </div>
+    <form method="post" action="/invite" class="setup-form">
+      <input type="hidden" name="token" value="{{ token }}">
+      <div class="form-grid">
+        <label>Anzeigename
+          <input name="display_name" required maxlength="120" value="{{ values.display_name if values else (invite.display_name or '') }}" autocomplete="name">
+        </label>
+        <label>Benutzername
+          <input name="username" required maxlength="120" value="{{ values.username if values else '' }}" autocomplete="username">
+        </label>
+        <label>Passwort
+          <input name="password" type="password" required minlength="12" maxlength="256" autocomplete="new-password">
+        </label>
+        <label>Passwort wiederholen
+          <input name="password_repeat" type="password" required minlength="12" maxlength="256" autocomplete="new-password">
+        </label>
+      </div>
+      <small>Das Passwort muss mindestens 12 Zeichen lang sein. Der Einladungslink kann nur einmal verwendet werden.</small>
+      <div class="form-actions">
+        <button class="primary" type="submit">Zugang einrichten →</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+{% endblock %}
