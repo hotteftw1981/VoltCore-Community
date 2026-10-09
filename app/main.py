@@ -53,7 +53,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.9.7.95"
+APP_VERSION = "0.9.7.96"
 APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))

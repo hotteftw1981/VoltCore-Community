@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7.96 - Complete remaining Community runtime cleanup
+
+- Delete 43 remaining personal-portal, achievement/XP, event, leaderboard and bonus helper functions and six obsolete constants.
+- Remove achievement evaluation from occupancy finalization and the legacy lade.cloud import.
+- Remove legacy bonus overrides from RFID local lists, budget notifications and newly calculated session costs.
+- Preserve historical tables, existing charging users, completed session snapshots and neutral Community features.
+- Add focused regression tests for removed functions, retained historical rows and charging behavior without bonuses.
+- Existing expected-failure regression cases remain explicitly recorded; they are not deleted or counted as successful tests.
+
 ## 0.9.7.95 — Final dead-code cleanup pass
 
 - Remove five unreferenced historical Pro/portal helper functions (182 lines).
