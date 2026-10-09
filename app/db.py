@@ -5432,48 +5432,6 @@ def _leaderboard_metric_key(metric):
 
 
 
-def _achievement_fields(name, description=None, icon=None, metric="manual", threshold=None, hidden=False,
-                        system_secret=False, active=True, category="Allgemein", rarity="common", xp=50,
-                        tier_group=None, tier_name=None, tier_rank=0, leaderboard_enabled=False):
-    metric=str(metric or "manual")
-    if metric not in ACHIEVEMENT_METRICS:
-        raise ValueError("Ungültige Achievement-Metrik")
-    rarity=str(rarity or "common").strip().lower()
-    if rarity not in ACHIEVEMENT_RARITIES:
-        raise ValueError("Ungültige Seltenheit")
-    clean_name=str(name or "").strip()
-    if not clean_name:
-        raise ValueError("Name ist erforderlich")
-    try:
-        xp=max(0,min(100000,int(xp or 0)))
-        tier_rank=max(0,min(99,int(tier_rank or 0)))
-    except (TypeError,ValueError):
-        raise ValueError("XP und Stufenrang müssen ganze Zahlen sein")
-    return {
-        "name":clean_name,
-        "description":str(description).strip() if description not in (None,"") else None,
-        "icon":str(icon or "🏅").strip() or "🏅",
-        "metric":metric,
-        "threshold":None if threshold in (None,"") else float(threshold),
-        "hidden":1 if hidden else 0,
-        "system_secret":1 if system_secret else 0,
-        "active":1 if active else 0,
-        "category":str(category or "Allgemein").strip() or "Allgemein",
-        "rarity":rarity,
-        "xp":xp,
-        "tier_group":str(tier_group).strip() if tier_group not in (None,"") else None,
-        "tier_name":str(tier_name).strip() if tier_name not in (None,"") else None,
-        "tier_rank":tier_rank,
-        "leaderboard_enabled":1 if (leaderboard_enabled and not system_secret and _leaderboard_metric_key(metric)) else 0,
-    }
-
-
-def get_achievement(achievement_id):
-    with _lock,_connect() as conn:
-        row=conn.execute("SELECT * FROM achievements WHERE id=?",(int(achievement_id),)).fetchone()
-        return dict(row) if row else None
-
-
 def _achievement_tx_rows_conn(conn, user_id):
     return conn.execute("""SELECT t.* FROM transactions t
         WHERE t.user_id=? OR (
@@ -6002,48 +5960,6 @@ def _event_snapshot_board_conn(conn,event):
     return board
 
 
-def finalize_ended_gamification_events(now=None):
-    now_dt=_parse_iso_utc(now) if isinstance(now,str) else (now or datetime.now(timezone.utc))
-    if not isinstance(now_dt,datetime): now_dt=datetime.now(timezone.utc)
-    now_iso=now_dt.isoformat()
-    finalized=[]
-    with _lock,_connect() as conn:
-        events=conn.execute("""SELECT * FROM gamification_events e WHERE e.active=1 AND e.ends_at<=? AND e.finalized_at IS NULL
-            ORDER BY e.ends_at,e.id""",(now_iso,)).fetchall()
-        for event in events:
-            board=_event_leaderboard_conn(conn,event)
-            _snapshot_event_results_conn(conn,event,board,now_iso)
-            winners=[x for x in board if x.get("rank")==1 and x.get("qualified",True) and x.get("value") is not None and float(x.get("value") or 0)>=0]
-            if event["metric"] in {"energy_kwh","sessions"}:
-                winners=[x for x in winners if float(x.get("value") or 0)>0]
-            achievement_id=None
-            if winners and bool(event["winner_badge_enabled"]):
-                achievement_id=_ensure_event_badge_conn(conn,event)
-            reward_enabled=bool(event["reward_bonus_enabled"]) and float(event["reward_bonus_kwh"] or 0)>0
-            days=int(event["reward_valid_days"] or _bonus_policy_settings_conn(conn)["default_valid_days"]) if reward_enabled else None
-            expiry=now_dt+timedelta(days=max(1,min(730,days))) if reward_enabled else None
-            for winner in winners:
-                result={"event_id":int(event["id"]),"user_id":winner["user_id"]}
-                if achievement_id:
-                    cur=conn.execute("INSERT OR IGNORE INTO achievement_awards(user_id,achievement_id,awarded_at,source) VALUES(?,?,?,?)",
-                        (winner["user_id"],achievement_id,now_iso,f"event:{event['id']}"))
-                    if cur.rowcount:
-                        result["achievement_id"]=achievement_id
-                if reward_enabled and not conn.execute("SELECT 1 FROM gamification_event_rewards WHERE event_id=? AND user_id=?",(event["id"],winner["user_id"])).fetchone():
-                    amount=float(event["reward_bonus_kwh"] or 0)
-                    cur=conn.execute("""INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at,source,note,active)
-                        VALUES(?,?,?,?,?,?,?,1)""",(winner["user_id"],amount,amount,now_iso,expiry.isoformat(),f"event:{event['id']}",f"Eventgewinn: {event['name']}"))
-                    grant_id=int(cur.lastrowid)
-                    conn.execute("INSERT INTO gamification_event_rewards(event_id,user_id,bonus_grant_id,amount_kwh,granted_at) VALUES(?,?,?,?,?)",
-                        (event["id"],winner["user_id"],grant_id,amount,now_iso))
-                    result.update({"grant_id":grant_id,"amount_kwh":amount})
-                if len(result)>2:
-                    finalized.append(result)
-            conn.execute("UPDATE gamification_events SET finalized_at=? WHERE id=?",(now_iso,event["id"]))
-        conn.commit()
-    return finalized
-
-
 def _event_detail_summary(event,board):
     participants=sum(1 for x in board if int(x.get("sessions") or 0)>0 or float(x.get("energy_kwh") or 0)>0)
     qualified=sum(1 for x in board if x.get("qualified") and x.get("value") is not None)
@@ -6423,38 +6339,6 @@ def bonus_wallet(user_id,now=None):
         return _bonus_wallet_conn(conn,user_id,now)
 
 
-def _allocate_bonus_for_transaction_conn(conn,tx_id,user_id,session_energy,used_at=None):
-    # Idempotent: a completed transaction is allocated at most once.
-    if conn.execute("SELECT 1 FROM bonus_usage WHERE transaction_id=? LIMIT 1",(tx_id,)).fetchone(): return 0.0
-    tx=conn.execute("SELECT started_at FROM transactions WHERE id=?",(tx_id,)).fetchone()
-    if not tx: return 0.0
-    started=_parse_iso_utc(tx["started_at"])
-    if not started: return 0.0
-    start_utc,end_utc,_=_month_bounds_utc(started)
-    user=conn.execute("SELECT monthly_kwh_limit FROM users WHERE id=?",(user_id,)).fetchone()
-    if not user or user["monthly_kwh_limit"] is None: return 0.0
-    limit=max(0.0,float(user["monthly_kwh_limit"]))
-    prior=conn.execute("""SELECT COALESCE(SUM(energy_kwh),0) FROM transactions
-        WHERE id<>? AND (user_id=? OR (user_id IS NULL AND (id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR id_tag=(SELECT rfid FROM users WHERE id=?))))
-          AND started_at>=? AND started_at<? AND (ended_at IS NOT NULL OR status<>'Active')""",(tx_id,user_id,user_id,user_id,start_utc,end_utc)).fetchone()[0]
-    base_remaining=max(0.0,limit-float(prior or 0))
-    need=max(0.0,float(session_energy or 0)-base_remaining)
-    if need<=1e-9: return 0.0
-    when=_parse_iso_utc(used_at) or datetime.now(timezone.utc)
-    # Eligibility is frozen at session start: a package that was valid when the
-    # user started charging may finish that session even if it expires meanwhile.
-    rows=conn.execute("""SELECT * FROM bonus_grants WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001 AND granted_at<=? AND expires_at>? ORDER BY expires_at,granted_at,id""",(user_id,started.isoformat(),started.isoformat())).fetchall()
-    allocated=0.0
-    for grant in rows:
-        if need<=1e-9: break
-        take=min(need,float(grant["remaining_kwh"] or 0))
-        if take<=1e-9: continue
-        conn.execute("INSERT OR IGNORE INTO bonus_usage(grant_id,user_id,transaction_id,amount_kwh,used_at) VALUES(?,?,?,?,?)",(grant["id"],user_id,tx_id,take,when.isoformat()))
-        conn.execute("UPDATE bonus_grants SET remaining_kwh=MAX(0,remaining_kwh-?) WHERE id=?",(take,grant["id"]))
-        allocated+=take; need-=take
-    return round(allocated,6)
-
-
 def bonus_transfer_recipients(user_id):
     with _lock,_connect() as conn:
         return [dict(r) for r in conn.execute("SELECT id,name FROM users WHERE status='Aktiv' AND id<>? ORDER BY name COLLATE NOCASE",(user_id,)).fetchall()]
@@ -6598,60 +6482,8 @@ def _portal_driver_profile(user_id, tx_rows, analytics, gamification, achievemen
     }
 
 
-def portal_dashboard(user_id, period=None, include_inactive=False, ranking_metric=None, ranking_period=None):
-    evaluate_user_achievements(user_id)
-    start,end,month=_month_bounds_utc()
-    with _lock,_connect() as conn:
-        status_clause="" if include_inactive else " AND status='Aktiv'"
-        row=conn.execute("SELECT id,name,role,department,status,monthly_kwh_limit,monthly_limit_mode,portal_last_login_at,gamification_enabled,image_path FROM users WHERE id=?"+status_clause,(user_id,)).fetchone()
-        if not row: return None
-        user=dict(row)
-        tx_rows=conn.execute("""SELECT t.* FROM transactions t
-            WHERE t.user_id=? OR (t.user_id IS NULL AND (t.id_tag IN (SELECT uid FROM rfid_cards WHERE user_id=?) OR t.id_tag=(SELECT rfid FROM users WHERE id=?)))
-            ORDER BY t.started_at""",(user_id,user_id,user_id)).fetchall()
-        period_ctx=_portal_period_context(tx_rows,period)
-        period_summary,selected_rows=_portal_period_summary_conn(conn,tx_rows,period_ctx)
-        period_budget=None
-        if period_ctx.get("selected_key")!="all":
-            period_used=max(0.0,float(period_summary.get("energy_kwh") or 0))
-            period_limit=user.get("monthly_kwh_limit")
-            period_mode=user.get("monthly_limit_mode") or "warn"
-            period_state=_budget_status(period_limit,period_used,period_mode)
-            period_budget={
-                "month":period_ctx.get("selected_key"),
-                "label":period_ctx.get("selected_label"),
-                "limit_kwh":None if period_limit is None else float(period_limit),
-                "used_kwh":round(period_used,3),
-                "mode":period_mode,
-                **period_state,
-            }
-        selected_ids={int(r["id"]) for r in selected_rows}
-        recent=[]
-        for r in reversed(tx_rows):
-            if int(r["id"]) not in selected_ids: continue
-            recent.append({k:r[k] for k in ("id","started_at","ended_at","energy_kwh","status","charge_point_id","cost_cents","tariff_name")})
-            if len(recent)>=12: break
-    budget=user_monthly_budget(user_id)
-    analytics=user_analytics(user_id)
-    achievements=achievements_for_user(user_id,include_locked=True)
-    events=active_event_leaderboards_for_portal(user_id)
-    ranking=portal_general_leaderboards(user_id,period=ranking_period or "all",metric=ranking_metric or "xp")
-    general_rankings=[ranking["board"]] if ranking.get("board") else []
-    gamification=user_gamification_profile(user_id) if bool(user.get("gamification_enabled",1)) else None
-    gamification_reveals=(portal_gamification_reveals(user_id) if gamification and not include_inactive else {"pending":False,"achievements":[],"level_up":None,"ack_award_id":0,"ack_level":int((gamification or {}).get("level") or 1)})
-    profile=_portal_driver_profile(user_id,tx_rows,analytics,gamification,achievements)
-    bonus=bonus_wallet(user_id) or {"available_kwh":0.0,"transferable_kwh":0.0,"expiring_next":None,"grants":[],"policy":bonus_policy_settings()}
-    bonus["recipients"]=bonus_transfer_recipients(user_id) if bonus.get("policy",{}).get("transfer_enabled") else []
-    bonus["transfers"]=bonus_transfer_history(user_id,12)
-    rfid_cards=portal_rfid_cards(user_id)
-    return {
-        "user":user,"budget":budget,"period_budget":period_budget,"analytics":analytics,"period":period_ctx,"period_stats":period_summary,
-        "achievements":achievements,"events":events,"general_rankings":general_rankings,"ranking":ranking,"gamification":gamification,"gamification_reveals":gamification_reveals,"profile":profile,"bonus":bonus,
-        "rfid_cards":rfid_cards,"recent_transactions":recent,"month":month,"leaderboard_names_visible":setting_bool("portal_leaderboard_show_names",False)
-    }
-
-
-
+def _registration_default_fields():
+    return json.loads(json.dumps(_REGISTRATION_BUILTIN_FIELDS,ensure_ascii=False))
 
 # V0.9.7.21 - Registration & Onboarding rules
 _REGISTRATION_BUILTIN_FIELDS = [
@@ -6663,9 +6495,6 @@ _REGISTRATION_BUILTIN_FIELDS = [
     {"id":"vehicle_make_model","type":"text","label":"Hersteller / Modell","enabled":True,"required":False,"system":False,"order":70,"help":"Optional, z. B. VW ID.4"},
     {"id":"vehicle_plate","type":"text","label":"Kennzeichen","enabled":True,"required":False,"system":False,"order":80,"help":"optional, z. B. B-AB 123"},
 ]
-
-def _registration_default_fields():
-    return json.loads(json.dumps(_REGISTRATION_BUILTIN_FIELDS,ensure_ascii=False))
 
 def registration_settings():
     """Return Community registration settings without employment-based rules."""
