@@ -30,7 +30,7 @@ The idea is simple: people, clubs, organisations, small fleets, labs and curious
 
 Community is not intended to be annoying or deliberately crippled. The difference to future VoltCore editions should come from advanced product features, analytics, integrations and enterprise capabilities — **not** from breaking the basics. 🧠✨
 
-> 🚧 **Status:** work in progress. Not yet intended for public production use.
+> 🚧 **Status:** Release Candidate **0.9.7.90** is available. Self-hosting and evaluation are possible; verify security, HTTPS/WSS, backups, and charger compatibility before production deployments.
 
 ## 🚀 Installation
 
@@ -134,17 +134,17 @@ Non-Community features are removed from the Community source rather than merely 
 
 Branches:
 
-- 🟢 `main` — future stable Community releases
+- 🟢 `main` — published Community releases
 - 🟡 `develop` — Community integration branch
 - 🔵 short-lived feature branches — isolated work before integration
 
-The repository remains private while the first Community build is prepared and verified. 🔐🚧
+The repository is currently private. Licensing and publication approval are required before making it public. 🔐
 
 ## 🧾 What “free” means here
 
 VoltCore Community is intended to be the **free VoltCore edition**. 🆓💙
 
-The final public software license has not yet been selected. That decision will be made before this repository is public. Until then, this private development repository is not a final licensing statement. ⚖️
+The public software license has not yet been selected. **Without a published license, copying, modifying, and redistributing the source code are not automatically permitted.** A license decision is required before making this repository public. Until then, this private development repository is not a final licensing statement. ⚖️
 
 That distinction is intentional:
 
