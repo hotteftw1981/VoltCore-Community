@@ -2910,10 +2910,10 @@ def local_list_diagnostics():
             code = "station_ahead"
         elif pending or station < backend:
             code = "out_of_sync"
-        elif response and response not in ("accepted",):
-            code = "needs_verification"
-        else:
+        elif str(item.get("status") or "") == "Synchronisiert":
             code = "version_match"
+        else:
+            code = "needs_verification"
         item["sync_diagnostic"] = code
         item["sync_verified"] = code == "version_match" and supported == 1
         item["station_version_known"] = station is not None and station >= 0
