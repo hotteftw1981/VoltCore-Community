@@ -830,6 +830,22 @@ class ChargePoint(OcppChargePoint):
         occupancy_started=None
         occupancy_finished=None
         observed_at=kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat()
+        # A delayed Available from an earlier connection must not end a newer
+        # session. Without a trustworthy timestamp, retain legacy behavior.
+        if cid > 0 and status_text == "Available" and kwargs.get("timestamp"):
+            from . import db as _p03_db
+            with _p03_db._lock, _p03_db._connect() as _p03_conn:
+                _p03_active = _p03_conn.execute(
+                    "SELECT started_at FROM transactions WHERE charge_point_id=? AND connector_id=? AND status='Active' AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+                    (self.id, cid),
+                ).fetchone()
+            if _p03_active:
+                _p03_when = _p03_db._parse_iso_utc(observed_at)
+                _p03_start = _p03_db._parse_iso_utc(_p03_active["started_at"])
+                if _p03_when and _p03_start and _p03_when < _p03_start:
+                    db.mark_message(self.id, "StatusNotification")
+                    db.add_event(self.id, "StatusNotificationIgnored", f"connector={cid}; status=Available; timestamp={observed_at}; reason=OlderThanActiveSession")
+                    return call_result.StatusNotification()
         if cid > 0:
             # Discover first without overwriting the previous connector state.
             # That lets timing reconciliation still see Charging/SuspendedEV
