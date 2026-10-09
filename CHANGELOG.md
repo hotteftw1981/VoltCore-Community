@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.7.95 — Final dead-code cleanup pass
+
+- Remove five unreferenced historical Pro/portal helper functions (182 lines).
+- Preserve Community registration defaults and existing persistent schemas.
+- Community CI and concurrent charging regression suite passed before merging.
+
 ## 0.9.7.94 — Community-only API reduction
 
 - Remove 25 unused legacy Pro achievement, event and bonus/voucher admin functions.
