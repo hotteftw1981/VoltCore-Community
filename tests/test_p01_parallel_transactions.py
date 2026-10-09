@@ -96,11 +96,10 @@ class ParallelSessionTests(unittest.TestCase):
             b.result(timeout=10)
         self.assertLessEqual(len(self.active_sessions()), 1)
 
-    @unittest.expectedFailure
-    def test_known_second_connector_must_survive_first_connector_stop(self):
+    def test_second_connector_remains_active_when_first_stops(self):
         one = db.start_transaction(CP_ID, connector_id=1, meter_start_kwh=10)
         two = db.start_transaction(CP_ID, connector_id=2, meter_start_kwh=20)
-        # Recreate station-level clear performed by StopTransaction handler.
+        # Verify the database keeps the other active session selected.
         db.stop_transaction(one, meter_stop_kwh=11, ended_at="2026-10-09T09:20:00+00:00")
         db.upsert_charge_point(CP_ID, transaction_id=None, power_kw=0)
         self.assertEqual(db.get_transaction(two)["status"], "Active")
