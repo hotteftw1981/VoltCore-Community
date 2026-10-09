@@ -24,6 +24,7 @@ class CommunityScopeRoutes(unittest.TestCase):
             "/engagement",
             "/api/settings/bonus-policy",
             "/api/settings/portal-leaderboard-names",
+            "/api/rfid/requests",
         )
         paths = [route.path for route in main.app.routes]
         for path in paths:
@@ -32,6 +33,12 @@ class CommunityScopeRoutes(unittest.TestCase):
                     self.assertFalse(path == prefix or path.startswith(prefix + "/"), path)
         for path in ("/public/ladeguthaben", "/api/public/charging-budgets"):
             self.assertFalse(main._is_public_path(path))
+
+    def test_disallowed_templates_are_not_shipped(self):
+        root = Path(__file__).resolve().parents[1] / "app/templates"
+        for name in ("engagement.html", "public_budgets.html", "portal_pin_reset.html"):
+            with self.subTest(template=name):
+                self.assertFalse((root / name).exists())
 
     def test_community_user_screen_has_no_portal_editor(self):
         html = (Path(__file__).resolve().parents[1] / "app/templates/users.html").read_text(encoding="utf-8")
