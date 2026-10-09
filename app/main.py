@@ -1986,7 +1986,6 @@ class ChargePointPayload(BaseModel):
     connector_type: str | None = "Type 2"
     max_power_kw: float = 22
     notes: str | None = None
-    rfid_self_enroll_mode: str = "auto"
 
 class SessionPolicyPayload(BaseModel):
     stand_grace_seconds: int = 120
@@ -2668,10 +2667,6 @@ class RFIDReplacePayload(BaseModel):
     expires_at: str | None = None
     notes: str | None = None
 
-class RFIDRequestStatusPayload(BaseModel):
-    status: str
-    resolution_note: str | None = None
-
 @app.get("/api/users")
 async def api_users():
     return {"users": db.list_users_rich()}
@@ -2839,24 +2834,6 @@ async def unassign_user_vehicle(user_id: int, vehicle_id: int):
 
 @app.get("/api/rfid")
 async def api_rfid(): return {"cards":db.list_rfid_cards()}
-
-@app.get("/api/rfid/requests")
-async def api_rfid_requests(status: str | None = None):
-    return {"requests":db.list_rfid_replacement_requests(status)}
-
-@app.post("/api/rfid/requests/{request_id}/status")
-async def api_rfid_request_status(request_id:int,payload:RFIDRequestStatusPayload):
-    try: ok=db.update_rfid_replacement_request(request_id,payload.status,payload.resolution_note)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    if not ok: raise HTTPException(404,"Ersatzanfrage nicht gefunden")
-    return {"ok":True}
-
-
-@app.delete("/api/rfid/requests/{request_id}")
-async def api_delete_rfid_request(request_id:int):
-    deleted=db.delete_rfid_replacement_request(request_id)
-    if not deleted: raise HTTPException(404,"Ersatzanfrage nicht gefunden")
-    return {"ok":True,"deleted_id":request_id,"card_id":deleted.get("card_id"),"status":deleted.get("status")}
 
 @app.post("/api/rfid")
 async def create_rfid(payload: RFIDPayload):
