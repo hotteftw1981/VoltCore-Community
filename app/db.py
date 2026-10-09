@@ -1857,6 +1857,46 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
         if rfid_card_id: conn.execute("UPDATE rfid_cards SET last_used_at=? WHERE id=?",(utc_now(),rfid_card_id))
         conn.commit(); return tx
 
+
+def charging_session_limit_snapshot(kind, item_id):
+    """Return the configured limit and active usage for one card or driver."""
+    if kind not in ("user", "rfid"):
+        raise ValueError("INVALID_CHARGING_LIMIT_KIND")
+    table, key = ("users", "user_id") if kind == "user" else ("rfid_cards", "rfid_card_id")
+    with _lock, _connect() as conn:
+        row = conn.execute(f"SELECT max_concurrent_sessions FROM {table} WHERE id=?", (int(item_id),)).fetchone()
+        if row is None:
+            return None
+        active = conn.execute(
+            f"SELECT COUNT(*) FROM transactions WHERE {key}=? AND status='Active' AND ended_at IS NULL",
+            (int(item_id),),
+        ).fetchone()[0]
+        return {"limit": int(row[0]), "active": int(active), "available": max(0, int(row[0]) - int(active))}
+
+
+def set_charging_session_limit(kind, item_id, limit):
+    """Validate and persist a per-card or per-driver session cap.
+
+    This is a database primitive, not an authorization endpoint. API callers
+    must perform their own administrator permission check.
+    """
+    if kind not in ("user", "rfid"):
+        raise ValueError("INVALID_CHARGING_LIMIT_KIND")
+    if isinstance(limit, bool) or not str(limit).isdecimal() or not (1 <= int(limit) <= 100):
+        raise ValueError("INVALID_CHARGING_LIMIT_VALUE")
+    table = "users" if kind == "user" else "rfid_cards"
+    with _lock, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            f"UPDATE {table} SET max_concurrent_sessions=? WHERE id=?",
+            (int(limit), int(item_id)),
+        )
+        if cur.rowcount != 1:
+            return False
+        conn.commit()
+        return True
+
+
 def update_transaction_from_meter(tx, meter_kwh=None, power_kw=None, measured_at=None):
     with _lock, _connect() as conn:
         row=conn.execute("SELECT meter_start_kwh,energy_kwh,max_power_kw FROM transactions WHERE id=?",(tx,)).fetchone()
