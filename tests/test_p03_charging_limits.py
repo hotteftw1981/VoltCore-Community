@@ -47,6 +47,17 @@ class ChargingLimits(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RFID_CONCURRENT_SESSION_LIMIT"):
             db.start_transaction("P03", id_tag="P03-A", connector_id=3)
 
+    def test_session_limit_settings_and_usage(self):
+        snapshot = db.charging_session_limit_snapshot("rfid", 1)
+        self.assertEqual(snapshot["limit"], 1)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 2))
+        self.assertTrue(db.set_charging_session_limit("rfid", 1, 2))
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["limit"], 2)
+        with self.assertRaisesRegex(ValueError, "INVALID_CHARGING_LIMIT_VALUE"):
+            db.set_charging_session_limit("user", self.user, 0)
+        with self.assertRaisesRegex(ValueError, "INVALID_CHARGING_LIMIT_KIND"):
+            db.set_charging_session_limit("vehicle", self.user, 2)
+
     def test_simultaneous_two_threads_one_slot(self):
         gate = threading.Barrier(2, timeout=5)
         def start(connector):
