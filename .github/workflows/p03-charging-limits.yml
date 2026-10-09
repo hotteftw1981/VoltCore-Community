@@ -26,6 +26,7 @@ jobs:
         run: python -m compileall -q app tests
       - name: Concurrent sessions and limit regressions
         run: |
+          python -m unittest discover -s tests -p 'test_p02_community_scope.py' -v
           python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
           python -m unittest discover -s tests -p 'test_p03_integrity_batch.py' -v
           python -m unittest discover -s tests -p 'test_p03_api_permissions.py' -v
