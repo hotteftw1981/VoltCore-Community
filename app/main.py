@@ -224,13 +224,9 @@ TWO_FACTOR_MAX_FAILURES = max(3, int(os.getenv("TWO_FACTOR_MAX_FAILURES", "6")))
 TWO_FACTOR_RATE_WINDOW_MINUTES = max(1, int(os.getenv("TWO_FACTOR_RATE_WINDOW_MINUTES", "10")))
 PBKDF2_ITERATIONS = max(600000, int(os.getenv("PBKDF2_ITERATIONS", "600000")))
 PASSWORD_MAX_LENGTH = 256
-PORTAL_COOKIE = "voltcore_community_portal"
-PORTAL_SESSION_HOURS = int(os.getenv("PORTAL_SESSION_HOURS", "12"))
-PORTAL_PIN_ITERATIONS = 180000
-PORTAL_MAX_FAILURES = 8
 WEB_MAX_FAILURES = max(3, int(os.getenv("WEB_MAX_FAILURES", "8")))
 WEB_FAILURE_WINDOW_MINUTES = max(1, int(os.getenv("WEB_FAILURE_WINDOW_MINUTES", "10")))
-PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/ladeguthaben", "/public/ladeguthaben/login", "/public/ladeguthaben/logout", "/public/ladeguthaben/pin-forgot", "/public/ladeguthaben/pin-reset", "/public/ladeguthaben/voucher", "/public/ladeguthaben/bonus-transfer", "/public/ladeguthaben/rfid/request", "/public/ladeguthaben/rfid/lost", "/public/ladeguthaben/rfid/enroll/start", "/public/ladeguthaben/rfid/enroll/status", "/public/ladeguthaben/rfid/enroll/confirm", "/public/ladeguthaben/rfid/enroll/cancel", "/api/public/charging-budgets", "/api/public/portal/gamification-reveals/ack", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
+PUBLIC_PATHS = {"/login", "/login/2fa", "/setup", "/invite", "/health", "/public/access-request", "/public/access-request/start", "/public/access-request/form", "/public/access-request/submit", "/manifest.webmanifest", "/service-worker.js"}
 
 
 def _password_hash(password: str) -> str:
@@ -267,25 +263,6 @@ def _password_needs_rehash(encoded: str) -> bool:
 _DUMMY_PASSWORD_SALT = bytes.fromhex("a93e62ad45fb76540fd0b944732b18bc")
 _DUMMY_PASSWORD_DIGEST = hashlib.pbkdf2_hmac("sha256", b"invalid-password", _DUMMY_PASSWORD_SALT, PBKDF2_ITERATIONS).hex()
 _DUMMY_PASSWORD_HASH = f"pbkdf2_sha256${PBKDF2_ITERATIONS}${_DUMMY_PASSWORD_SALT.hex()}${_DUMMY_PASSWORD_DIGEST}"
-
-
-def _portal_pin_hash(pin: str) -> str:
-    pin=str(pin or "").strip()
-    if len(pin) != 6 or not pin.isdigit():
-        raise ValueError("Der Portal-PIN muss genau 6 Ziffern haben.")
-    salt=secrets.token_bytes(16)
-    digest=hashlib.pbkdf2_hmac("sha256",pin.encode("utf-8"),salt,PORTAL_PIN_ITERATIONS)
-    return "pbkdf2_sha256$"+str(PORTAL_PIN_ITERATIONS)+"$"+salt.hex()+"$"+digest.hex()
-
-
-def _portal_pin_ok(pin: str, encoded: str) -> bool:
-    try:
-        scheme,iterations,salt_hex,digest_hex=encoded.split("$",3)
-        if scheme != "pbkdf2_sha256": return False
-        actual=hashlib.pbkdf2_hmac("sha256",str(pin).encode("utf-8"),bytes.fromhex(salt_hex),int(iterations)).hex()
-        return hmac.compare_digest(actual,digest_hex)
-    except Exception:
-        return False
 
 
 def _session_hash(token: str) -> str:
@@ -378,15 +355,6 @@ def _activity_descriptor(method: str, path: str):
     return f"Änderung {verb}", "System", path
 
 
-def _generate_unique_portal_pin():
-    records=db.portal_pin_records(include_disabled=True)
-    for _ in range(100):
-        pin=f"{secrets.randbelow(1000000):06d}"
-        if not any(_portal_pin_ok(pin,r.get("portal_pin_hash") or "") for r in records):
-            return pin
-    raise RuntimeError("Es konnte keine eindeutige Portal-PIN erzeugt werden.")
-
-
 def _normalize_signature_png(data: bytes) -> bytes:
     try:
         with PILImage.open(io.BytesIO(data)) as source:
@@ -418,16 +386,6 @@ def _save_access_signature(data_url: str, request_id_hint: str = "new"):
     try: os.chmod(target,0o600)
     except OSError: pass
     return name
-
-
-def _portal_request_user(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    return db.portal_user_for_session(_session_hash(token)) if token else None
-
-
-def _portal_client_hash(request: Request):
-    host=(request.client.host if request.client else "unknown") or "unknown"
-    return hashlib.sha256(host.encode("utf-8")).hexdigest()
 
 
 def _login_redirect(request: Request, reason: str | None = None):
@@ -791,14 +749,6 @@ async def logout(request: Request):
     return response
 
 
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
 @app.get("/public/access-request", response_class=HTMLResponse)
 async def public_access_request_start_page(request:Request, sent:str|None=None):
     cfg=db.registration_settings()
@@ -860,257 +810,6 @@ async def public_access_request_submit(request:Request):
     return render(request,"access_request.html",page="public",step="done",request_id=request_id,terms=ACCESS_TERMS,terms_version=ACCESS_TERMS_VERSION,registration=cfg)
 
 
-@app.get("/public/ladeguthaben", response_class=HTMLResponse)
-async def public_charging_portal_page(request: Request, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None, pin_reset: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        return render(request,"public_budgets.html",page="public",portal_user=None,portal_data=None,pin_reset_requested=(pin_reset=="requested"))
-    user_id=int(portal_user["id"])
-    data=db.portal_dashboard(user_id,period=period,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    active_rfid_count=db.active_rfid_count(user_id)
-    enrollment_points=db.rfid_enrollment_charge_points() if active_rfid_count < 2 else []
-    for cp in enrollment_points:
-        cp["connected"]=bool(is_connected(cp["id"]))
-        mode=str(cp.get("rfid_self_enroll_mode") or "auto")
-        cp["enrollment_available"]=mode!="disabled"
-        cp["enrollment_support_label"]="Deaktiviert · bitte Administration kontaktieren" if mode=="disabled" else ("RFID-Erkennung bestätigt" if cp.get("authorize_seen") or mode=="enabled" else "RFID-Erkennung noch nicht bestätigt")
-    enrollment_state=db.rfid_enrollment_status(user_id) if enrollment_points else None
-    return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,enrollment_points=enrollment_points,enrollment_state=enrollment_state,active_rfid_count=active_rfid_count,self_service_rfid_limit=2)
-
-
-@app.get("/admin/ladeguthaben/{user_id}", response_class=HTMLResponse)
-async def admin_charging_portal_page(request: Request, user_id: int, period: str | None = None, ranking_metric: str | None = None, ranking_period: str | None = None):
-    data=db.portal_dashboard(user_id,period=period,include_inactive=True,ranking_metric=ranking_metric,ranking_period=ranking_period)
-    if not data: raise HTTPException(404,"Ladebenutzer nicht gefunden")
-    return render(request,"public_budgets.html",page="users",portal_user=data["user"],portal_data=data,admin_preview=True)
-
-
-@app.post("/public/ladeguthaben/login", response_class=HTMLResponse)
-async def public_charging_portal_login(request: Request, pin: str = Form(...)):
-    ip_hash=_portal_client_hash(request)
-    if db.portal_login_failures(ip_hash,10) >= PORTAL_MAX_FAILURES:
-        return render(request,"public_budgets.html",status_code=429,page="public",portal_user=None,portal_data=None,error="Zu viele Fehlversuche. Bitte in einigen Minuten erneut versuchen.")
-    pin=str(pin or "").strip()
-    matched=None
-    if len(pin)==6 and pin.isdigit():
-        for record in db.portal_pin_records():
-            if _portal_pin_ok(pin,record.get("portal_pin_hash") or ""):
-                matched=record; break
-    if not matched:
-        db.record_portal_login_attempt(ip_hash,False)
-        return render(request,"public_budgets.html",page="public",portal_user=None,portal_data=None,error="PIN nicht korrekt oder Portalzugang nicht aktiv.")
-    db.record_portal_login_attempt(ip_hash,True)
-    token=secrets.token_urlsafe(32)
-    expires=datetime.now(timezone.utc)+timedelta(hours=PORTAL_SESSION_HOURS)
-    db.create_portal_session(_session_hash(token),int(matched["id"]),expires.isoformat())
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    response.set_cookie(PORTAL_COOKIE,token,max_age=PORTAL_SESSION_HOURS*3600,httponly=True,samesite="lax",secure=_cookie_secure(request),path="/")
-    return response
-
-
-@app.post("/public/ladeguthaben/pin-forgot")
-async def public_portal_pin_forgot(request:Request, background_tasks:BackgroundTasks, email:str=Form(...)):
-    email_key=str(email or "").strip().casefold()
-    email_hash=hashlib.sha256(email_key.encode("utf-8")).hexdigest()
-    ip_hash=_client_hash(request)
-    if db.portal_pin_reset_allowed(email_hash,ip_hash,60,5):
-        user=db.portal_user_for_reset_email(email_key)
-        req_id=db.record_portal_pin_reset_request(email_hash,ip_hash,int(user["id"]) if user else None,False)
-        if user:
-            raw_token=secrets.token_urlsafe(32)
-            token_hash=_session_hash(raw_token)
-            expires=(datetime.now(timezone.utc)+timedelta(minutes=30)).isoformat()
-            db.create_portal_pin_reset_token(int(user["id"]),token_hash,expires)
-            base=str(mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/"))
-            reset_url=f"{base}/public/ladeguthaben/pin-reset?token={raw_token}"
-            async def send_reset():
-                try:
-                    await asyncio.to_thread(mailer.send_template,"system",[user["email"]],{
-                        "subject":"VoltCore Community · Ladeportal-PIN zurücksetzen",
-                        "headline":"Neue Ladeportal-PIN festlegen",
-                        "body":f"Hallo {user['name']}, für deinen Ladeportal-Zugang wurde ein PIN-Reset angefordert.",
-                        "detail":"Der Link ist 30 Minuten gültig. Die bisherige PIN bleibt bis zur erfolgreichen Änderung gültig.",
-                        "cta_label":"PIN zurücksetzen",
-                        "cta_url":reset_url,
-                    },base)
-                    db.mark_portal_pin_reset_mail_sent(req_id)
-                except Exception:
-                    logging.exception("Portal PIN reset mail failed")
-            background_tasks.add_task(send_reset)
-    return RedirectResponse(url="/public/ladeguthaben?pin_reset=requested",status_code=303)
-
-
-@app.get("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_page(request:Request, token:str=""):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    return render(request,"portal_pin_reset.html",page="public",token=token if record else "",token_valid=bool(record),reset_done=False)
-
-
-@app.post("/public/ladeguthaben/pin-reset", response_class=HTMLResponse)
-async def public_portal_pin_reset_submit(request:Request, token:str=Form(...), pin:str=Form(...), pin_repeat:str=Form(...)):
-    record=db.portal_pin_reset_token(_session_hash(token)) if token else None
-    if not record:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist ungültig, abgelaufen oder wurde bereits verwendet.")
-    pin=str(pin or "").strip(); pin_repeat=str(pin_repeat or "").strip()
-    if pin!=pin_repeat:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die beiden PIN-Eingaben stimmen nicht überein.")
-    if len(pin)!=6 or not pin.isdigit():
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token=token,token_valid=True,reset_done=False,error="Die neue PIN muss genau 6 Ziffern enthalten.")
-    for item in db.portal_pin_records(include_disabled=True):
-        if int(item["id"])!=int(record["user_id"]) and _portal_pin_ok(pin,item.get("portal_pin_hash") or ""):
-            return render(request,"portal_pin_reset.html",status_code=409,page="public",token=token,token_valid=True,reset_done=False,error="Diese PIN kann nicht verwendet werden. Bitte wähle eine andere 6-stellige PIN.")
-    user_id=db.consume_portal_pin_reset_token(_session_hash(token),_portal_pin_hash(pin))
-    if not user_id:
-        return render(request,"portal_pin_reset.html",status_code=400,page="public",token="",token_valid=False,reset_done=False,error="Der Reset-Link ist nicht mehr gültig.")
-    return render(request,"portal_pin_reset.html",page="public",token="",token_valid=False,reset_done=True)
-
-
-@app.post("/public/ladeguthaben/voucher", response_class=HTMLResponse)
-async def public_redeem_voucher(request: Request, code: str = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        user_id=int(portal_user["id"])
-        result=db.redeem_bonus_voucher(user_id,code)
-        db.refresh_local_list_for_user(user_id)
-        _schedule_local_list_sync("Bonusgutschein eingelöst")
-        data=db.portal_dashboard(user_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden gutgeschrieben.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,voucher_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/bonus-transfer", response_class=HTMLResponse)
-async def public_transfer_bonus(request: Request, recipient_id: int = Form(...), amount_kwh: float = Form(...), period: str | None = Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        sender_id=int(portal_user["id"]); recipient_id=int(recipient_id)
-        result=db.transfer_bonus_kwh(sender_id,recipient_id,float(amount_kwh))
-        db.refresh_local_list_for_user(sender_id); db.refresh_local_list_for_user(recipient_id)
-        _schedule_local_list_sync("Bonusguthaben übertragen")
-        data=db.portal_dashboard(sender_id,period=period)
-        return render(request,"public_budgets.html",page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_success=f"{result['amount_kwh']:.1f} Bonus-kWh wurden an {result['to_name']} übertragen.")
-    except ValueError as exc:
-        data=db.portal_dashboard(int(portal_user["id"]),period=period)
-        return render(request,"public_budgets.html",status_code=400,page="public",portal_user=portal_user,portal_data=data,admin_preview=False,transfer_error=str(exc))
-
-
-@app.post("/public/ladeguthaben/rfid/request")
-async def public_rfid_replacement_request(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"replacement",note,False)
-        return RedirectResponse(url="/public/ladeguthaben?rfid=requested",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-@app.post("/public/ladeguthaben/rfid/lost")
-async def public_rfid_lost(request:Request,card_id:int=Form(...),note:str|None=Form(None)):
-    portal_user=_portal_request_user(request)
-    if not portal_user: return RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    try:
-        db.create_rfid_replacement_request(int(portal_user["id"]),card_id,"lost",note,True)
-        _schedule_local_list_sync("RFID als verloren gemeldet")
-        return RedirectResponse(url="/public/ladeguthaben?rfid=lost",status_code=303)
-    except ValueError:
-        return RedirectResponse(url="/public/ladeguthaben?rfid=request-error",status_code=303)
-
-
-class RFIDEnrollmentStartPayload(BaseModel):
-    charge_point_id: str
-
-
-class RFIDEnrollmentConfirmPayload(BaseModel):
-    session_id: int
-    accepted: bool
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/start")
-async def public_rfid_enroll_start(request:Request,payload:RFIDEnrollmentStartPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    cp_id=str(payload.charge_point_id or "").strip()
-    if not cp_id: raise HTTPException(400,"Bitte wähle eine Ladesäule aus.")
-    if not is_connected(cp_id): raise HTTPException(409,"Diese Ladesäule ist aktuell nicht verbunden.")
-    try:
-        sid=db.start_rfid_enrollment(int(portal_user["id"]),cp_id,60)
-        state=db.rfid_enrollment_status(int(portal_user["id"]),sid) or {}
-        return {"ok":True,"session":{k:v for k,v in state.items() if k!="candidate_uid"},"seconds":60}
-    except ValueError as exc:
-        raise HTTPException(409,str(exc))
-
-
-@app.get("/public/ladeguthaben/rfid/enroll/status")
-async def public_rfid_enroll_status(request:Request,session_id:int):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    state=db.rfid_enrollment_status(int(portal_user["id"]),session_id)
-    if not state: raise HTTPException(404,"Einlernvorgang nicht gefunden.")
-    safe={k:v for k,v in state.items() if k!="candidate_uid"}
-    cp=db.get_charge_point(state["charge_point_id"]) or {}
-    safe["charge_point_label"]=(cp.get("location") or cp.get("id") or state["charge_point_id"])
-    return {"ok":True,"session":safe}
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/confirm")
-async def public_rfid_enroll_confirm(request:Request,payload:RFIDEnrollmentConfirmPayload):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try:
-        result=db.confirm_rfid_enrollment(int(portal_user["id"]),payload.session_id,bool(payload.accepted))
-    except ValueError as exc:
-        raise HTTPException(409,str(exc))
-    if result.get("accepted"):
-        _schedule_local_list_sync("RFID-Chip per Self-Service angelernt")
-    result.pop("uid",None)
-    return result
-
-
-@app.post("/public/ladeguthaben/rfid/enroll/cancel")
-async def public_rfid_enroll_cancel(request:Request,payload:dict):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    try: sid=int(payload.get("session_id"))
-    except Exception: raise HTTPException(400,"Ungültiger Einlernvorgang.")
-    return {"ok":db.cancel_rfid_enrollment(int(portal_user["id"]),sid)}
-
-
-@app.post("/public/ladeguthaben/logout")
-async def public_charging_portal_logout(request: Request):
-    token=request.cookies.get(PORTAL_COOKIE)
-    if token: db.delete_portal_session(_session_hash(token))
-    response=RedirectResponse(url="/public/ladeguthaben",status_code=303)
-    response.delete_cookie(PORTAL_COOKIE,path="/")
-    return response
-
-
-@app.get("/api/public/portal")
-async def api_public_portal(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user:
-        raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    return db.portal_dashboard(int(portal_user["id"]),period=period)
-
-
-@app.get("/api/public/charging-budgets")
-async def public_charging_budgets(request: Request, period: str | None = None):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    data=db.portal_dashboard(int(portal_user["id"]),period=period)
-    return {"portal":data,"updated_at":datetime.now(timezone.utc).isoformat()}
-
-
-@app.post("/api/public/portal/gamification-reveals/ack")
-async def public_portal_reveal_ack(request:Request,payload:dict):
-    portal_user=_portal_request_user(request)
-    if not portal_user: raise HTTPException(401,"PIN-Anmeldung erforderlich")
-    return db.acknowledge_portal_gamification_reveals(int(portal_user["id"]),payload.get("award_id"),payload.get("level"))
-
-
 @app.get("/registration-onboarding", response_class=HTMLResponse)
 async def registration_onboarding_page(request:Request,saved:str|None=None):
     return render(request,"registration_settings.html",page="registration-onboarding",settings=db.registration_settings(),saved=(saved=="1"))
@@ -1143,7 +842,7 @@ async def registration_request_detail_page(request:Request,request_id:int,result
         return render(request,"forbidden.html",status_code=403,page="",required="Administrator")
     item=db.access_request_view(request_id)
     if not item: raise HTTPException(404,"Zugangsantrag nicht gefunden")
-    message={"approved":"Antrag genehmigt und Ladeportal-Zugang erstellt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
+    message={"approved":"Antrag genehmigt und Ladebenutzer angelegt.","rejected":"Antrag abgelehnt.","review":"Antrag ist jetzt in Prüfung."}.get(result)
     return render(request,"registration_request_detail.html",page="access-requests",item=item,result_message=message)
 
 
@@ -1164,13 +863,13 @@ async def registration_request_decision(request:Request,request_id:int,action:st
     if action!="approve":
         raise HTTPException(400,"Ungültige Aktion")
     limit=None if str(monthly_kwh_limit or "").strip()=="" else max(0.0,float(str(monthly_kwh_limit).replace(",",".")))
-    pin=_generate_unique_portal_pin()
-    db.approve_access_request(request_id,auth.get("id"),_portal_pin_hash(pin),limit,monthly_limit_mode,note,"manual",return_details=True)
+    # Community creates charging users only: no PIN portal and no gamification.
+    db.approve_access_request(request_id,auth.get("id"),None,limit,monthly_limit_mode,note,"manual",return_details=True)
     db.deactivate_notification(f"access-request:{request_id}")
     base=mailer.settings(False).get("public_base_url") or str(request.base_url).rstrip("/")
     if mailer.settings(False).get("enabled"):
         try:
-            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Öffnen Sie das Ladeportal und verwenden Sie „PIN vergessen?“, um Ihre persönliche PIN sicher festzulegen.","cta_label":"Ladeportal öffnen","cta_url":base+"/public/ladeguthaben"},base)
+            await asyncio.to_thread(mailer.send_template,"system",[item["email"]],{"subject":"VoltCore Community · Ladezugang freigeschaltet","headline":"Ladezugang freigeschaltet","body":"Ihr Antrag wurde genehmigt.","detail":"Ihre RFID-Karte kann durch die Verwaltung zugeordnet und freigeschaltet werden.","cta_label":"Informationen zur Registrierung","cta_url":base+"/public/access-request"},base)
         except Exception:
             logging.exception("Registration approval notification failed")
     return RedirectResponse(url=f"/registration-requests/{request_id}?result=approved",status_code=303)
@@ -1235,11 +934,6 @@ async def vehicles_page(request: Request):
 @app.get("/users", response_class=HTMLResponse)
 async def users_page(request: Request):
     return render(request, "users.html", page="users")
-
-
-@app.get("/engagement", response_class=HTMLResponse)
-async def engagement_page(request: Request):
-    return render(request,"engagement.html",page="engagement")
 
 
 @app.get("/imports", response_class=HTMLResponse)
@@ -1589,31 +1283,6 @@ async def ladecloud_import_execute(payload: dict):
     try: path.unlink()
     except OSError: pass
     return {"ok":True,**result,"history":db.import_history_stats("lade.cloud")}
-
-
-@app.get("/api/settings/portal-leaderboard-names")
-async def portal_leaderboard_names_setting():
-    return {"show_names":db.setting_bool("portal_leaderboard_show_names",False)}
-
-
-@app.put("/api/settings/portal-leaderboard-names")
-async def set_portal_leaderboard_names_setting(payload: dict):
-    value=bool(payload.get("show_names")); db.set_setting("portal_leaderboard_show_names","1" if value else "0")
-    return {"ok":True,"show_names":value}
-
-
-@app.get("/api/settings/bonus-policy")
-async def bonus_policy_setting():
-    return db.bonus_policy_settings()
-
-
-@app.put("/api/settings/bonus-policy")
-async def set_bonus_policy_setting(payload: dict):
-    try:
-        return {"ok":True,**db.set_bonus_policy_settings(payload.get("default_valid_days",90),payload.get("transfer_after_days",30),bool(payload.get("transfer_enabled",True)))}
-    except (TypeError,ValueError) as exc:
-        raise HTTPException(400,str(exc))
-
 
 
 @app.get("/api/settings/branding")
@@ -3146,218 +2815,6 @@ async def purge_user_history(request:Request,user_id:int,payload:UserHistoryPurg
     )
     return {"ok":True,"mode":"purged","removed":removed}
 
-
-class PortalPinPayload(BaseModel):
-    pin: str
-    enabled: bool = True
-
-
-@app.get("/api/portal-admin/users/{user_id}")
-async def portal_admin_user(user_id:int):
-    u=db.get_user(user_id)
-    if not u:
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    return {
-        "id":u["id"],
-        "name":u["name"],
-        "portal_enabled":bool(u.get("portal_enabled")),
-        "portal_pin_set":bool(u.get("portal_pin_set_at")),
-        "portal_pin_set_at":u.get("portal_pin_set_at"),
-        "portal_last_login_at":u.get("portal_last_login_at"),
-        "achievements":db.achievements_for_user(user_id),
-    }
-
-
-@app.post("/api/portal-admin/users/{user_id}/pin")
-async def portal_admin_set_pin(user_id:int,payload:PortalPinPayload):
-    user=db.get_user(user_id)
-    if not user:
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    pin=str(payload.pin or "").strip()
-    if len(pin)!=6 or not pin.isdigit():
-        raise HTTPException(400,"PIN muss genau 6 Ziffern enthalten")
-    for row in db.portal_pin_records(include_disabled=True):
-        if int(row["id"])!=user_id and _portal_pin_ok(pin,row.get("portal_pin_hash") or ""):
-            raise HTTPException(409,"Diese PIN wird bereits verwendet")
-    db.set_user_portal_pin(user_id,_portal_pin_hash(pin),payload.enabled)
-    return {"ok":True,"portal_enabled":payload.enabled}
-
-
-@app.post("/api/portal-admin/users/{user_id}/enabled")
-async def portal_admin_enabled(user_id:int,payload:dict):
-    if not db.set_user_portal_enabled(user_id,bool(payload.get("enabled"))):
-        raise HTTPException(404,"Benutzer nicht gefunden")
-    return {"ok":True}
-
-
-class AchievementPayload(BaseModel):
-    name:str
-    description:str|None=None
-    icon:str|None="🏅"
-    metric:str="manual"
-    threshold:float|None=None
-    hidden:bool=False
-    system_secret:bool=False
-    active:bool=True
-    category:str="Allgemein"
-    rarity:str="common"
-    xp:int=50
-    tier_group:str|None=None
-    tier_name:str|None=None
-    tier_rank:int=0
-    leaderboard_enabled:bool=False
-
-class EventPayload(BaseModel):
-    name:str
-    description:str|None=None
-    metric:str="energy_kwh"
-    starts_at:str
-    ends_at:str
-    active:bool=True
-    min_sessions:int=0
-    min_session_kwh:float=0
-    reward_bonus_kwh:float=0
-    reward_valid_days:int|None=None
-    reward_bonus_enabled:bool|None=None
-    winner_badge_enabled:bool=False
-    winner_badge_name:str|None=None
-    winner_badge_icon:str|None=None
-    winner_badge_description:str|None=None
-
-class BonusGrantPayload(BaseModel):
-    user_id:int
-    amount_kwh:float
-    expires_at:str
-    note:str|None=None
-
-class BonusVoucherPayload(BaseModel):
-    code:str|None=None
-    amount_kwh:float
-    redeem_until:str|None=None
-    bonus_valid_days:int|None=None
-    max_redemptions:int=1
-    note:str|None=None
-    active:bool=True
-
-@app.get("/api/engagement")
-async def api_engagement():
-    return {
-        "achievements":db.list_achievements(),
-        "events":db.list_gamification_events(),
-        "users":[{"id":u["id"],"name":u["name"],"gamification_enabled":bool(u.get("gamification_enabled",1))} for u in db.list_users_rich() if u.get("status")=="Aktiv"],
-        "bonus_grants":db.list_bonus_grants(),
-        "vouchers":db.list_bonus_vouchers(),
-        "bonus_policy":db.bonus_policy_settings(),
-        "leaderboard_metrics":db.leaderboard_metric_catalog(),
-        "gamification_overview":db.gamification_overview(),
-    }
-
-@app.get("/api/engagement/leaderboards")
-async def api_general_leaderboard(period:str="month",metric:str="energy_kwh"):
-    try: return db.general_leaderboard(period,metric)
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/bonus")
-async def api_grant_bonus(payload:BonusGrantPayload):
-    try:
-        gid=db.grant_bonus_kwh(payload.user_id,payload.amount_kwh,payload.expires_at,"admin",payload.note)
-        db.refresh_local_list_for_user(payload.user_id)
-        _schedule_local_list_sync("Bonusguthaben geändert")
-        return {"ok":True,"grant_id":gid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/bonus/{grant_id}")
-async def api_revoke_bonus(grant_id:int):
-    try:
-        grant=next((g for g in db.list_bonus_grants(limit=1000) if int(g.get("id") or 0)==int(grant_id)),None)
-        if not db.revoke_bonus_grant(grant_id): raise HTTPException(404,"Bonusguthaben nicht gefunden")
-        if grant and grant.get("user_id") is not None:
-            db.refresh_local_list_for_user(int(grant["user_id"]))
-            _schedule_local_list_sync("Bonusguthaben widerrufen")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/vouchers")
-async def api_create_voucher(payload:BonusVoucherPayload):
-    code=(payload.code or f"{db.branding_settings()['voucher_prefix']}-{secrets.token_hex(4).upper()}").strip().upper()
-    try:
-        vid=db.create_bonus_voucher(code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-        return {"ok":True,"voucher_id":vid,"code":code}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/vouchers/{voucher_id}/active")
-async def api_voucher_active(voucher_id:int,payload:dict):
-    if not db.set_bonus_voucher_active(voucher_id,bool(payload.get("active"))): raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-@app.put("/api/engagement/vouchers/{voucher_id}")
-async def api_update_voucher(voucher_id:int,payload:BonusVoucherPayload):
-    try:
-        ok=db.update_bonus_voucher(voucher_id,payload.code,payload.amount_kwh,payload.redeem_until,payload.bonus_valid_days,payload.max_redemptions,payload.note,payload.active)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.delete("/api/engagement/vouchers/{voucher_id}")
-async def api_delete_voucher(voucher_id:int):
-    try: ok=db.delete_bonus_voucher(voucher_id)
-    except ValueError as exc: raise HTTPException(409,str(exc))
-    if not ok: raise HTTPException(404,"Gutschein nicht gefunden")
-    return {"ok":True}
-
-
-@app.post("/api/engagement/achievements")
-async def api_create_achievement(payload:AchievementPayload):
-    try: aid=db.create_achievement(**payload.model_dump()); return {"id":aid}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/achievements/{achievement_id}")
-async def api_update_achievement(achievement_id:int,payload:AchievementPayload):
-    try:
-        if not db.update_achievement(achievement_id,**payload.model_dump()): raise HTTPException(404,"Achievement nicht gefunden")
-    except ValueError as exc: raise HTTPException(400,str(exc))
-    return {"ok":True}
-
-@app.post("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_award_achievement(achievement_id:int,user_id:int):
-    try: db.award_achievement(user_id,achievement_id,"manual"); return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.delete("/api/engagement/achievements/{achievement_id}/award/{user_id}")
-async def api_revoke_achievement(achievement_id:int,user_id:int):
-    if not db.revoke_achievement(user_id,achievement_id): raise HTTPException(404,"Auszeichnung nicht gefunden")
-    return {"ok":True}
-
-@app.post("/api/engagement/events/preview")
-async def api_preview_event(payload:EventPayload):
-    try: return db.preview_gamification_event(**payload.model_dump())
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events")
-async def api_create_event(payload:EventPayload):
-    try: eid=db.create_gamification_event(**payload.model_dump()); return {"id":eid}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.put("/api/engagement/events/{event_id}")
-async def api_update_event(event_id:int,payload:EventPayload):
-    try:
-        if not db.update_gamification_event(event_id,**payload.model_dump()): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except (ValueError,TypeError) as exc: raise HTTPException(400,str(exc))
-
-@app.post("/api/engagement/events/{event_id}/active")
-async def api_event_active(event_id:int,payload:dict):
-    try:
-        if not db.set_gamification_event_active(event_id,bool(payload.get("active"))): raise HTTPException(404,"Event nicht gefunden")
-        return {"ok":True}
-    except ValueError as exc: raise HTTPException(400,str(exc))
-
-@app.get("/api/engagement/events/{event_id}")
-async def api_event_detail(event_id:int):
-    data=db.gamification_event_detail(event_id)
-    if not data: raise HTTPException(404,"Event nicht gefunden")
-    return data
 
 @app.post("/api/users/{user_id}/vehicles/{vehicle_id}")
 async def assign_user_vehicle(user_id: int, vehicle_id: int):
