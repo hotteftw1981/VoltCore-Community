@@ -2092,6 +2092,13 @@ async def remove_group_user(group_id:int,user_id:int):
     if not db.unassign_user_billing_group(user_id,group_id): raise HTTPException(404,"Zuordnung nicht gefunden")
     return {"ok":True}
 
+@app.get("/api/charge-points/{cp_id}/session-data-quality")
+async def api_p06_session_data_quality(cp_id: str, limit: int = 100):
+    if not db.get_charge_point(cp_id):
+        raise HTTPException(404, "Ladepunkt nicht gefunden")
+    return db.session_data_quality(limit=limit, charge_point_id=cp_id)
+
+
 @app.get("/api/charge-points/{cp_id}/diagnostics")
 async def api_charge_point_diagnostics(cp_id: str, severity: str | None = None, category: str | None = None, limit: int = 100):
     if not db.get_charge_point(cp_id):
