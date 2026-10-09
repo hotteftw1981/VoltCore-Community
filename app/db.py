@@ -5833,6 +5833,20 @@ def _event_state(event, now=None):
     return "running"
 
 
+EVENT_METRICS={
+    "energy_kwh",
+    "sessions",
+    "avg_stand_seconds",
+    "total_stand_seconds",
+    "unplug_ratio",
+    "avg_energy_kwh",
+    "qualified_sessions",
+}
+EVENT_QUALIFICATION_METRICS={"avg_stand_seconds","total_stand_seconds","unplug_ratio","avg_energy_kwh","qualified_sessions"}
+EVENT_TIMING_METRICS={"avg_stand_seconds","total_stand_seconds","unplug_ratio"}
+EVENT_ASCENDING_METRICS={"avg_stand_seconds","total_stand_seconds"}
+
+
 def _validate_event_fields(metric, starts_at, ends_at, min_sessions=0, min_session_kwh=0, reward_bonus_kwh=0, reward_valid_days=None,
                            reward_bonus_enabled=None, winner_badge_enabled=False, winner_badge_name=None, winner_badge_icon=None, winner_badge_description=None):
     if metric not in EVENT_METRICS:
@@ -6036,6 +6050,21 @@ def _event_detail_summary(event,board):
     top3=[x for x in board if x.get("rank") is not None and int(x.get("rank") or 0)<=3]
     return {"participant_count":participants,"qualified_count":qualified,"top3":top3}
 
+
+BRANDING_DEFAULTS = {
+    "product_name":"VoltCore Community",
+    "organization_name":"Ihre Organisation",
+    "display_name":"VoltCore Community",
+    "product_subtitle":"Community Edition · OCPP Charging Management",
+    "voucher_prefix":"VOLT",
+    "primary_color":"#2563eb",
+    "logo_light_url":"",
+    "logo_dark_url":"",
+    "favicon_url":"",
+    "login_background_url":"",
+    "app_background_url":"",
+    "header_background_url":"",
+}
 
 def branding_settings():
     with _lock,_connect() as conn:
