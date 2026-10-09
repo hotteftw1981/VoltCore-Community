@@ -166,6 +166,32 @@ class ChargingLimits(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL").fetchone()[0]
         self.assertEqual(count, 1)
 
+    def test_migration_preserves_existing_history_and_limits(self):
+        first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        self.assertTrue(db.set_charging_session_limit("user", self.user, 2))
+        self.assertTrue(db.set_charging_session_limit("rfid", 1, 2))
+        db.init_db()
+        db.init_db()
+        self.assertEqual(db.get_transaction(first)["status"], "Active")
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["limit"], 2)
+        self.assertEqual(db.charging_session_limit_snapshot("rfid", 1)["limit"], 2)
+        self.assertEqual(db.charging_session_limit_snapshot("user", self.user)["active"], 1)
+
+    def test_two_cards_same_driver_race_is_serialized(self):
+        gate = threading.Barrier(2, timeout=5)
+        def start(connector, card):
+            gate.wait()
+            try:
+                return db.start_transaction("P03", id_tag=card, connector_id=connector)
+            except ValueError as exc:
+                return str(exc)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            one = pool.submit(start, 1, "P03-A")
+            two = pool.submit(start, 2, "P03-B")
+            results = (one.result(timeout=15), two.result(timeout=15))
+        self.assertEqual(sum(isinstance(r, int) for r in results), 1)
+        self.assertIn("USER_CONCURRENT_SESSION_LIMIT", results)
+
     def test_simultaneous_two_threads_one_slot(self):
         gate = threading.Barrier(2, timeout=5)
         def start(connector):
