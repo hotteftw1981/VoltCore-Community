@@ -1830,6 +1830,18 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
         grace=STANDTIME_GRACE_SECONDS if not policy or policy[0] is None else max(0,int(policy[0]))
         auto_stop=0 if not policy or policy[1] is None else max(0,int(policy[1]))
         started_at=utc_now()
+        # A repeated start with the same credential on an occupied connector
+        # cannot be safely identified as a new physical charging session.
+        # Preserve the active transaction even if this RFID permits >1 sessions.
+        existing_on_connector = conn.execute(
+            """SELECT id,id_tag FROM transactions
+               WHERE charge_point_id=? AND connector_id=?
+                 AND status='Active' AND ended_at IS NULL
+               ORDER BY id DESC LIMIT 1""",
+            (cp_id, int(connector_id)),
+        ).fetchone()
+        if existing_on_connector and id_tag and existing_on_connector["id_tag"] == id_tag:
+            raise ValueError("CONNECTOR_ACTIVE_SESSION")
         _reconcile_active_transactions_for_connector_conn(
             conn, cp_id, connector_id, ended_at=started_at, reason="SupersededByNewTransaction"
         )
