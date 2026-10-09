@@ -183,7 +183,7 @@ async def sync_local_list(cp_id, force_full=False, reason="Automatisch"):
 
 def _automatic_local_list_retry_allowed(state, *, now=None, cooldown_seconds=120):
     """Avoid tight retry loops on failing stations; manual full sync bypasses this."""
-    if str(state.get("status") or "") not in ("Timeout", "Fehler", "Failed", "Fehlgeschlagen"):
+    if str(state.get("status") or "") not in ("Timeout", "Fehler", "Failed", "Fehlgeschlagen", "Prüfung erforderlich"):
         return True
     observed = db._parse_iso_utc(state.get("last_attempt_at"))
     if observed is None:
