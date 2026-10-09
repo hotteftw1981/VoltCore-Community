@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.7.91 — CSV import and migration consolidation
+
+- Added provider-neutral CSV import with column mapping, preview, duplicate detection and explicit execution.
+- Added VoltCore migration ZIP export, compatibility preview and guarded import into empty installations.
+- Preserved the existing lade.cloud XLSX import alongside new workflows.
+- Excluded temporary import uploads from backups.
+- Kept Docker-host updater agent out of the application for security and deployment independence.
+- Includes dedicated CSV/migration and backup regression tests.
+
+
 ## 0.9.7.90 — Community release candidate
 
 - Community-only scope enforced; no personal PIN portal, XP or gamification UI.

@@ -39,6 +39,8 @@ from . import invites
 from . import totp
 from . import updates
 from . import web_push
+from . import csv_import
+from . import migration_package
 from .ladecloud_import import parse_ladecloud_xlsx
 from .ocpp_server import serve_ocpp, remote_command, is_connected, probe_capabilities, read_configuration, verify_offline_authorization
 try:
@@ -51,7 +53,7 @@ except ImportError:  # compatibility for isolated legacy test stubs
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 BASE_DIR = Path(__file__).resolve().parent
-APP_VERSION = "0.9.7.90"
+APP_VERSION = "0.9.7.91"
 APP_EDITION = "Community"
 OCPP_PORT = int(os.getenv("OCPP_PORT", "9000"))
 WEB_PORT = int(os.getenv("WEB_PORT", "8000"))
@@ -176,6 +178,7 @@ async def _web_push_worker():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    csv_import.ensure_schema()
     backup.ensure_defaults()
     mailer.ensure_defaults()
     updates.ensure_defaults()
@@ -945,7 +948,7 @@ async def users_page(request: Request):
 
 @app.get("/imports", response_class=HTMLResponse)
 async def imports_page(request: Request):
-    return render(request,"imports.html",page="imports")
+    return render(request,"imports.html",page="imports",import_providers=csv_import.provider_options())
 
 
 @app.get("/load-management", response_class=HTMLResponse)
@@ -966,6 +969,140 @@ async def reports_page(request: Request):
 @app.get("/backups", response_class=HTMLResponse)
 async def backups_page(request: Request):
     return render(request, "backups.html", page="backups")
+
+
+@app.post("/api/import/migration/export")
+async def migration_export(payload: dict):
+    anonymize=bool(payload.get("anonymize"))
+    data,filename,manifest=migration_package.build_package(APP_VERSION,"community",anonymize=anonymize)
+    headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-VoltCore-Migration-Schema": str(manifest.get("schema_version") or ""),
+    }
+    return Response(content=data,media_type="application/zip",headers=headers)
+
+
+@app.post("/api/import/migration/preview")
+async def migration_import_preview(file: UploadFile = File(...)):
+    if not str(file.filename or "").lower().endswith(".zip"):
+        raise HTTPException(400,"Bitte ein VoltCore-Migrationspaket als ZIP auswählen.")
+    data=await file.read(migration_package.MAX_PACKAGE_BYTES+1)
+    if len(data)>migration_package.MAX_PACKAGE_BYTES:
+        raise HTTPException(413,"Das Migrationspaket darf maximal 100 MB groß sein.")
+    try:
+        preview=migration_package.preview_package(data,"community")
+        token=migration_package.save_package_upload(data)
+    except ValueError as exc:
+        raise HTTPException(400,str(exc))
+    return {"token":token,"filename":str(file.filename or "migration.zip"),**preview}
+
+
+@app.post("/api/import/migration/execute")
+async def migration_import_execute(payload: dict):
+    token=payload.get("token")
+    try:
+        data=migration_package.load_package_upload(token)
+        result=migration_package.import_package(data,"community")
+    except ValueError as exc:
+        raise HTTPException(409,str(exc))
+    migration_package.delete_package_upload(token)
+    return result
+
+
+@app.post("/api/import/csv/preview")
+async def neutral_csv_import_preview(file: UploadFile = File(...), entity_type: str = Form(...), provider: str = Form("generic")):
+    if not str(file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Bitte eine CSV-Datei auswählen.")
+    data = await file.read(csv_import.MAX_IMPORT_BYTES + 1)
+    if len(data) > csv_import.MAX_IMPORT_BYTES:
+        raise HTTPException(413, "Die Importdatei darf maximal 20 MB groß sein.")
+    try:
+        parsed = csv_import.parse_csv_bytes(data)
+        fields = csv_import.field_schema(entity_type)
+        mapping = csv_import.suggest_mapping(entity_type, parsed["headers"])
+        token = csv_import.save_upload(data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {
+        "token": token,
+        "filename": str(file.filename or "import.csv"),
+        "entity_type": entity_type,
+        "provider": provider,
+        "rows": len(parsed["rows"]),
+        "headers": parsed["headers"],
+        "fields": fields,
+        "suggested_mapping": mapping,
+        "sample_rows": parsed["rows"][:8],
+        "delimiter": parsed["delimiter"],
+        "encoding": parsed["encoding"],
+    }
+
+
+def _neutral_import_options(payload: dict):
+    timezone_name = str(payload.get("timezone") or "Europe/Berlin")
+    if timezone_name not in {"Europe/Berlin", "UTC"}:
+        timezone_name = "Europe/Berlin"
+    return timezone_name, bool(payload.get("create_missing"))
+
+
+@app.post("/api/import/csv/analyze")
+async def neutral_csv_import_analyze(payload: dict):
+    try:
+        data = csv_import.load_upload(payload.get("token"))
+        parsed = csv_import.parse_csv_bytes(data)
+        timezone_name, create_missing = _neutral_import_options(payload)
+        rows, errors = csv_import.normalize_rows(
+            str(payload.get("entity_type") or ""),
+            parsed["rows"],
+            payload.get("mapping") or {},
+            timezone_name,
+        )
+        if errors:
+            return JSONResponse(
+                {"detail": f"{len(errors)} Zeile(n) enthalten ungültige Daten.", "errors": errors[:25]},
+                status_code=400,
+            )
+        analysis = csv_import.analyze(
+            str(payload.get("entity_type") or ""),
+            rows,
+            str(payload.get("provider") or "generic"),
+            create_missing=create_missing,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, **analysis, "sample": rows[:8]}
+
+
+@app.post("/api/import/csv/execute")
+async def neutral_csv_import_execute(payload: dict):
+    token = payload.get("token")
+    try:
+        data = csv_import.load_upload(token)
+        parsed = csv_import.parse_csv_bytes(data)
+        timezone_name, create_missing = _neutral_import_options(payload)
+        entity_type = str(payload.get("entity_type") or "")
+        rows, errors = csv_import.normalize_rows(
+            entity_type,
+            parsed["rows"],
+            payload.get("mapping") or {},
+            timezone_name,
+        )
+        if errors:
+            return JSONResponse(
+                {"detail": f"{len(errors)} Zeile(n) enthalten ungültige Daten.", "errors": errors[:25]},
+                status_code=400,
+            )
+        result = csv_import.execute(
+            entity_type,
+            rows,
+            str(payload.get("provider") or "generic"),
+            create_missing=create_missing,
+            filename=str(payload.get("filename") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    csv_import.delete_upload(token)
+    return result
 
 
 class BackupSettingsPayload(BaseModel):
