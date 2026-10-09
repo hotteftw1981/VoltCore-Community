@@ -1,0 +1,306 @@
+name: Community Scope Cleanup Release
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/community-cleanup-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: community-scope-cleanup-release
+  cancel-in-progress: false
+jobs:
+  cleanup-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATA_DIR: /tmp/voltcore-cleanup-test-data
+      VOLTCORE_UPDATE_CHECK_ENABLED: '0'
+      ENABLE_API_DOCS: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Remove reviewed Community-excluded runtime
+        shell: bash
+        run: |
+          python - <<'PY'
+          import ast
+          import hashlib
+          from pathlib import Path
+          p = Path('app/db.py')
+          source = p.read_text(encoding='utf-8')
+          assert hashlib.sha256(source.encode()).hexdigest() == '8bce918a6f47f4bf95b5c4615c0bfd4f596d775d2ea45379189422758290bcbb', 'Source changed; refusing an unreviewed cleanup'
+          names = set('''portal_rfid_cards _portal_period_context _portal_period_summary_conn public_charging_budgets
+          _leaderboard_metric_key _achievement_tx_rows_conn _tx_local_start _max_consecutive_iso_weeks
+          _achievement_metric_value_conn evaluate_user_achievements reconcile_automatic_achievements
+          _xp_floor _level_title _gamification_level_data user_gamification_profile portal_gamification_reveals
+          gamification_overview achievements_for_user _event_state _validate_event_fields _event_user_join_sql
+          _rank_event_items _event_leaderboard_conn _event_rewards_conn _event_badge_awards_conn _ensure_event_badge_conn
+          _snapshot_event_results_conn _event_snapshot_board_conn _event_detail_summary _bonus_policy_settings_conn
+          bonus_policy_settings active_event_leaderboards_for_portal _leaderboard_bounds leaderboard_metric_catalog
+          _leaderboard_tx_rows_conn _leaderboard_metric_value_conn general_leaderboard portal_general_leaderboards
+          _bonus_wallet_conn bonus_wallet bonus_transfer_recipients bonus_transfer_history _portal_driver_profile'''.split())
+          constants = set('''_PORTAL_MONTH_NAMES EVENT_METRICS EVENT_QUALIFICATION_METRICS EVENT_TIMING_METRICS
+          EVENT_ASCENDING_METRICS PORTAL_LEADERBOARD_PERIODS'''.split())
+          ranges = []
+          found = set()
+          for node in ast.parse(source).body:
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+                  assert not node.decorator_list, node.name
+                  ranges.append((node.lineno - 1, node.end_lineno))
+                  found.add(node.name)
+              elif isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in constants for t in node.targets):
+                  ranges.append((node.lineno - 1, node.end_lineno))
+          assert found == names, names - found
+          lines = source.splitlines(keepends=True)
+          for start, end in sorted(ranges, reverse=True):
+              del lines[start:end]
+          source = ''.join(lines)
+          def replace_once(old, new):
+              global source
+              assert source.count(old) == 1, repr(old[:100])
+              source = source.replace(old, new, 1)
+          replace_once('''    if result and result.get("user_id"):
+                  try:
+                      evaluate_user_achievements(int(result["user_id"]))
+                  except Exception:
+                      pass
+          ''', '')
+          replace_once('''    for user_id in touched_users:
+                  evaluate_user_achievements(user_id)
+          ''', '')
+          replace_once('''            if state.get("blocked"):
+                          bonus=_bonus_wallet_conn(conn,int(user_id))
+                          if float(bonus.get("available_kwh") or 0)<=1e-9:
+                              return None
+          ''', '''            if state.get("blocked"):
+                          return None
+          ''')
+          replace_once('''                bonus=_bonus_wallet_conn(conn,user["id"])
+                          if state.get("blocked") and bonus["available_kwh"] > 1e-9:
+                              sev,title="warning","Monatsbudget verbraucht \u2013 Bonus aktiv"
+                          elif state.get("blocked"):
+          ''', '''                if state.get("blocked"):
+          ''')
+          replace_once('''                bonus=conn.execute("""SELECT COALESCE(SUM(remaining_kwh),0) FROM bonus_grants
+                              WHERE user_id=? AND active=1 AND remaining_kwh>0.0000001 AND granted_at<=? AND expires_at>?""",
+                              (user_id,started.isoformat(),started.isoformat())).fetchone()[0]
+                          chargeable_energy=max(0.0,energy-base_remaining-float(bonus or 0))
+          ''', '''                chargeable_energy=max(0.0,energy-base_remaining)
+          ''')
+          replace_once('Freeze the chargeable session cost after monthly allowance and bonus kWh.', 'Freeze the chargeable session cost after the optional monthly allowance.')
+          replace_once('    achievement_user_id=None\n', '')
+          replace_once('        achievement_user_id=row[4]\n', '')
+          replace_once('    "voucher_prefix":"VOLT",\n', '')
+          for path in Path('app').rglob('*.py'):
+              content = source if path == p else path.read_text(encoding='utf-8')
+              for node in ast.walk(ast.parse(content)):
+                  if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                      assert node.id not in names | constants, (str(path), node.lineno, node.id)
+                  elif isinstance(node, ast.Attribute):
+                      assert node.attr not in names, (str(path), node.lineno, node.attr)
+          p.write_text(source, encoding='utf-8')
+          print('REMOVED_FUNCTIONS', len(names), 'REMOVED_CONSTANTS', len(constants))
+          for path in ('app/main.py', 'README.md', 'README.en.md'):
+              file = Path(path)
+              content = file.read_text(encoding='utf-8')
+              assert '0.9.7.95' in content, path
+              file.write_text(content.replace('0.9.7.95', '0.9.7.96'), encoding='utf-8')
+          changelog = Path('CHANGELOG.md')
+          text = changelog.read_text(encoding='utf-8')
+          entry = '''## 0.9.7.96 - Complete remaining Community runtime cleanup
+
+          - Delete 43 remaining personal-portal, achievement/XP, event, leaderboard and bonus helper functions and six obsolete constants.
+          - Remove achievement evaluation from occupancy finalization and the legacy lade.cloud import.
+          - Remove legacy bonus overrides from RFID local lists, budget notifications and newly calculated session costs.
+          - Preserve historical tables, existing charging users, completed session snapshots and neutral Community features.
+          - Add focused regression tests for removed functions, retained historical rows and charging behavior without bonuses.
+          - Existing expected-failure regression cases remain explicitly recorded; they are not deleted or counted as successful tests.
+
+          '''
+          assert text.startswith('# Changelog\n\n')
+          changelog.write_text('# Changelog\n\n' + entry + text[len('# Changelog\n\n'):], encoding='utf-8')
+          PY
+      - name: Add regression coverage for removed runtime
+        shell: bash
+        run: |
+          cat > tests/test_community_legacy_runtime.py <<'PY'
+          """Community cleanup regression tests; only temporary databases are used."""
+          import ast
+          import os
+          import tempfile
+          import unittest
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          from unittest.mock import patch
+          os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="community-cleanup-import-"))
+          from app import db
+          class CommunityLegacyRuntime(unittest.TestCase):
+              def setUp(self):
+                  temp = tempfile.TemporaryDirectory(prefix="community-cleanup-test-")
+                  self.addCleanup(temp.cleanup)
+                  root = Path(temp.name)
+                  for name, value in (("DATA_DIR", root), ("DB_PATH", root / "test.sqlite3")):
+                      swap = patch.object(db, name, value)
+                      swap.start()
+                      self.addCleanup(swap.stop)
+                  db.init_db()
+                  db.upsert_charge_point("CLEANUP-CP", status="Available", connector_count=1)
+                  db.discover_connector("CLEANUP-CP", 1, status="Available")
+                  self.user = db.create_user("Cleanup Driver", monthly_kwh_limit=1, monthly_limit_mode="block")
+                  db.create_rfid_card("CLEANUP-CARD", user_id=self.user)
+                  now = datetime.now(timezone.utc)
+                  with db._connect() as conn:
+                      conn.execute("INSERT INTO bonus_grants(user_id,amount_kwh,remaining_kwh,granted_at,expires_at) VALUES(?,100,100,?,?)", (self.user, (now-timedelta(days=1)).isoformat(), (now+timedelta(days=30)).isoformat()))
+                      conn.commit()
+              def finish_session(self):
+                  tx = db.start_transaction("CLEANUP-CP", id_tag="CLEANUP-CARD", connector_id=1, meter_start_kwh=10)
+                  with db._connect() as conn:
+                      conn.execute("UPDATE transactions SET price_cents_per_kwh=30 WHERE id=?", (tx,))
+                      conn.commit()
+                  db.stop_transaction(tx, meter_stop_kwh=12)
+                  return tx
+              def test_pro_runtime_functions_are_physically_absent(self):
+                  tree = ast.parse(Path(db.__file__).read_text(encoding="utf-8"))
+                  banned = ("portal_", "_portal_", "achievement", "gamification", "bonus_", "_bonus_", "leaderboard", "_xp_")
+                  for node in tree.body:
+                      if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                          self.assertFalse(any(word in node.name for word in banned), node.name)
+                  self.assertFalse(hasattr(db, "public_charging_budgets"))
+              def test_old_bonus_cannot_override_rfid_local_list_block(self):
+                  self.finish_session()
+                  self.assertNotIn("CLEANUP-CARD", [entry["idTag"] for entry in db.rfid_local_list_full()])
+                  self.assertFalse(db.authorization_decision("CLEANUP-CARD", "CLEANUP-CP")["accepted"])
+              def test_new_session_cost_ignores_legacy_bonus(self):
+                  tx = self.finish_session()
+                  self.assertEqual(db.get_transaction(tx)["cost_cents"], 30)
+              def test_budget_warning_does_not_advertise_a_bonus(self):
+                  self.finish_session()
+                  db.sync_notifications()
+                  with db._connect() as conn:
+                      rows = conn.execute("SELECT title,severity FROM notifications WHERE title LIKE 'Monats%' ").fetchall()
+                  self.assertTrue(rows)
+                  self.assertTrue(any("gesperrt" in row["title"] for row in rows))
+                  self.assertFalse(any("Bonus" in row["title"] for row in rows))
+              def test_initialization_preserves_history_without_reactivation(self):
+                  tx = self.finish_session()
+                  before = db.get_transaction(tx)
+                  db.init_db()
+                  self.assertEqual(db.get_transaction(tx), before)
+                  with db._connect() as conn:
+                      self.assertEqual(conn.execute("SELECT remaining_kwh FROM bonus_grants WHERE user_id=?", (self.user,)).fetchone()[0], 100)
+                      self.assertEqual(tuple(conn.execute("SELECT portal_enabled,gamification_enabled FROM users WHERE id=?", (self.user,)).fetchone()), (0, 0))
+              def test_legacy_import_has_no_missing_achievement_callback(self):
+                  now = db.utc_now()
+                  result = db.import_ladecloud_rows([{"rfid_tag": "CLEANUP-CARD", "source_charge_point": "Imported CP", "import_key": "cleanup-import-test", "started_at": now, "ended_at": now, "energy_kwh": 1, "duration_seconds": 60}], {"CLEANUP-CARD": self.user}, {"Imported CP": "CLEANUP-CP"})
+                  self.assertEqual(result["imported"], 1)
+              def test_occupancy_finalization_has_no_achievement_callback(self):
+                  tx = self.finish_session()
+                  now = db.utc_now()
+                  with db._connect() as conn:
+                      conn.execute("UPDATE transactions SET post_session_occupied_started_at=? WHERE id=?", (now, tx))
+                      conn.commit()
+                  result = db.finalize_post_session_occupancy("CLEANUP-CP", 1, now)
+                  self.assertEqual(result["transaction_id"], tx)
+          if __name__ == "__main__":
+              unittest.main()
+          PY
+      - name: Install application and integration-test dependencies
+        run: pip install -r requirements.txt -r tests/requirements.txt
+      - name: Full regression including HTTP integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit-results
+          python -m compileall -q app tests
+          if python -m unittest discover -s tests -p 'test_*.py' > audit-results/tests.txt 2>&1; then
+            tail -5 audit-results/tests.txt
+          else
+            tail -100 audit-results/tests.txt
+            exit 1
+          fi
+          git diff --check
+      - name: Build and smoke-test clean container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build -t voltcore-community-cleanup . > audit-results/docker-build.txt 2>&1
+          docker run -d --name voltcore-community-cleanup -p 127.0.0.1:18030:8000 -e VOLTCORE_UPDATE_CHECK_ENABLED=0 -v voltcore-community-cleanup-data:/data voltcore-community-cleanup
+          for attempt in $(seq 1 45); do
+            if curl --fail --silent http://127.0.0.1:18030/health > audit-results/health.json; then break; fi
+            sleep 2
+          done
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          health=json.loads(Path('audit-results/health.json').read_text())
+          assert health == {'status':'ok','version':'0.9.7.96'}, health
+          print('CONTAINER_HEALTH_OK',health)
+          PY
+          test "$(curl --silent --output /tmp/voltcore-cleanup-setup.html --write-out '%{http_code}' http://127.0.0.1:18030/setup)" = 200
+      - name: Commit verified cleanup without force-pushing
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/db.py app/main.py README.md README.en.md CHANGELOG.md tests/test_community_legacy_runtime.py
+          git commit -m 'fix(community): delete 43 legacy runtime functions and release v0.9.7.96'
+          git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Package verified release and retain source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_release.py --dist audit-results
+          git archive --format=zip --prefix=VoltCore-Community-source/ HEAD > audit-results/VoltCore-Community-source.zip
+          python - <<'PY'
+          import hashlib,json,subprocess,zipfile
+          from pathlib import Path
+          archive=Path('audit-results/VoltCore_Community_V0_9_7_96.zip')
+          with zipfile.ZipFile(archive) as z:
+              assert z.testzip() is None
+              names=z.namelist()
+              prefix=names[0].split('/')[0]
+              assert z.read(prefix+'/app/db.py') == Path('app/db.py').read_bytes()
+              assert z.read(prefix+'/app/main.py') == Path('app/main.py').read_bytes()
+              assert all(not Path(n).is_absolute() and '..' not in Path(n).parts and '.env' not in Path(n).parts and '.git' not in Path(n).parts for n in names)
+          digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+          Path('audit-results/SHA256SUMS.txt').write_text(digest+'  '+archive.name+'\n')
+          result={'version':'0.9.7.96','commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'archive':archive.name,'sha256':digest,'removed_functions':43,'removed_constants':6}
+          Path('audit-results/provenance.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps(result,indent=2))
+          PY
+      - name: Publish release asset in the existing repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.commit.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('CHANGELOG.md').read_text()
+          body=text.split('## 0.9.7.96 - ',1)[1].split('\n## ',1)[0]
+          Path('audit-results/release-notes.md').write_text('# '+body+'\nThis cleanup release does not change repository visibility or certify historical GitHub object removal.\n')
+          PY
+          gh release create v0.9.7.96 audit-results/VoltCore_Community_V0_9_7_96.zip audit-results/SHA256SUMS.txt --target "$TARGET_SHA" --title 'VoltCore Community 0.9.7.96' --notes-file audit-results/release-notes.md
+      - name: Cleanup isolated container
+        if: always()
+        run: |
+          mkdir -p audit-results
+          docker logs voltcore-community-cleanup > audit-results/container.log 2>&1 || true
+          docker rm -f voltcore-community-cleanup >/dev/null 2>&1 || true
+          docker volume rm voltcore-community-cleanup-data >/dev/null 2>&1 || true
+      - name: Retain cleanup source, ZIP and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: community-cleanup-v0.9.7.96-${{ github.run_id }}
+          path: audit-results/
+          retention-days: 7
