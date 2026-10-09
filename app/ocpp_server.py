@@ -928,7 +928,7 @@ class ChargePoint(OcppChargePoint):
         try:
             tx = db.start_transaction(self.id, id_tag=id_tag, connector_id=connector_id, ocpp_transaction_id=tx_id_from_kwargs(kwargs), meter_start_kwh=start_meter_kwh)
         except ValueError as exc:
-            if str(exc) not in ("RFID_CONCURRENT_SESSION_LIMIT", "USER_CONCURRENT_SESSION_LIMIT"):
+            if str(exc) not in ("RFID_CONCURRENT_SESSION_LIMIT", "USER_CONCURRENT_SESSION_LIMIT", "CONNECTOR_ACTIVE_SESSION"):
                 raise
             # OCPP 1.6: reject the new transaction without changing the connector's
             # existing session or issuing any status/update side effects.
