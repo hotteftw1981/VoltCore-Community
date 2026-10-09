@@ -144,12 +144,12 @@ Das Repository ist aktuell privat. Vor einer öffentlichen Freigabe werden Lizen
 
 VoltCore Community ist als **kostenlose VoltCore-Edition** geplant. 🆓💙
 
-Die öffentliche Softwarelizenz ist noch nicht festgelegt. **Ohne eine veröffentlichte Lizenz sind Kopieren, Verändern und Weiterverteilen des Quellcodes rechtlich nicht automatisch erlaubt.** Die Lizenzentscheidung muss vor dem Umschalten auf öffentlich erfolgen. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage. ⚖️
+**Geplante Veröffentlichungslizenz:** GNU AGPLv3 (`AGPL-3.0-only`). Die finale Freigabe hängt von der Rechteprüfung ab. **Ohne eine veröffentlichte Lizenz sind Kopieren, Verändern und Weiterverteilen des Quellcodes rechtlich nicht automatisch erlaubt.** Die Lizenzentscheidung muss vor dem Umschalten auf öffentlich erfolgen. Bis dahin ist dieses private Entwicklungs-Repository ausdrücklich noch keine endgültige Lizenzierungsaussage. ⚖️
 
 Das ist bewusst getrennt:
 
 - 🆓 **Community Edition: kostenlos**
-- 📜 **endgültige öffentliche Lizenz: noch festzulegen**
+- 📜 **geplante öffentliche Lizenz: AGPLv3; Rechteprüfung ausstehend**
 - 🔐 **Repository: bleibt privat, bis Community veröffentlichungsreif ist**
 
 ## 📚 Dokumentation

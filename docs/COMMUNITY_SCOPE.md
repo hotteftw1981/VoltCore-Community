@@ -47,7 +47,7 @@ Community defaults:
 
 - weekly working hours are **not** part of the Community user profile;
 - free charging credit / monthly charging budgets are **disabled by default**;
-- no DRK- or employer-specific assumptions;
+- no organization- or employer-specific assumptions;
 - optional features must be deliberately enabled during first-run setup or later in settings.
 
 ## Update model

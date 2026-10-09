@@ -13,6 +13,8 @@ ALLOW_ROOT_FILES = [
     ".dockerignore",
     ".env.example",
     "CHANGELOG.md",
+    "LICENSE",
+    "CONTRIBUTING.md",
     "Dockerfile",
     "README.md",
     "README.en.md",
