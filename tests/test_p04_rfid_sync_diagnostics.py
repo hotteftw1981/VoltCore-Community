@@ -45,7 +45,7 @@ class P04Diagnostics(unittest.TestCase):
     def test_matching_versions_with_confirmation(self):
         version = db.rfid_local_list_version()
         db.set_local_list_state("P04-SYNC", station_version=version, pending=False,
-                                supported=True, response="Accepted", synced=True)
+                                supported=True, status="Synchronisiert", response="Accepted", synced=True)
         state = self.state()
         self.assertEqual(state["sync_diagnostic"], "version_match")
         self.assertTrue(state["sync_verified"])
