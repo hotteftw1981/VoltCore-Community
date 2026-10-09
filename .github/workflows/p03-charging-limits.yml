@@ -28,3 +28,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p 'test_p03_charging_limits.py' -v
           python -m unittest discover -s tests -p 'test_p03_integrity_batch.py' -v
+          python -m unittest discover -s tests -p 'test_p03_api_permissions.py' -v
