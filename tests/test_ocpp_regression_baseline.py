@@ -92,7 +92,6 @@ class OcppRegressionBaseline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finished["status"], "Completed")
         self.assertAlmostEqual(float(finished["energy_kwh"]), 0.5)
 
-    @unittest.expectedFailure
     def test_known_defect_out_of_order_meter_must_not_reduce_energy(self):
         tx = self.begin()
         db.update_transaction_from_meter(tx, meter_kwh=11.0, measured_at="2026-10-09T08:20:00+00:00")
@@ -101,14 +100,12 @@ class OcppRegressionBaseline(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(float(row["energy_kwh"]), 1.0)
         self.assertEqual(row["last_meter_at"], "2026-10-09T08:20:00+00:00")
 
-    @unittest.expectedFailure
     def test_known_defect_late_meter_must_not_modify_finished_session(self):
         tx = self.begin()
         db.stop_transaction(tx, meter_stop_kwh=11.0, ended_at="2026-10-09T08:20:00+00:00")
         db.update_transaction_from_meter(tx, meter_kwh=12.0, measured_at="2026-10-09T08:21:00+00:00")
         self.assertAlmostEqual(float(db.get_transaction(tx)["energy_kwh"]), 1.0)
 
-    @unittest.expectedFailure
     def test_known_defect_duplicate_stop_must_preserve_first_end(self):
         tx = self.begin()
         db.stop_transaction(tx, meter_stop_kwh=11.0, ended_at="2026-10-09T08:20:00+00:00")

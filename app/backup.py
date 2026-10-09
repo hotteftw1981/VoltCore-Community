@@ -580,41 +580,73 @@ def validate_restore(path: Path):
 
 
 def restore_backup(path: Path):
+    """Stage files first and restore both the database and applied files on failure."""
     validate_restore(path)
-    # Safety copy is mandatory and remains local regardless of the configured target.
-    safety=create_backup(label="pre-restore", keep_local=True)
-    with tempfile.TemporaryDirectory(prefix="ocpp-restore-") as td:
-        stage=Path(td)
-        with zipfile.ZipFile(path,"r") as zf:
-            zf.extractall(stage)
-        source_db=stage/"database"/"ocpp.sqlite3"
-        src=sqlite3.connect(source_db)
+    safety = create_backup(label="pre-restore", keep_local=True)
+    root = db.DATA_DIR.resolve()
+    with tempfile.TemporaryDirectory(prefix=".voltcore-restore-", dir=root) as td:
+        stage = Path(td)
+        unpacked = stage / "unpacked"
+        with zipfile.ZipFile(path, "r") as archive:
+            archive.extractall(unpacked)
+        source_db = unpacked / "database" / "ocpp.sqlite3"
+        source = sqlite3.connect(source_db)
         try:
-            check=src.execute("PRAGMA integrity_check").fetchone()
-            if not check or str(check[0]).lower() != "ok":
-                raise ValueError("Datenbank im Backup ist beschädigt.")
-            with db._lock:
-                dest=sqlite3.connect(db.DB_PATH,timeout=30,check_same_thread=False)
-                try:
-                    src.backup(dest)
-                finally:
-                    dest.close()
+            result = source.execute("PRAGMA integrity_check").fetchone()
+            if not result or str(result[0]).lower() != "ok":
+                raise ValueError("Datenbank im Backup ist beschaedigt.")
         finally:
-            src.close()
-        # A backup may originate from an older application version. Re-run the
-        # idempotent schema initializer immediately so current code never operates
-        # on a restored legacy schema.
-        db.init_db()
-        data_stage=stage/"data"
-        if data_stage.exists():
-            # Only overwrite files present in the backup. Backup archives and the
-            # external target password are intentionally never restored.
-            for item in data_stage.rglob("*"):
-                if not item.is_file(): continue
-                rel=item.relative_to(data_stage)
-                target=db.DATA_DIR/rel
-                if BACKUP_DIR.resolve() in target.resolve().parents or target.resolve() in {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (db.DATA_DIR/".update_github_token").resolve()}:
-                    continue
-                target.parent.mkdir(parents=True,exist_ok=True)
-                shutil.copy2(item,target)
-    return {"ok":True,"safety_backup":safety}
+            source.close()
+        excluded = {CREDENTIAL_FILE.resolve(), SMTP_CREDENTIAL_FILE.resolve(), (root / '.update_github_token').resolve(), db.DB_PATH.resolve()}
+        plan = []
+        data_stage = unpacked / 'data'
+        for item in sorted(data_stage.rglob('*')) if data_stage.exists() else []:
+            if not item.is_file():
+                continue
+            relative = item.relative_to(data_stage)
+            target = root / relative
+            resolved = target.resolve()
+            if root not in resolved.parents:
+                raise ValueError('Restore target escapes the data directory.')
+            if resolved in excluded or resolved == BACKUP_DIR.resolve() or BACKUP_DIR.resolve() in resolved.parents or target.name in {'ocpp.sqlite3-wal', 'ocpp.sqlite3-shm'}:
+                continue
+            if target.is_symlink() or (target.exists() and not target.is_file()):
+                raise ValueError('Unsupported restore target.')
+            prepared = stage / ('new-' + str(len(plan)))
+            original = stage / ('old-' + str(len(plan))) if target.exists() else None
+            shutil.copy2(item, prepared)
+            if original is not None:
+                shutil.copy2(target, original)
+            plan.append((target, prepared, original))
+        rollback_db = stage / 'rollback.sqlite3'
+        applied = []
+        database_changed = False
+        def copy_database(source_path, target_path):
+            source = sqlite3.connect(source_path, timeout=30)
+            target = sqlite3.connect(target_path, timeout=30)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+                source.close()
+        try:
+            with db._lock:
+                copy_database(db.DB_PATH, rollback_db)
+                database_changed = True
+                copy_database(source_db, db.DB_PATH)
+                for target, prepared, original in plan:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(prepared, target)
+                    applied.append((target, original))
+            db.init_db()
+        except Exception:
+            with db._lock:
+                if database_changed:
+                    copy_database(rollback_db, db.DB_PATH)
+                for target, original in reversed(applied):
+                    if original is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        os.replace(original, target)
+            raise
+    return {"ok": True, "safety_backup": safety}

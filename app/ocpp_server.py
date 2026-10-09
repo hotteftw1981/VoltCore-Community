@@ -985,12 +985,15 @@ class ChargePoint(OcppChargePoint):
     async def on_stop_transaction(self, transaction_id, meter_stop, timestamp, reason=None, transaction_data=None, **kwargs):
         tx = int(transaction_id)
         tx_before=db.get_transaction(tx) or {}
+        if tx_before.get('charge_point_id') != self.id:
+            db.add_event(self.id, 'StopTransactionRejected', 'Transaction does not belong to this charge point')
+            return call_result.StopTransaction(id_tag_info={"status": "Invalid"})
         try:
             stop_meter_kwh = float(meter_stop) / 1000.0
         except (TypeError, ValueError):
             stop_meter_kwh = None
         db.stop_transaction(tx, meter_stop_kwh=stop_meter_kwh, status="Completed", stop_reason=reason, ended_at=timestamp)
-        db.upsert_charge_point(self.id, transaction_id=None, power_kw=0)
+        # stop_transaction preserves references to other active connectors.
         db.mark_message(self.id, "StopTransaction")
         db.add_event(self.id, "StopTransaction", f"transaction_id={transaction_id}; meter_stop={meter_stop}; reason={reason}", transaction_id=tx)
         attempts = getattr(self, "_budget_stop_attempts", None)
@@ -1024,8 +1027,17 @@ class ChargePoint(OcppChargePoint):
             connectors = db.connectors_for_charge_point(self.id)
             match = next((x for x in connectors if int(x.get("connector_id") or 0) == cid), None)
             tx = int(match["transaction_id"]) if match and match.get("transaction_id") else None
-        if tx is None and cp.get("transaction_id"):
-            tx = int(cp["transaction_id"])
+        reported_tx = kwargs.get("transaction_id")
+        if reported_tx is not None:
+            try:
+                candidate = db.get_transaction(int(reported_tx)) or {}
+            except (TypeError, ValueError):
+                candidate = {}
+            tx = int(candidate['id']) if (candidate.get('charge_point_id') == self.id and int(candidate.get('connector_id') or 0) == cid and cid > 0 and candidate.get('status') == 'Active' and candidate.get('ended_at') is None) else None
+        elif tx is not None:
+            candidate = db.get_transaction(tx) or {}
+            if candidate.get('charge_point_id') != self.id or int(candidate.get('connector_id') or 0) != cid or candidate.get('status') != 'Active' or candidate.get('ended_at') is not None:
+                tx = None
 
         parsed_entries = _meter_entries(meter_value)
         raw_json = json.dumps(meter_value, default=lambda o: asdict(o) if is_dataclass(o) else str(o), ensure_ascii=True)
@@ -1126,7 +1138,8 @@ async def on_connect(websocket, path):
     remote = _remote_text(getattr(websocket, "remote_address", None))
     subprotocol = getattr(websocket, "subprotocol", None) or "ocpp1.6"
     secure=transport_is_secure(websocket,getattr(websocket,"request_headers",None))
-    ACTIVE_CONNECTIONS[cp_id] = {"connected_at": connected_at, "remote": remote, "subprotocol": subprotocol, "transport":"WSS" if secure else "WS"}
+    connection_info = {"connected_at": connected_at, "remote": remote, "subprotocol": subprotocol, "transport":"WSS" if secure else "WS"}
+    ACTIVE_CONNECTIONS[cp_id] = connection_info
     existing = db.get_charge_point(cp_id)
     if existing and int(existing.get("onboarded", 1)) and not int(existing.get("ignored", 0)):
         db.upsert_charge_point(cp_id, status="Connected")
@@ -1135,7 +1148,7 @@ async def on_connect(websocket, path):
     db.mark_message(cp_id, "Connected")
     db.add_event(cp_id, "Connected")
     cp = ChargePoint(cp_id, websocket)
-    ACTIVE_CONNECTIONS[cp_id]["charge_point"] = cp
+    connection_info["charge_point"] = cp
     db.ensure_local_list_state(cp_id)
     log.info("Charge point connected: %s", cp_id)
     try:
@@ -1156,10 +1169,11 @@ async def on_connect(websocket, path):
     except Exception as exc:
         log.exception("OCPP connection %s ended: %s", cp_id, exc)
     finally:
-        ACTIVE_CONNECTIONS.pop(cp_id, None)
-        db.upsert_charge_point(cp_id, status="Offline", power_kw=0)
-        db.add_event(cp_id, "Disconnected")
-        log.info("Charge point disconnected: %s", cp_id)
+        if ACTIVE_CONNECTIONS.get(cp_id) is connection_info:
+            ACTIVE_CONNECTIONS.pop(cp_id, None)
+            db.upsert_charge_point(cp_id, status="Offline", power_kw=0)
+            db.add_event(cp_id, "Disconnected")
+            log.info("Charge point disconnected: %s", cp_id)
 
 
 async def serve_ocpp(host="0.0.0.0", port=9000):

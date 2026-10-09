@@ -23,7 +23,6 @@ class OcppEdgeRegression(unittest.IsolatedAsyncioTestCase):
         db.discover_connector(CP, 1)
         db.discover_connector(CP, 2)
 
-    @unittest.expectedFailure
     async def test_stale_connection_cleanup_cannot_remove_newer_connection(self):
         first_ws, next_ws = object(), object()
         gates = {first_ws: asyncio.Event(), next_ws: asyncio.Event()}
@@ -64,7 +63,6 @@ class OcppEdgeRegression(unittest.IsolatedAsyncioTestCase):
                 gates[next_ws].set()
                 await newer
 
-    @unittest.expectedFailure
     async def test_meter_values_on_idle_connector_cannot_use_other_connector_session(self):
         db.start_transaction(CP, connector_id=1, meter_start_kwh=10.0)
         cp = ocpp_server.ChargePoint(CP, None)
@@ -80,7 +78,6 @@ class OcppEdgeRegression(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(row)
         self.assertIsNone(row["transaction_id"])
 
-    @unittest.expectedFailure
     def test_same_rfid_single_session_default_not_enforced_yet(self):
         user_id = db.create_user("P01 Operator", gamification_enabled=False)
         db.create_rfid_card("P01-TEST-RFID", user_id=user_id)

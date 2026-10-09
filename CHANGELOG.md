@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.7.97 - Remaining charging and restore regression fixes
+
+- Preserve completed sessions on duplicate stop and late meter messages; reject out-of-order or regressing measurements.
+- Keep meter samples on their own connector/station; reject foreign-station stop requests.
+- Preserve replacement WebSocket connections when an obsolete connection disconnects.
+- Enforce RFID/user concurrency at authorization as well as atomic start admission.
+- Stage restore files before changes and restore both database and applied files after apply/migration failure.
+- Require all eight former expected-failure cases to pass normally; preserve the exact atomic rejection contract in the race test.
+- No Git history rewrite, old release deletion, build-run deletion, pull-request archival or repository visibility change.
+
 ## 0.9.7.96 - Complete remaining Community runtime cleanup
 
 - Delete 43 remaining personal-portal, achievement/XP, event, leaderboard and bonus helper functions and six obsolete constants.

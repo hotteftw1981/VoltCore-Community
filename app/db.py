@@ -1911,25 +1911,41 @@ def set_charging_session_limit(kind, item_id, limit):
 
 
 def update_transaction_from_meter(tx, meter_kwh=None, power_kw=None, measured_at=None):
+    """Accept only finite, non-regressing measurements for an active session."""
     with _lock, _connect() as conn:
-        row=conn.execute("SELECT meter_start_kwh,energy_kwh,max_power_kw FROM transactions WHERE id=?",(tx,)).fetchone()
-        if not row: return None
-        session_energy=None
-        start=row["meter_start_kwh"]
-        if meter_kwh is not None:
-            current=float(meter_kwh)
-            # Some stations may omit meterStart in StartTransaction. In that case
-            # the first MeterValues reading becomes the baseline, never the session energy.
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM transactions WHERE id=?", (tx,)).fetchone()
+        if not row:
+            return None
+        if row['status'] != 'Active' or row['ended_at'] is not None:
+            return row['energy_kwh']
+        previous_at = _parse_iso_utc(row['last_meter_at'])
+        incoming_at = _parse_iso_utc(measured_at)
+        if measured_at is not None and incoming_at is None:
+            return row['energy_kwh']
+        if previous_at and incoming_at and incoming_at < previous_at:
+            return row['energy_kwh']
+        try:
+            current = float(meter_kwh) if meter_kwh is not None else None
+            power = float(power_kw) if power_kw is not None else None
+        except (TypeError, ValueError):
+            return row['energy_kwh']
+        if any(value is not None and (not math.isfinite(value) or value < 0) for value in (current, power)):
+            return row['energy_kwh']
+        last = row['last_meter_kwh']
+        if current is not None and last is not None and current < float(last):
+            return row['energy_kwh']
+        start = row['meter_start_kwh']
+        energy = row['energy_kwh']
+        if current is not None:
             if start is None:
-                start=current
-                conn.execute("UPDATE transactions SET meter_start_kwh=? WHERE id=?", (start, tx))
-                session_energy=0.0
-            else:
-                session_energy=max(0.0,current-float(start))
-        peak=max(float(row["max_power_kw"] or 0), float(power_kw)) if power_kw is not None else float(row["max_power_kw"] or 0)
-        conn.execute("UPDATE transactions SET energy_kwh=COALESCE(?,energy_kwh), max_power_kw=?, last_meter_kwh=COALESCE(?,last_meter_kwh), last_meter_at=COALESCE(?,last_meter_at) WHERE id=?",(session_energy,peak,meter_kwh,measured_at,tx))
-        conn.execute("UPDATE connectors SET meter_current_kwh=COALESCE(?,meter_current_kwh) WHERE transaction_id=?",(meter_kwh,tx))
-        conn.commit(); return session_energy
+                start = current
+            energy = max(float(energy or 0), max(0.0, current - float(start)))
+        peak = max(float(row['max_power_kw'] or 0), power or 0)
+        conn.execute("UPDATE transactions SET meter_start_kwh=?,energy_kwh=?,max_power_kw=?,last_meter_kwh=COALESCE(?,last_meter_kwh),last_meter_at=COALESCE(?,last_meter_at) WHERE id=?", (start, energy, peak, current, measured_at, tx))
+        conn.execute("UPDATE connectors SET meter_current_kwh=COALESCE(?,meter_current_kwh) WHERE transaction_id=?", (current, tx))
+        conn.commit()
+        return energy
 
 def load_state_for_charge_point(cp_id):
     """Return a user-facing state without nesting the database lock."""
@@ -2190,9 +2206,12 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
     inventing data.
     """
     with _lock, _connect() as conn:
-        row=conn.execute("SELECT charge_point_id,connector_id,meter_start_kwh,last_meter_kwh,user_id FROM transactions WHERE id=?",(tx,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row=conn.execute("SELECT charge_point_id,connector_id,meter_start_kwh,last_meter_kwh,user_id,status,ended_at,energy_kwh FROM transactions WHERE id=?",(tx,)).fetchone()
         if not row:
             return None
+        if row[5] != "Active" or row[6] is not None:
+            return row[7]
         start = row[2]
         last = row[3]
         stop = meter_stop_kwh
@@ -2202,7 +2221,7 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
         except (TypeError, ValueError):
             stop=None
         # Ignore a backwards meterStop and prefer the latest valid meter reading.
-        if stop is None or (start is not None and stop < float(start)):
+        if stop is None or not math.isfinite(stop) or (start is not None and stop < float(start)) or (last is not None and stop < float(last)):
             try:
                 stop=float(last) if last is not None else None
             except (TypeError, ValueError):
@@ -2544,6 +2563,18 @@ def authorization_decision(rfid,charge_point_id=None):
     budget=user_monthly_budget(user.get("id")) if user.get("id") is not None else None
     if budget and budget.get("blocked"):
         return {"accepted":False,"ocpp_status":"Blocked","reason":"Monatliches kWh-Limit erreicht","user":user,"budget":budget}
+    with _lock, _connect() as conn:
+        card = conn.execute("SELECT id,max_concurrent_sessions FROM rfid_cards WHERE uid=? LIMIT 1", (rfid,)).fetchone()
+        card_limit = max(1, int(card[1] or 1)) if card else 1
+        if card:
+            count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND (rfid_card_id=? OR (rfid_card_id IS NULL AND id_tag=?))", (card[0], rfid)).fetchone()[0]
+        else:
+            count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND id_tag=?", (rfid,)).fetchone()[0]
+        user_limit = conn.execute("SELECT max_concurrent_sessions FROM users WHERE id=?", (user.get('id'),)).fetchone()
+        user_count = conn.execute("SELECT COUNT(*) FROM transactions WHERE status='Active' AND ended_at IS NULL AND user_id=?", (user.get('id'),)).fetchone()[0]
+        full = count >= card_limit or (user_limit and user_count >= max(1, int(user_limit[0] or 1)))
+    if full:
+        return {"accepted":False,"ocpp_status":"Blocked","reason":"Limit gleichzeitiger Ladevorgaenge erreicht","user":user,"budget":budget}
     reason="Autorisierung gültig"
     if budget and budget.get("status") in {"warning","critical","exceeded"}:
         reason=f"Autorisierung gültig; Monatslimit {budget.get('percent')} %"

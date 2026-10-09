@@ -79,7 +79,6 @@ class ParallelSessionTests(unittest.TestCase):
         self.assertAlmostEqual(float(db.get_transaction(first)["energy_kwh"]), 0.25)
         self.assertAlmostEqual(float(db.get_transaction(second)["energy_kwh"]), 1.50)
 
-    @unittest.expectedFailure
     def test_known_missing_atomic_same_rfid_limit_under_parallel_starts(self):
         uid = self.add_user_card("SHARED")
         gate = threading.Barrier(2, timeout=5)
@@ -87,14 +86,18 @@ class ParallelSessionTests(unittest.TestCase):
             gate.wait()
             permission = db.authorization_decision(uid, CP_ID)
             if permission.get("accepted"):
-                return db.start_transaction(CP_ID, connector_id=connector, id_tag=uid)
+                try:
+                    return db.start_transaction(CP_ID, connector_id=connector, id_tag=uid)
+                except ValueError as exc:
+                    if str(exc) not in {"RFID_CONCURRENT_SESSION_LIMIT", "USER_CONCURRENT_SESSION_LIMIT"}:
+                        raise
             return None
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             a = pool.submit(authorize_and_start, 1)
             b = pool.submit(authorize_and_start, 2)
             a.result(timeout=10)
             b.result(timeout=10)
-        self.assertLessEqual(len(self.active_sessions()), 1)
+        self.assertEqual(len(self.active_sessions()), 1)
 
     def test_second_connector_remains_active_when_first_stops(self):
         one = db.start_transaction(CP_ID, connector_id=1, meter_start_kwh=10)

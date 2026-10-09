@@ -112,7 +112,6 @@ class BackupRestoreTests(unittest.TestCase):
         self.assertEqual(db.get_setting("p01_restore_marker", ""), "saved")
         self.assertEqual(attachment.read_text(encoding="utf-8"), "saved media")
 
-    @unittest.expectedFailure
     def test_known_defect_failed_media_copy_must_rollback_database(self):
         db.set_setting("p01_restore_marker", "archived")
         attachment = self.write_data("media/p01-rollback.txt", "archived media")
