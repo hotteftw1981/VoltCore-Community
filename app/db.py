@@ -5319,6 +5319,55 @@ def billing_groups_for_user(user_id):
     with _lock, _connect() as conn:
         return [dict(r) for r in conn.execute("SELECT g.* FROM billing_groups g JOIN user_billing_groups x ON x.group_id=g.id WHERE x.user_id=?",(user_id,)).fetchall()]
 
+def ocpp_connector_integrity(cp_id, now=None):
+    """Read-only connector and session consistency report; never change active charging."""
+    now = now or datetime.now(timezone.utc)
+    with _lock, _connect() as conn:
+        cp = conn.execute("SELECT id,last_message_at,last_seen,status FROM charge_points WHERE id=?", (str(cp_id),)).fetchone()
+        if cp is None:
+            return None
+        rows = conn.execute(
+            "SELECT connector_id,status,last_error_code,transaction_id FROM connectors WHERE charge_point_id=? ORDER BY connector_id",
+            (str(cp_id),),
+        ).fetchall()
+        sessions = conn.execute(
+            "SELECT id,connector_id,started_at,id_tag FROM transactions WHERE charge_point_id=? AND status='Active' AND ended_at IS NULL ORDER BY id",
+            (str(cp_id),),
+        ).fetchall()
+    grouped = {}
+    for tx in sessions:
+        grouped.setdefault(int(tx["connector_id"]), []).append(dict(tx))
+    findings = []
+    connectors = []
+    for row in rows:
+        cid = int(row["connector_id"])
+        active = grouped.pop(cid, [])
+        status = str(row["status"] or "Unknown")
+        error = str(row["last_error_code"] or "")
+        codes = []
+        if len(active) > 1:
+            codes.append("duplicate_active_sessions")
+        if row["transaction_id"] is not None and not any(int(x["id"]) == int(row["transaction_id"]) for x in active):
+            codes.append("stale_connector_transaction_reference")
+        if status == "Faulted" or (error and error not in ("NoError", "None")):
+            codes.append("connector_fault")
+        # Charging may be reported before StartTransaction; do not auto-stop or fabricate a transaction.
+        if status in ("Charging", "SuspendedEV", "SuspendedEVSE") and not active:
+            codes.append("charging_without_backend_session")
+        if status == "Available" and active:
+            codes.append("available_with_active_session")
+        for code in codes:
+            findings.append({"code":code,"connector_id":cid,"severity":"critical" if code in ("duplicate_active_sessions","connector_fault") else "warning"})
+        connectors.append({"connector_id":cid,"status":status,"active_transaction_ids":[int(x["id"]) for x in active],"findings":codes})
+    for cid, active in grouped.items():
+        findings.append({"code":"session_without_connector_record","connector_id":cid,"severity":"warning"})
+    stamp = _parse_iso_utc(cp["last_message_at"] or cp["last_seen"])
+    age = max(0, int((now-stamp).total_seconds())) if stamp else None
+    return {"charge_point_id":str(cp_id),"last_message_age_seconds":age,"last_message_known":stamp is not None,
+            "connectors":connectors,"active_sessions":len(sessions),"findings":findings,
+            "level":"critical" if any(f["severity"]=="critical" for f in findings) else "warning" if findings else "ok"}
+
+
 def diagnostic_summary(cp_id):
     caps=meter_capabilities_for_charge_point(cp_id)
     with _lock, _connect() as conn:
