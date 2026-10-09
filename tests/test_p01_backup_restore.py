@@ -126,7 +126,6 @@ class BackupRestoreTests(unittest.TestCase):
         self.assertEqual(db.get_setting("p01_restore_marker", ""), "current")
         self.assertEqual(attachment.read_text(encoding="utf-8"), "current media")
 
-    @unittest.expectedFailure
     def test_known_community_import_sources_must_not_enter_backups(self):
         if not backup.BACKUP_PREFIX.startswith("voltcore-community-"):
             self.skipTest("Pro already excludes transient import files")
