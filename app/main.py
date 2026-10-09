@@ -2842,6 +2842,49 @@ async def create_rfid(payload: RFIDPayload):
     _schedule_local_list_sync("RFID-Karte angelegt")
     return {"ok":True,"card":db.get_rfid_card(cid)}
 
+class ChargingSessionLimitPayload(BaseModel):
+    limit: int
+
+def _p03_require_admin(request: Request):
+    if (getattr(request.state, "auth_user", None) or {}).get("role") != "admin":
+        raise HTTPException(403, "Administratorberechtigung erforderlich")
+
+@app.get("/api/users/{user_id}/charging-limit")
+async def api_p03_user_charging_limit(user_id: int):
+    snapshot = db.charging_session_limit_snapshot("user", user_id)
+    if snapshot is None:
+        raise HTTPException(404, "Benutzer nicht gefunden")
+    return snapshot
+
+@app.put("/api/users/{user_id}/charging-limit")
+async def api_p03_set_user_charging_limit(request: Request, user_id: int, payload: ChargingSessionLimitPayload):
+    _p03_require_admin(request)
+    try:
+        updated = db.set_charging_session_limit("user", user_id, payload.limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not updated:
+        raise HTTPException(404, "Benutzer nicht gefunden")
+    return {"ok": True, **db.charging_session_limit_snapshot("user", user_id)}
+
+@app.get("/api/rfid/{card_id}/charging-limit")
+async def api_p03_rfid_charging_limit(card_id: int):
+    snapshot = db.charging_session_limit_snapshot("rfid", card_id)
+    if snapshot is None:
+        raise HTTPException(404, "RFID nicht gefunden")
+    return snapshot
+
+@app.put("/api/rfid/{card_id}/charging-limit")
+async def api_p03_set_rfid_charging_limit(request: Request, card_id: int, payload: ChargingSessionLimitPayload):
+    _p03_require_admin(request)
+    try:
+        updated = db.set_charging_session_limit("rfid", card_id, payload.limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if not updated:
+        raise HTTPException(404, "RFID nicht gefunden")
+    return {"ok": True, **db.charging_session_limit_snapshot("rfid", card_id)}
+
 @app.get("/api/rfid/{card_id}/detail")
 async def api_rfid_detail(card_id:int):
     detail=db.rfid_card_detail(card_id)
