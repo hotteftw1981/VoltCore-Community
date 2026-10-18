@@ -1,13 +1,12 @@
 name: Community QA
 
+# Hosted GitHub Actions abgeschaltet; KrawallWerk Forgejo ist einziger Runner.
 on:
-  push:
-    branches:
-      - refactor/community-full-runtime-base
   workflow_dispatch:
 
 jobs:
   smoke:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
