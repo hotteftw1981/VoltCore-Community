@@ -1,24 +1,8 @@
 name: Community CI
 
+# GitHub Actions/Runner außer Betrieb; ausschließlich privater KrawallWerk-Forgejo-Runner.
+# Sichtbar als manuell deaktivierter Platzhalter, alle Jobs hart gesperrt.
 on:
-  push:
-    branches: [main, develop]
-    paths:
-      - 'app/**'
-      - 'tests/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
-      - 'docker-compose*.yml'
-      - '.env.example'
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - 'app/**'
-      - 'tests/**'
-      - 'requirements.txt'
-      - 'Dockerfile'
-      - 'docker-compose*.yml'
-      - '.env.example'
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +11,7 @@ concurrency:
 
 jobs:
   test:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
