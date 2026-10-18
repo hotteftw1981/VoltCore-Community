@@ -1,23 +1,16 @@
 name: Community Release
 
+# GitHub Actions/Runner außer Betrieb; ausschließlich privater KrawallWerk-Forgejo-Runner.
+# Sichtbar als manuell deaktivierter Platzhalter, alle Jobs hart gesperrt.
 on:
-  workflow_run:
-    workflows: ["Community CI"]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Optionaler Release-Tag, z. B. v0.9.7.75. Leer = APP_VERSION."
-        required: false
-        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
