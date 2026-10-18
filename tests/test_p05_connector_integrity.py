@@ -36,10 +36,14 @@ class P05ConnectorIntegrity(unittest.TestCase):
         self.assertEqual(db.get_transaction(tx)["status"],"Active")
         self.assertEqual(db.get_transaction(tx)["started_at"],before["started_at"])
 
-    def test_available_with_active_session_is_warning(self):
+    def test_unverified_available_does_not_clobber_active_session(self):
         tx=db.start_transaction("P05",connector_id=1)
-        db.set_status_notification("P05",1,"Available")
-        self.assertIn("available_with_active_session",[x["code"] for x in self.report()["findings"]])
+        accepted=db.set_status_notification("P05",1,"Available")
+        self.assertFalse(accepted)
+        connector=db.connectors_for_charge_point("P05")[0]
+        self.assertEqual(connector["status"],"Charging")
+        self.assertEqual(connector["transaction_id"],tx)
+        self.assertNotIn("available_with_active_session",[x["code"] for x in self.report()["findings"]])
         self.assertEqual(db.get_transaction(tx)["status"],"Active")
 
     def test_status_without_start_is_warning(self):

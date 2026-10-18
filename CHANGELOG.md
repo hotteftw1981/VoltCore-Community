@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.7.98 – R2 OCPP-Sessionsicherheit und verzögerte Meldungen (Release Candidate)
+
+- Wiederverbindungen mit fehlerhaften oder verspäteten OCPP-Zeitstempeln beenden laufende Sessions nicht unbegründet.
+- Bestätigte StopTransaction neutralisiert nur den zugeordneten Connector; parallele Ladungen bleiben erhalten.
+- Nachträgliche Messwerte und Stoppwiederholungen verändern abgeschlossene Sessions nicht, bleiben aber als Rohereignisse prüfbar.
+- Rückwärts laufende Energiewerte, ungültige Zeitstempel und Replay-Meldungen werden durch SQLite- und OCPP-Guards geschützt.
+- Eigener KrawallWerk-Runner prüft P01–P11, Gesamtaudit, Versionsstand und Release-ZIP; noch kein produktives Deployment.
+
+
 ## 0.9.7.97 - Remaining charging and restore regression fixes
 
 - Preserve completed sessions on duplicate stop and late meter messages; reject out-of-order or regressing measurements.

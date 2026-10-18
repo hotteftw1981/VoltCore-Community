@@ -1,0 +1,50 @@
+name: VoltCore Community R2 delayed OCPP MeterValues parity
+on: workflow_dispatch
+jobs:
+  telemetry-regressions:
+    runs-on: kw-smoke
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test disconnected, replayed and out-of-order MeterValues
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          STAGE="bootstrap"
+          LOG=/tmp/voltcore-community-reconnect-qa.log
+          exec > >(tee -a "$LOG") 2>&1
+          report_failure() {
+            code=$?
+            trap - ERR
+            set +e
+            echo "COMMUNITY_R2_FAILED stage=$STAGE rc=$code"
+            python3 - "$STAGE" "$code" "$LOG" <<'DIAG'
+          import json,sys,re
+          from pathlib import Path
+          stage,code,file=sys.argv[1:]
+          raw=Path(file).read_text(encoding='utf-8',errors='replace')[-6000:]
+          raw=re.sub(r'(?i)(authorization:|token=|password=)[^\s]+',r'\1[REDACTED]',raw)
+          body="Community R2 reconnection QA failed: "+stage+" rc="+code+"\n\n```text\n"+raw+"\n```"
+          Path("/tmp/voltcore-community-qa-result.json").write_text(json.dumps({"body":body}))
+          DIAG
+            if [ -n "${FORGEJO_TOKEN:-}" ]; then
+              curl --silent --show-error --fail --max-time 10 -H "Authorization: token $FORGEJO_TOKEN" -H "Content-Type: application/json" --data-binary @/tmp/voltcore-community-qa-result.json https://git.krawallwerk.com/api/v1/repos/KrawallWerk/KrawallWerk-VoltCore-Community/issues/1/comments -o /dev/null || true
+            fi
+            exit "$code"
+          }
+          trap report_failure ERR
+          STAGE="compile"
+          python3 -m compileall -q app tests/test_r2_late_meter_telemetry.py
+          curl --fail --silent --show-error -L --retry 2 https://bootstrap.pypa.io/pip/pip.pyz -o .ci-pip.pyz
+          STAGE="dependencies"
+          python3 .ci-pip.pyz install --disable-pip-version-check --no-input --target .ci-libs -r requirements.txt -r tests/requirements.txt -q
+          export PYTHONPATH="$PWD/.ci-libs"
+          STAGE="meter"
+          python3 -m unittest discover -s tests -p test_r2_late_meter_telemetry.py -v
+          STAGE="reconnect"
+          python3 -m unittest discover -s tests -p test_r2_reconnect_status.py -v
+          STAGE="p01"
+          python3 -m unittest discover -s tests -p test_p01_ocpp_edges.py -v
+          STAGE="p03"
+          python3 -m unittest discover -s tests -p test_p03_charging_limits.py -v
+          echo "VOLTCORE_COMMUNITY_R2_LATE_METER_PARITY_OK"

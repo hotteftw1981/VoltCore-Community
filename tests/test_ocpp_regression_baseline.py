@@ -9,6 +9,7 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, patch
 
 from app import db, ocpp_server
@@ -47,6 +48,33 @@ class OcppRegressionBaseline(unittest.IsolatedAsyncioTestCase):
             CP_ID, connector_id=connector_id, id_tag=uid,
             meter_start_kwh=meter_start,
         )
+
+    def begin_at(self, start_at=STAMP, connector_id=1, *, meter_start=10.0, uid=None):
+        """Synthetic historical OCPP fixture with physically possible event ordering.
+
+        Normal production starts use the actual server clock; this isolated
+        test explicitly exercises dated historical Start/Stop packets.
+        """
+        tx = self.begin(connector_id, meter_start=meter_start, uid=uid)
+        with db._lock, db._connect() as conn:
+            conn.execute("UPDATE transactions SET started_at=? WHERE id=?", (start_at, tx))
+            conn.commit()
+        return tx
+
+    def test_start_before_connector_discovery_remains_linked_and_occupancy_safe(self):
+        cp="SIM-START-FIRST"
+        db.upsert_charge_point(cp,status="Available",connector_count=1)
+        self.assertEqual(db.connectors_for_charge_point(cp),[])
+        tx=db.start_transaction(cp,connector_id=1,meter_start_kwh=10.0)
+        connector=next(x for x in db.connectors_for_charge_point(cp) if x["connector_id"]==1)
+        self.assertEqual(connector["transaction_id"],tx)
+        db.set_status_notification(cp,1,"Finishing",error_code="NoError")
+        ended=datetime.now(timezone.utc)
+        db.stop_transaction(tx,meter_stop_kwh=11.0,ended_at=ended.isoformat())
+        occupied=db.transaction_post_session_occupancy(tx,now=ended+timedelta(minutes=3))
+        self.assertTrue(occupied["tracked"],occupied)
+        self.assertTrue(occupied["active"],occupied)
+        self.assertAlmostEqual(occupied["seconds"],180.0,delta=1.0)
 
     def test_known_rfid_is_accepted(self):
         uid = self.new_card("ALLOWED")
@@ -93,7 +121,7 @@ class OcppRegressionBaseline(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(float(finished["energy_kwh"]), 0.5)
 
     def test_known_defect_out_of_order_meter_must_not_reduce_energy(self):
-        tx = self.begin()
+        tx = self.begin_at()
         db.update_transaction_from_meter(tx, meter_kwh=11.0, measured_at="2026-10-09T08:20:00+00:00")
         db.update_transaction_from_meter(tx, meter_kwh=10.5, measured_at="2026-10-09T08:10:00+00:00")
         row = db.get_transaction(tx)
@@ -101,13 +129,13 @@ class OcppRegressionBaseline(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["last_meter_at"], "2026-10-09T08:20:00+00:00")
 
     def test_known_defect_late_meter_must_not_modify_finished_session(self):
-        tx = self.begin()
+        tx = self.begin_at()
         db.stop_transaction(tx, meter_stop_kwh=11.0, ended_at="2026-10-09T08:20:00+00:00")
         db.update_transaction_from_meter(tx, meter_kwh=12.0, measured_at="2026-10-09T08:21:00+00:00")
         self.assertAlmostEqual(float(db.get_transaction(tx)["energy_kwh"]), 1.0)
 
     def test_known_defect_duplicate_stop_must_preserve_first_end(self):
-        tx = self.begin()
+        tx = self.begin_at()
         db.stop_transaction(tx, meter_stop_kwh=11.0, ended_at="2026-10-09T08:20:00+00:00")
         db.stop_transaction(tx, meter_stop_kwh=12.0, ended_at="2026-10-09T08:25:00+00:00")
         row = db.get_transaction(tx)

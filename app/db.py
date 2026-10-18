@@ -1294,13 +1294,34 @@ def _overall_status_from_rows(station_status, connector_rows):
     return station_status or (statuses[0] if statuses else "Unknown")
 
 
-def set_status_notification(cp_id, connector_id, status, error_code=None):
+def set_status_notification(cp_id, connector_id, status, error_code=None, observed_at=None, verify_live=False):
     cid = int(connector_id or 0)
     status_text = str(status or "Unknown")
     now = utc_now()
     with _lock, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not conn.execute("SELECT id FROM charge_points WHERE id=?", (cp_id,)).fetchone():
             return False
+        if cid > 0 and status_text == "Available":
+            if _available_quarantine_reason_conn(conn,cp_id,cid,observed_at):
+                return False
+        if cid > 0 and verify_live and status_text in ("Charging","SuspendedEV","SuspendedEVSE"):
+            # Require evidence from this exact active connector before a
+            # replayed OCPP status can change the live charger display.
+            live=conn.execute(
+                """SELECT t.started_at FROM connectors c JOIN transactions t
+                   ON t.id=c.transaction_id
+                   WHERE c.charge_point_id=? AND c.connector_id=?
+                     AND t.charge_point_id=? AND t.connector_id=?
+                     AND t.status='Active' AND t.ended_at IS NULL LIMIT 1""",
+                (cp_id,cid,cp_id,cid),
+            ).fetchone()
+            when=_parse_iso_utc(observed_at)
+            start=_parse_iso_utc(live["started_at"]) if live else None
+            now=datetime.now(timezone.utc)
+            if (not live or when is None or start is None or
+                    when < start or when > now+timedelta(minutes=2)):
+                return False
         if cid > 0:
             conn.execute("""UPDATE connectors SET status=?, last_error_code=?
                             WHERE charge_point_id=? AND connector_id=?""", (status_text, error_code, cp_id, cid))
@@ -1391,9 +1412,11 @@ def refresh_charge_point_telemetry(cp_id):
         conn.commit()
 
 
-def add_meter_sample(cp_id, connector_id=None, raw_json=None, values_json=None, sampled_at=None, **fields):
+def add_meter_sample(cp_id, connector_id=None, raw_json=None, values_json=None, sampled_at=None, apply_live=True, **fields):
+    """Archive all OCPP packets, update live telemetry only when still current."""
     received_at = utc_now()
     with _lock, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """INSERT INTO meter_samples(
                 ts,sampled_at,charge_point_id,connector_id,transaction_id,power_kw,power_offered_kw,energy_kwh,power_source,power_calculated_at,
@@ -1407,7 +1430,21 @@ def add_meter_sample(cp_id, connector_id=None, raw_json=None, values_json=None, 
              fields.get("current_offered_a"), fields.get("current_offered_l1"), fields.get("current_offered_l2"), fields.get("current_offered_l3"), fields.get("frequency_hz"), fields.get("temperature_c"), fields.get("temperature_location"),
              fields.get("power_factor"), fields.get("soc_percent"), raw_json, values_json),
         )
-        if connector_id and int(connector_id) > 0:
+        if connector_id and int(connector_id) > 0 and apply_live:
+            cid=int(connector_id)
+            current=conn.execute("SELECT transaction_id,last_meter_at FROM connectors WHERE charge_point_id=? AND connector_id=?",(cp_id,cid)).fetchone()
+            observed=_parse_iso_utc(sampled_at or received_at)
+            previous=_parse_iso_utc(current["last_meter_at"]) if current else None
+            now=_parse_iso_utc(received_at)
+            timely=bool(observed is not None and now is not None
+                and observed <= now + timedelta(minutes=2)
+                and (previous is None or observed >= previous))
+            supplied_tx=fields.get("transaction_id")
+            owned=bool(current and (supplied_tx is None or
+                (current["transaction_id"] is not None and
+                 int(current["transaction_id"]) == int(supplied_tx))))
+            apply_live=timely and owned
+        if connector_id and int(connector_id) > 0 and apply_live:
             conn.execute("""UPDATE connectors SET power_kw=?, power_offered_kw=COALESCE(?,power_offered_kw), energy_kwh=COALESCE(?,energy_kwh),
                 power_source=?, power_calculated_at=?, voltage_v=COALESCE(?,voltage_v),
                 voltage_l1=COALESCE(?,voltage_l1), voltage_l2=COALESCE(?,voltage_l2), voltage_l3=COALESCE(?,voltage_l3),
@@ -1740,6 +1777,8 @@ def _reconcile_active_transactions_for_connector_conn(conn, cp_id, connector_id,
         if keep_tx_id is not None and tx_id == int(keep_tx_id):
             continue
         row_start = _parse_iso_utc(row["started_at"])
+        if reason == "ConnectorAvailable" and ended_at is not None and row_start is not None and end_dt < row_start:
+            continue
         row_end_dt = end_dt if row_start is None or end_dt >= row_start else row_start
         row_end_ts = row_end_dt.isoformat()
         cur = conn.execute(
@@ -1778,8 +1817,40 @@ def _reconcile_active_transactions_for_connector_conn(conn, cp_id, connector_id,
     return closed
 
 
+def _available_quarantine_reason_conn(conn, cp_id, connector_id, observed_at):
+    """An untrusted Available may not interrupt an active charging session."""
+    row=conn.execute(
+        "SELECT started_at FROM transactions WHERE charge_point_id=? AND connector_id=? AND status='Active' AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
+        (cp_id,int(connector_id)),
+    ).fetchone()
+    if not row:
+        return None
+    if observed_at in (None,""):
+        return "timestamp_missing"
+    observed=_parse_iso_utc(observed_at)
+    if observed is None:
+        return "timestamp_invalid"
+    started=_parse_iso_utc(row["started_at"])
+    if started is None:
+        return "active_start_unknown"
+    if observed < started:
+        return "older_than_active_session"
+    if observed > datetime.now(timezone.utc)+timedelta(minutes=2):
+        return "timestamp_future"
+    return None
+
+
+def available_notification_quarantine_reason(cp_id, connector_id, observed_at):
+    """Read check duplicated under the DB transaction on write."""
+    with _lock, _connect() as conn:
+        return _available_quarantine_reason_conn(conn,cp_id,connector_id,observed_at)
+
+
 def reconcile_active_transactions_for_connector(cp_id, connector_id, ended_at=None, reason="ConnectorAvailable"):
     with _lock, _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if reason == "ConnectorAvailable" and _available_quarantine_reason_conn(conn,cp_id,connector_id,ended_at):
+            return []
         closed = _reconcile_active_transactions_for_connector_conn(
             conn, cp_id, connector_id, ended_at=ended_at, reason=reason
         )
@@ -1827,7 +1898,7 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
         if vehicle_id is None and user_id is not None:
             row=conn.execute("SELECT vehicle_id FROM user_vehicles WHERE user_id=? ORDER BY primary_vehicle DESC, assigned_at ASC LIMIT 1",(user_id,)).fetchone()
             vehicle_id=row[0] if row else None
-        policy=conn.execute("SELECT stand_grace_seconds,auto_stop_zero_minutes FROM charge_points WHERE id=?",(cp_id,)).fetchone()
+        policy=conn.execute("SELECT stand_grace_seconds,auto_stop_zero_minutes,connector_type,max_power_kw FROM charge_points WHERE id=?",(cp_id,)).fetchone()
         grace=STANDTIME_GRACE_SECONDS if not policy or policy[0] is None else max(0,int(policy[0]))
         auto_stop=0 if not policy or policy[1] is None else max(0,int(policy[1]))
         started_at=utc_now()
@@ -1864,6 +1935,19 @@ def start_transaction(cp_id, id_tag=None, connector_id=1, ocpp_transaction_id=No
              vehicle_id,user_id,rfid_card_id,started_at,"Active",meter_start_kwh,meter_start_kwh,grace,auto_stop))
         tx=cur.lastrowid
         _apply_tariff_to_tx_conn(conn, tx, user_id, cp_id, started_at)
+        # StartTransaction can arrive before the first connector StatusNotification.
+        # Keep admission/connector linkage atomic even for newly discovered sockets.
+        if int(connector_id) > 0:
+            conn.execute("""INSERT OR IGNORE INTO connectors
+                (charge_point_id,connector_id,connector_type,max_power_kw,status)
+                VALUES(?,?,?,?,?)""",
+                (cp_id,int(connector_id),
+                 (policy["connector_type"] if policy else None) or "Type 2",
+                 float(policy["max_power_kw"]) if policy and policy["max_power_kw"] is not None else 22.0,
+                 "Preparing"))
+            conn.execute("""UPDATE charge_points
+                SET connector_count=MAX(COALESCE(connector_count,1),?)
+                WHERE id=?""",(int(connector_id),cp_id))
         conn.execute("UPDATE charge_points SET transaction_id=? WHERE id=?",(tx,cp_id))
         conn.execute("UPDATE connectors SET transaction_id=?,status='Charging',meter_start_kwh=?,meter_current_kwh=? WHERE charge_point_id=? AND connector_id=?",
                      (tx,meter_start_kwh,meter_start_kwh,cp_id,int(connector_id)))
@@ -1922,6 +2006,8 @@ def update_transaction_from_meter(tx, meter_kwh=None, power_kw=None, measured_at
         previous_at = _parse_iso_utc(row['last_meter_at'])
         incoming_at = _parse_iso_utc(measured_at)
         if measured_at is not None and incoming_at is None:
+            return row['energy_kwh']
+        if incoming_at and incoming_at > datetime.now(timezone.utc) + timedelta(minutes=2):
             return row['energy_kwh']
         if previous_at and incoming_at and incoming_at < previous_at:
             return row['energy_kwh']
@@ -2207,7 +2293,7 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
     """
     with _lock, _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        row=conn.execute("SELECT charge_point_id,connector_id,meter_start_kwh,last_meter_kwh,user_id,status,ended_at,energy_kwh FROM transactions WHERE id=?",(tx,)).fetchone()
+        row=conn.execute("SELECT charge_point_id,connector_id,meter_start_kwh,last_meter_kwh,user_id,status,ended_at,energy_kwh,started_at FROM transactions WHERE id=?",(tx,)).fetchone()
         if not row:
             return None
         if row[5] != "Active" or row[6] is not None:
@@ -2229,26 +2315,46 @@ def stop_transaction(tx, energy_kwh=None, meter_stop_kwh=None, status="Completed
         session_energy=energy_kwh
         if session_energy is None and stop is not None and start is not None:
             session_energy=max(0.0,float(stop)-float(start))
-        end_ts=ended_at or utc_now()
+        # Trust the stop event, not an unbounded or malformed charger clock.
+        received=datetime.now(timezone.utc)
+        observed=_parse_iso_utc(ended_at)
+        started=_parse_iso_utc(row["started_at"])
+        if observed is None or observed > received+timedelta(minutes=2) or (started is not None and observed < started):
+            observed=received
+        end_ts=observed.isoformat()
         conn.execute("UPDATE transactions SET ended_at=?, energy_kwh=COALESCE(?,energy_kwh), meter_stop_kwh=COALESCE(?,meter_stop_kwh), last_meter_kwh=COALESCE(?,last_meter_kwh), status=?, stop_reason=COALESCE(?,stop_reason) WHERE id=?",(end_ts,session_energy,stop,stop,status,stop_reason,tx))
         _update_tx_cost_conn(conn, tx)
         timing=_transaction_time_breakdown_conn(conn, tx, now=_parse_iso_utc(end_ts) or datetime.now(timezone.utc))
         if timing:
             conn.execute("UPDATE transactions SET charging_seconds=?, stand_seconds=?, connection_seconds=? WHERE id=?", (timing["charging_seconds"],timing["stand_seconds"],timing["connection_seconds"],tx))
         conn.execute("UPDATE charge_points SET transaction_id=NULL, power_kw=0 WHERE transaction_id=?",(tx,))
-        connector_row=conn.execute("SELECT status FROM connectors WHERE charge_point_id=? AND connector_id=?",(row[0],int(row[1] or 0))).fetchone()
-        connector_status=str(connector_row[0] or "") if connector_row else ""
-        conn.execute("UPDATE connectors SET transaction_id=NULL, power_kw=0, meter_start_kwh=NULL, meter_current_kwh=COALESCE(?,meter_current_kwh) WHERE charge_point_id=? AND connector_id=?",(stop,row[0],int(row[1] or 0)))
-        if connector_status == "Finishing":
+        connector_row=conn.execute("SELECT status,transaction_id FROM connectors WHERE charge_point_id=? AND connector_id=?",(row[0],int(row[1] or 0))).fetchone()
+        connector_status=str(connector_row["status"] or "") if connector_row else ""
+        connector_owned=bool(connector_row and connector_row["transaction_id"] is not None
+            and int(connector_row["transaction_id"]) == int(tx))
+        # A legacy duplicate Active transaction may still exist in old data.
+        # Its late StopTransaction must not clear the newer connector owner.
+        conn.execute("""UPDATE connectors SET transaction_id=NULL, power_kw=0,
+            meter_start_kwh=NULL, meter_current_kwh=COALESCE(?,meter_current_kwh)
+            WHERE charge_point_id=? AND connector_id=? AND transaction_id=?""",
+            (stop,row[0],int(row[1] or 0),tx))
+        if connector_owned and connector_status == "Finishing":
             conn.execute("""UPDATE transactions
                 SET post_session_occupied_started_at=COALESCE(post_session_occupied_started_at,?)
                 WHERE id=? AND unplugged_at IS NULL""",(end_ts,int(tx)))
         active=conn.execute("SELECT id FROM transactions WHERE charge_point_id=? AND status='Active' AND ended_at IS NULL ORDER BY id DESC LIMIT 1",(row[0],)).fetchone()
         conn.execute("UPDATE charge_points SET transaction_id=? WHERE id=?",(active[0] if active else None,row[0]))
-        if active is None:
+        if connector_owned and connector_status in ("Charging","SuspendedEV","SuspendedEVSE"):
+            # Stop evidence clears the charging state on this socket even if
+            # another socket is actively charging. Finishing must be reported
+            # by the hardware and must not be inferred from a stop packet.
             station=conn.execute("SELECT station_status FROM charge_points WHERE id=?",(row[0],)).fetchone()
-            if station and str(station[0] or "") == "Available":
-                conn.execute("UPDATE connectors SET status='Available' WHERE charge_point_id=? AND connector_id=? AND status IN ('Charging','Finishing','SuspendedEV','SuspendedEVSE')",(row[0],int(row[1] or 0)))
+            safe_status="Available" if station and str(station[0] or "") == "Available" else "Unknown"
+            conn.execute(
+                """UPDATE connectors SET status=? WHERE charge_point_id=? AND connector_id=?
+                   AND transaction_id IS NULL AND status IN ('Charging','SuspendedEV','SuspendedEVSE')""",
+                (safe_status,row[0],int(row[1] or 0)),
+            )
         connector_rows=conn.execute("SELECT connector_id,status FROM connectors WHERE charge_point_id=?",(row[0],)).fetchall()
         station=conn.execute("SELECT station_status FROM charge_points WHERE id=?",(row[0],)).fetchone()
         overall=_overall_status_from_rows(station[0] if station else None, connector_rows)

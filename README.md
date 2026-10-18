@@ -30,7 +30,15 @@ Die Idee ist simpel: Menschen, Vereine, Organisationen, kleine Fuhrparks, Testum
 
 Community soll nicht absichtlich nervig oder unbrauchbar gemacht werden. Die Abgrenzung zu späteren VoltCore-Editionen erfolgt über weiterführende Produktfunktionen, Analytics, Integrationen und Enterprise-Funktionen — **nicht** dadurch, dass die Grundlagen künstlich beschnitten werden. 🧠✨
 
-> 🚧 **Status:** Release Candidate **0.9.7.97** ist verfügbar. Selbsthosting und Tests sind möglich; vor produktivem Betrieb Sicherheit, HTTPS/WSS, Backups und Ladepunkt-Kompatibilität selbst prüfen.
+> 🚧 **Status:** Release Candidate **0.9.7.98** befindet sich in der finalen Prüfung (**noch nicht veröffentlicht**). Der letzte verfügbare Stand ist **0.9.7.97**. Selbsthosting und Tests sind möglich; vor produktivem Betrieb Sicherheit, HTTPS/WSS, Backups und Ladepunkt-Kompatibilität selbst prüfen.
+
+## ⚡ OCPP-Zeitstempel und Wiederverbindung (Deep-Dive-Entwurf)
+
+**Status nach Ladeende (R2):** Nach bestätigter `StopTransaction` werden bisherige Lade-/Pausenstatus nur am betroffenen Anschluss zurückgesetzt. Ein tatsächlich gemeldetes `Finishing` bleibt erhalten; eine freie Buchse wird nicht erfunden. Verzögert eintreffende `Charging`-, `SuspendedEV`- oder `SuspendedEVSE`-Meldungen ohne passende aktive Transaktion bleiben im Diagnoseverlauf, verändern aber nicht die Live-Anzeige. Bei mehreren Anschlüssen wird eine andere laufende Session nicht verändert. Bei alten doppelten Transaktionen darf ein verspäteter Stopp die neuere Anschlusszuordnung nicht löschen.
+
+Wenn bei einer **aktiven** Session eine `StatusNotification(Available)` ohne plausiblen Zeitstempel eintrifft, wird sie zur Prüfung protokolliert, beendet die Session aber **nicht automatisch**. Das gilt insbesondere bei fehlender Uhrzeit, ungültigem Datum, einem Zeitpunkt vor dem Sessionstart oder deutlich in der Zukunft. Auf wirklich freien Ladepunkten bleibt `Available` weiterhin erlaubt. Eine bestätigte `StopTransaction` beendet die Session auch bei fehlerhafter Stationsuhr: VoltCore benutzt dann die Server-Empfangszeit. Messwerte werden unverändert archiviert, dürfen bei Replay jedoch den letzten gültigen Live-/Session-Zähler nicht überschreiben. Falls sich eine Station ohne nachvollziehbares Stop-Ereignis nicht sauber abmeldet, ist eine gezielte manuelle Prüfung notwendig; **keine automatische Sessionbeendigung erzwingen**.
+
+Diese Regeln sind vorerst nur im R2-Entwicklungszweig enthalten, nicht im produktiven Community-Release.
 
 ## 🚀 Installation
 

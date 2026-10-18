@@ -122,10 +122,11 @@ class ChargingLimits(unittest.TestCase):
         self.assertEqual(db.get_transaction(first)["status"], "Active")
         with self.assertRaisesRegex(ValueError, "CONNECTOR_ACTIVE_SESSION"):
             db.start_transaction("P03", id_tag="P03-A", connector_id=1)
+        observed_at=db.utc_now()
         closed = db.reconcile_active_transactions_for_connector(
-            "P03", 1, reason="ConnectorAvailable"
+            "P03", 1, ended_at=observed_at, reason="ConnectorAvailable"
         )
-        db.set_status_notification("P03", 1, "Available")
+        db.set_status_notification("P03", 1, "Available", observed_at=observed_at)
         self.assertIn(first, closed)
         self.assertNotEqual(db.get_transaction(first)["status"], "Active")
         second = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
@@ -137,7 +138,7 @@ class ChargingLimits(unittest.TestCase):
             conn.commit()
         first = db.start_transaction("P03", id_tag="P03-A", connector_id=1)
         second = db.start_transaction("P03", id_tag="P03-B", connector_id=2)
-        db.reconcile_active_transactions_for_connector("P03", 1, reason="ConnectorAvailable")
+        db.reconcile_active_transactions_for_connector("P03", 1, ended_at=db.utc_now(), reason="ConnectorAvailable")
         self.assertNotEqual(db.get_transaction(first)["status"], "Active")
         self.assertEqual(db.get_transaction(second)["status"], "Active")
 

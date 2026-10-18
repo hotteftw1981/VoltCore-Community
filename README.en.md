@@ -32,6 +32,14 @@ Community is not intended to be annoying or deliberately crippled. The differenc
 
 > 🚧 **Status:** Release Candidate **0.9.7.97** is available. Self-hosting and evaluation are possible; verify security, HTTPS/WSS, backups, and charger compatibility before production deployments.
 
+## ⚡ OCPP timestamps and reconnects (deep-dive candidate)
+
+**Status after charge completion (R2):** Confirmed `StopTransaction` clears the charging or paused state of that connector only. A genuinely reported `Finishing` state remains intact, without inventing connector availability. Replayed `Charging`, `SuspendedEV`, and `SuspendedEVSE` events without a matching active transaction stay in diagnostics but do not repaint live state. Other active connectors stay untouched. For legacy duplicate transactions, a delayed stop may not clear the newer connector ownership.
+
+While a transaction is **active**, an `Available` status without a trustworthy event timestamp is logged for review but must **not automatically end** that transaction. This includes missing, malformed, pre-start, and far-future timestamps. Truly idle connectors still accept `Available`. A confirmed `StopTransaction` still ends the session even if the charger clock is wrong; server receipt time is used in that case. Raw meter packets remain auditable, while replayed packets must not overwrite newer live or session energy readings. If a charger has no verifiable stop evidence, operators should review its state rather than automatically terminating the session.
+
+These protections are still under review in the R2 development branch and are not yet part of a public release.
+
 ## 🚀 Installation
 
 VoltCore Community supports two official deployment methods:

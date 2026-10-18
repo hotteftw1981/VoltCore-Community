@@ -32,15 +32,18 @@ class P03Integrity(unittest.TestCase):
     def test_status_timestamp_guard_is_wired(self):
         # Full OCPP integration still needs an async station simulator.
         source = Path(ocpp_server.__file__).read_text(encoding="utf-8")
-        self.assertIn("OlderThanActiveSession", source)
-        self.assertIn('status_text == "Available" and kwargs.get("timestamp")', source)
+        self.assertIn("available_notification_quarantine_reason", source)
+        self.assertIn("StatusNotificationUnverified", source)
+        db_source=Path(db.__file__).read_text(encoding="utf-8")
+        self.assertIn("timestamp_missing", db_source)
+        self.assertIn("timestamp_future", db_source)
 
     def test_available_reconciliation_is_connector_scoped(self):
         db.set_charging_session_limit("user", self.driver, 2)
         other = db.create_rfid_card("P03-KEY-2", user_id=self.driver)
         one = db.start_transaction("P03-RESTART", id_tag="P03-KEY", connector_id=1)
         two = db.start_transaction("P03-RESTART", id_tag="P03-KEY-2", connector_id=2)
-        db.reconcile_active_transactions_for_connector("P03-RESTART", 1)
+        db.reconcile_active_transactions_for_connector("P03-RESTART", 1, ended_at=db.utc_now(), reason="ConnectorAvailable")
         self.assertNotEqual(db.get_transaction(one)["status"], "Active")
         self.assertEqual(db.get_transaction(two)["status"], "Active")
 

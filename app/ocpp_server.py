@@ -854,22 +854,13 @@ class ChargePoint(OcppChargePoint):
         occupancy_started=None
         occupancy_finished=None
         observed_at=kwargs.get("timestamp") or datetime.now(timezone.utc).isoformat()
-        # A delayed Available from an earlier connection must not end a newer
-        # session. Without a trustworthy timestamp, retain legacy behavior.
-        if cid > 0 and status_text == "Available" and kwargs.get("timestamp"):
-            from . import db as _p03_db
-            with _p03_db._lock, _p03_db._connect() as _p03_conn:
-                _p03_active = _p03_conn.execute(
-                    "SELECT started_at FROM transactions WHERE charge_point_id=? AND connector_id=? AND status='Active' AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
-                    (self.id, cid),
-                ).fetchone()
-            if _p03_active:
-                _p03_when = _p03_db._parse_iso_utc(observed_at)
-                _p03_start = _p03_db._parse_iso_utc(_p03_active["started_at"])
-                if _p03_when and _p03_start and _p03_when < _p03_start:
-                    db.mark_message(self.id, "StatusNotification")
-                    db.add_event(self.id, "StatusNotificationIgnored", f"connector={cid}; status=Available; timestamp={observed_at}; reason=OlderThanActiveSession")
-                    return call_result.StatusNotification()
+        if cid > 0 and status_text == "Available":
+            problem=db.available_notification_quarantine_reason(self.id,cid,kwargs.get("timestamp"))
+            if problem:
+                db.mark_message(self.id, "StatusNotification")
+                db.add_event(self.id, "StatusNotificationUnverified",
+                    f"connector={cid}; status=Available; reason={problem}; timestamp={str(kwargs.get('timestamp'))[:80]}")
+                return call_result.StatusNotification()
         if cid > 0:
             # Discover first without overwriting the previous connector state.
             # That lets timing reconciliation still see Charging/SuspendedEV
@@ -883,12 +874,23 @@ class ChargePoint(OcppChargePoint):
             # connector state. This survives arbitrary backend restarts.
             if status_text == "Available":
                 db.reconcile_active_transactions_for_connector(
-                    self.id, cid, reason="ConnectorAvailable"
+                    self.id, cid, ended_at=kwargs.get("timestamp"), reason="ConnectorAvailable"
                 )
-                occupancy_finished=db.finalize_post_session_occupancy(self.id,cid,observed_at=observed_at)
             elif status_text == "Finishing":
                 occupancy_started=db.mark_post_session_occupied(self.id,cid,observed_at=observed_at)
-        db.set_status_notification(self.id, cid, status_text, error_code=error_code)
+        verified_statuses={"Charging","SuspendedEV","SuspendedEVSE"}
+        changed=db.set_status_notification(
+            self.id,cid,status_text,error_code=error_code,
+            observed_at=kwargs.get("timestamp"),
+            verify_live=cid>0 and status_text in verified_statuses,
+        )
+        if cid > 0 and status_text in (verified_statuses | {"Available"}) and changed is False:
+            db.mark_message(self.id, "StatusNotification")
+            db.add_event(self.id, "StatusNotificationUnverified",
+                f"connector={cid}; status={status_text}; reason=unverified_or_concurrent; timestamp={str(kwargs.get('timestamp'))[:80]}")
+            return call_result.StatusNotification()
+        if cid > 0 and status_text == "Available":
+            occupancy_finished=db.finalize_post_session_occupancy(self.id,cid,observed_at=observed_at)
         status_tx = None
         if cid > 0:
             rows = db.connectors_for_charge_point(self.id)
@@ -1039,6 +1041,9 @@ class ChargePoint(OcppChargePoint):
             if candidate.get('charge_point_id') != self.id or int(candidate.get('connector_id') or 0) != cid or candidate.get('status') != 'Active' or candidate.get('ended_at') is not None:
                 tx = None
 
+        reported_tx_id=kwargs.get("transaction_id")
+        # A stale/foreign explicit tx reference remains raw evidence only.
+        apply_live_meter=(reported_tx_id in (None, "") or tx is not None)
         parsed_entries = _meter_entries(meter_value)
         raw_json = json.dumps(meter_value, default=lambda o: asdict(o) if is_dataclass(o) else str(o), ensure_ascii=True)
         latest_fields = {}
@@ -1086,6 +1091,7 @@ class ChargePoint(OcppChargePoint):
                 raw_json=raw_json,
                 values_json=json.dumps(parsed["values"], ensure_ascii=True),
                 sampled_at=parsed.get("sampled_at"),
+                apply_live=apply_live_meter,
                 **fields,
             )
             latest_fields = fields
@@ -1099,7 +1105,7 @@ class ChargePoint(OcppChargePoint):
 
         if not parsed_entries:
             # Preserve malformed/empty messages in diagnostics instead of silently dropping them.
-            db.add_meter_sample(self.id, connector_id=cid, raw_json=raw_json, values_json="[]", transaction_id=tx)
+            db.add_meter_sample(self.id, connector_id=cid, raw_json=raw_json, values_json="[]", transaction_id=tx, apply_live=apply_live_meter)
 
         if tx is not None:
             # Run outbound RemoteStop checks only after this MeterValues request can return.

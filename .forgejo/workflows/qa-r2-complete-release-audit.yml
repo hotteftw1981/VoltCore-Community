@@ -1,0 +1,65 @@
+name: VoltCore Community R2 complete isolated release audit
+on: workflow_dispatch
+jobs:
+  community-audit:
+    runs-on: kw-smoke
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Full offline Community regression and ZIP checks
+        shell: bash
+        env:
+          MENNEKES_MODBUS_READONLY_CONNECTORS: ""
+        run: |
+          set -Eeuo pipefail
+          STAGE=compile
+          on_exit() {
+            rc=$?
+            if [ "$rc" -eq 0 ]; then return 0; fi
+            echo "COMMUNITY_R2_FULL_AUDIT_FAILED stage=$STAGE rc=$rc"
+            if [ -n "${FORGEJO_TOKEN:-}" ]; then
+              STAGE_VALUE="$STAGE" RC="$rc" python3 - <<'REPORT'
+          import json,os,re
+          from pathlib import Path
+          log=Path("/tmp/voltcore-community-r2-full-unit.log")
+          body="Community R2 vollständiges Audit fehlgeschlagen: "+os.environ["STAGE_VALUE"]+" rc="+os.environ["RC"]
+          if log.exists():
+              tail=log.read_text(encoding="utf-8",errors="replace")[-8500:]
+              tail=re.sub(r'(?i)(authorization:|token=|password=)[^\s]+',r'\1[REDACTED]',tail)
+              body+="\n\nTestoutput (gekürzt):\n"+tail
+          Path("/tmp/voltcore-community-r2-full-qa.json").write_text(json.dumps({"body":body}))
+          REPORT
+              curl -fsS --max-time 10 -H "Authorization: token $FORGEJO_TOKEN" -H "Content-Type: application/json" --data-binary @/tmp/voltcore-community-r2-full-qa.json https://git.krawallwerk.com/api/v1/repos/KrawallWerk/KrawallWerk-VoltCore-Community/issues/1/comments -o /dev/null || true
+            fi
+          }
+          trap on_exit EXIT
+          echo "AUDIT_COMMUNITY_SOURCE_SHA=$(git rev-parse HEAD)"
+          export DATA_DIR="$(mktemp -d /tmp/voltcore-community-audit.XXXXXX)"
+          python3 -m compileall -q app tests scripts
+          STAGE=dependencies
+          curl --fail --silent --show-error --location --retry 2 https://bootstrap.pypa.io/pip/pip.pyz -o .ci-pip.pyz
+          python3 .ci-pip.pyz install --disable-pip-version-check --no-input --target .ci-libs -r requirements.txt -r tests/requirements.txt -q
+          export PYTHONPATH="$PWD/.ci-libs"
+          STAGE=python-unittests
+          python3 -m unittest discover -s tests -p 'test_*.py' -v > /tmp/voltcore-community-r2-full-unit.log 2>&1 || {
+            tail -n 70 /tmp/voltcore-community-r2-full-unit.log
+            exit 1
+          }
+          tail -n 8 /tmp/voltcore-community-r2-full-unit.log
+          STAGE=javascript
+          for f in app/static/*.js; do node --check "$f"; done
+          STAGE=offline-zip
+          python3 scripts/build_release.py --dist /tmp/voltcore-community-r2-dist
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          files=list(Path("/tmp/voltcore-community-r2-dist").glob("*.zip"))
+          assert len(files)==1,files
+          with ZipFile(files[0]) as archive:
+              names=archive.namelist()
+              for required in ("app/main.py","app/ocpp_server.py","README.en.md","LICENSE"):
+                  assert any(required in x for x in names),required
+              assert archive.testzip() is None
+          print("COMMUNITY_OFFLINE_RELEASE_ZIP_OK")
+          PY
+          echo "VOLTCORE_COMMUNITY_R2_FULL_OFFLINE_AUDIT_GREEN"

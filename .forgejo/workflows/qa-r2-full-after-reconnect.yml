@@ -1,0 +1,27 @@
+name: VoltCore Community R2 full P-series after reconnect guard
+on: workflow_dispatch
+jobs:
+  deep-community:
+    runs-on: kw-smoke
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Isolated P01-P11 regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q app tests
+          curl --fail --silent --show-error --location --retry 2 https://bootstrap.pypa.io/pip/pip.pyz -o .ci-pip.pyz
+          python3 .ci-pip.pyz install --disable-pip-version-check --no-input --target .ci-libs -r requirements.txt -r tests/requirements.txt -q
+          export PYTHONPATH="$PWD/.ci-libs"
+          set +e
+          python3 -m unittest discover -s tests -p 'test_p*.py' -v > /tmp/voltcore-pseries.log 2>&1
+          RESULT=$?
+          set -e
+          if [ "$RESULT" -ne 0 ]; then
+            echo "COMMUNITY_P01_P11_FAILED"
+            grep -E '^(FAIL:|ERROR:|AssertionError:|ValueError:|TypeError:|ImportError:|FAILED|Ran [0-9]+ tests)' /tmp/voltcore-pseries.log || true
+            exit "$RESULT"
+          fi
+          tail -n 5 /tmp/voltcore-pseries.log
+          echo "VOLTCORE_COMMUNITY_R2_ALL_P01_TO_P11_GREEN"

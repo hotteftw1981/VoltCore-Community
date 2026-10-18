@@ -1,0 +1,19 @@
+name: VoltCore Community R2 post-stop status QA
+on: workflow_dispatch
+jobs:
+  status:
+    runs-on: kw-smoke
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Isolated post-stop/reconnect status replay checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q app tests/test_r2_post_stop_status.py
+          curl --fail --silent --show-error -L --retry 2 https://bootstrap.pypa.io/pip/pip.pyz -o .ci-pip.pyz
+          python3 .ci-pip.pyz install --disable-pip-version-check --no-input --target .ci-libs -r requirements.txt -r tests/requirements.txt -q
+          export PYTHONPATH="$PWD/.ci-libs"
+          python3 -m unittest discover -s tests -p test_r2_post_stop_status.py -v
+          python3 -m unittest discover -s tests -p test_r2_reconnect_status.py -v
+          echo "VOLTCORE_COMMUNITY_R2_POST_STOP_STATUS_GREEN"
