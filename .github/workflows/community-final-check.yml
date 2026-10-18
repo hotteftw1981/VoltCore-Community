@@ -1,10 +1,7 @@
 name: Community Final Check
 
+# Hosted GitHub Actions abgeschaltet; KrawallWerk Forgejo ist einziger Runner.
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/community-final-check.yml'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +13,7 @@ concurrency:
 
 jobs:
   final-check:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
