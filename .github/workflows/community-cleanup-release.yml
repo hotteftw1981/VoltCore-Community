@@ -1,9 +1,8 @@
 name: Community Scope Cleanup Release
+# Hosted GitHub Actions abgeschaltet; KrawallWerk Forgejo ist einziger Runner.
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/community-cleanup-release.yml']
   workflow_dispatch:
+
 permissions:
   contents: write
 concurrency:
@@ -11,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   cleanup-release:
-    if: github.ref == 'refs/heads/main'
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
