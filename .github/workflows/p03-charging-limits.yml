@@ -1,12 +1,14 @@
 name: P03 Concurrent Charging Regression
+# GitHub Actions/Runner außer Betrieb; ausschließlich privater KrawallWerk-Forgejo-Runner.
+# Sichtbar als manuell deaktivierter Platzhalter, alle Jobs hart gesperrt.
 on:
-  pull_request:
-    branches: [main, develop]
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:
   charging-limits:
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
